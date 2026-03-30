@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<meta name="theme-color" content="#0a0a0a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>bich service</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root {
+  --bg:#0a0a0a; --bg-e:#161410; --surf:#111111;
+  --bdr:rgba(255,255,255,0.07); --bdr-a:rgba(200,169,110,0.2);
+  --txt:#e8e2d9; --mut:rgba(232,226,217,0.35); --sub:rgba(232,226,217,0.18);
+  --acc:#c8a96e; --acc-d:rgba(200,169,110,0.07); --red:#e05252;
+  --fm:'Geist Mono',monospace; --fs:'Playfair Display',serif;
+  --xs:4px;--sm:8px;--md:16px;--lg:24px;--xl:28px;--2xl:40px;
+  --r:2px;--rm:10px;--rl:16px;--rf:50%;
+  --ease:0.2s ease;--spring:0.4s cubic-bezier(0.16,1,0.3,1);
+  --nav:62px; --sb:max(env(safe-area-inset-bottom,0px),12px); --st:max(env(safe-area-inset-top,0px),0px);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--txt);font-family:var(--fm);-webkit-font-smoothing:antialiased;}
+button,input,textarea,select{font-family:var(--fm);}
+body::before{content:'';position:fixed;inset:0;z-index:9000;pointer-events:none;opacity:.028;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");}
+#app{height:100dvh;position:relative;overflow:hidden;}
+
+/* SCREENS */
+.screen{position:absolute;inset:0;bottom:var(--nav);display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:opacity .25s;overflow:hidden;}
+.screen.active{opacity:1;pointer-events:all;}
+
+/* NAV */
+nav{position:absolute;bottom:0;left:0;right:0;height:var(--nav);padding-bottom:var(--sb);background:var(--bg-e);border-top:1px solid var(--bdr);display:flex;align-items:flex-start;justify-content:space-around;padding-top:8px;z-index:500;}
+.nb{display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;color:var(--mut);transition:color var(--ease);padding:4px 16px;}
+.nb svg{width:20px;height:20px;stroke-width:1.5;}
+.nb span{font-size:.4rem;letter-spacing:.2em;text-transform:uppercase;}
+.nb.active,.nb:hover{color:var(--acc);}
+.nc-wrap{display:flex;flex-direction:column;align-items:center;gap:3px;padding:0 16px;margin-top:-16px;}
+.nc-wrap>span{font-size:.4rem;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);}
+.nc{width:44px;height:44px;border-radius:var(--rf);background:var(--acc);color:var(--bg);display:flex;align-items:center;justify-content:center;transition:transform var(--ease),box-shadow var(--ease);box-shadow:0 0 18px rgba(200,169,110,.28);cursor:pointer;border:none;}
+.nc:hover{transform:scale(1.07);box-shadow:0 0 28px rgba(200,169,110,.45);}
+.nc:active{transform:scale(.95);}
+
+/* ── EXPLORE ── */
+#s-explore{flex-direction:column;}
+.topbar{position:absolute;top:0;left:0;right:0;z-index:200;padding:calc(var(--st) + 10px) var(--md) var(--sm);display:flex;gap:var(--sm);align-items:center;}
+.spill{flex:1;display:flex;align-items:center;gap:var(--sm);background:rgba(10,10,10,.9);border:1px solid var(--bdr);border-radius:999px;padding:10px var(--md);backdrop-filter:blur(14px);transition:border-color var(--ease);}
+.spill:focus-within{border-color:var(--bdr-a);}
+.spill svg{color:var(--mut);flex-shrink:0;width:13px;height:13px;}
+.spill input{background:none;border:none;outline:none;color:var(--txt);font-family:var(--fm);font-size:.72rem;width:100%;}
+.spill input::placeholder{color:var(--mut);}
+.tbb{width:40px;height:40px;border-radius:var(--rm);flex-shrink:0;background:rgba(10,10,10,.9);border:1px solid var(--bdr);backdrop-filter:blur(14px);display:flex;align-items:center;justify-content:center;color:var(--mut);transition:color var(--ease),border-color var(--ease);}
+.tbb:hover{color:var(--acc);border-color:var(--bdr-a);}
+.tbb svg{width:15px;height:15px;}
+.dd{position:absolute;top:68px;right:var(--md);z-index:300;background:rgba(10,10,10,.96);border:1px solid var(--bdr-a);border-radius:var(--rm);overflow:hidden;backdrop-filter:blur(18px);min-width:145px;display:none;animation:fi .18s ease both;}
+.dd.open{display:block;}
+.ddi{padding:11px var(--md);font-size:.62rem;letter-spacing:.1em;color:var(--mut);cursor:pointer;border-bottom:1px solid var(--bdr);display:flex;justify-content:space-between;align-items:center;transition:background var(--ease),color var(--ease);}
+.ddi:last-child{border-bottom:none;}
+.ddi:hover{background:var(--acc-d);color:var(--txt);}
+.ddi.active{color:var(--acc);}
+#map{position:absolute;inset:0;filter:brightness(.82) contrast(1.08) saturate(.45);}
+.cats{position:absolute;bottom:0;left:0;right:0;z-index:200;display:flex;gap:var(--sm);padding:var(--sm) var(--md);overflow-x:auto;scrollbar-width:none;pointer-events:none;}
+.cats::-webkit-scrollbar{display:none;}
+.cat{pointer-events:all;flex-shrink:0;font-family:var(--fm);font-size:.52rem;letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;cursor:pointer;padding:6px 14px;border-radius:999px;background:rgba(10,10,10,.9);border:1px solid var(--bdr);color:var(--mut);backdrop-filter:blur(10px);transition:all var(--ease);}
+.cat:hover,.cat.active{border-color:var(--acc);color:var(--acc);}
+
+/* BUNDLES SHEET */
+.bsh{position:absolute;bottom:0;left:0;right:0;z-index:250;background:var(--bg-e);border-top:1px solid var(--bdr-a);border-radius:var(--rl) var(--rl) 0 0;transition:transform var(--spring);display:flex;flex-direction:column;max-height:78%;}
+.bsh.s-c{transform:translateY(calc(100% - 80px));}
+.bsh.s-p{transform:translateY(calc(100% - 228px));}
+.bsh.s-o{transform:translateY(0);}
+.bsh-h{padding:var(--md) var(--md) var(--sm);display:flex;flex-direction:column;align-items:center;gap:var(--sm);cursor:pointer;flex-shrink:0;}
+.bsh-hd{width:32px;height:3px;border-radius:999px;background:var(--mut);opacity:.35;}
+.bsh-hr{width:100%;display:flex;align-items:baseline;justify-content:space-between;}
+.bsh-t{font-family:var(--fs);font-style:italic;font-size:.88rem;color:var(--acc);}
+.bsh-c{font-size:.46rem;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);}
+.bsh-s{overflow-y:auto;overflow-x:hidden;flex:1;padding:0 var(--md) var(--2xl);scrollbar-width:none;}
+.bsh-s::-webkit-scrollbar{display:none;}
+.bndl{margin-bottom:var(--xl);}
+.bndl-l{font-size:.45rem;letter-spacing:.26em;text-transform:uppercase;color:var(--mut);margin-bottom:var(--sm);display:flex;align-items:center;gap:var(--sm);}
+.bndl-l::after{content:'';flex:1;height:1px;background:var(--bdr);}
+.bndl-r{display:flex;gap:var(--sm);overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
+.bndl-r::-webkit-scrollbar{display:none;}
+
+/* EVENT CARD */
+.ec{flex-shrink:0;width:185px;border-radius:var(--rm);overflow:hidden;border:1px solid var(--bdr);background:var(--surf);cursor:pointer;transition:border-color var(--ease),transform var(--ease);}
+.ec:hover{border-color:var(--bdr-a);transform:translateY(-2px);}
+.ec-th{width:100%;height:106px;background:var(--bg-e);display:flex;align-items:center;justify-content:center;}
+.ec-th svg{opacity:.15;}
+.ec-b{padding:var(--sm) var(--sm) 10px;}
+.ec-ti{font-family:var(--fs);font-size:.77rem;line-height:1.28;color:var(--txt);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ec-me{font-size:.47rem;letter-spacing:.07em;color:var(--mut);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ec-ft{display:flex;align-items:center;justify-content:space-between;}
+.ec-go{display:flex;align-items:center;gap:4px;font-size:.45rem;letter-spacing:.07em;color:var(--mut);}
+.gd{width:5px;height:5px;border-radius:var(--rf);background:var(--acc);flex-shrink:0;}
+.ec-so{font-size:.43rem;letter-spacing:.07em;color:var(--acc);background:var(--acc-d);border:1px solid var(--bdr-a);border-radius:var(--r);padding:2px 6px;}
+.ec-pr{font-size:.43rem;letter-spacing:.07em;color:var(--mut);border:1px solid var(--bdr);border-radius:var(--r);padding:2px 6px;}
+
+/* MAP MARKERS */
+.md{width:11px;height:11px;border-radius:var(--rf);background:var(--acc);border:2px solid #0a0a0a;box-shadow:0 0 7px rgba(200,169,110,.55);}
+.mc{min-width:26px;height:26px;border-radius:12px;background:var(--acc);border:2px solid #0a0a0a;display:flex;align-items:center;justify-content:center;font-family:var(--fm);font-size:.55rem;font-weight:500;color:#0a0a0a;padding:0 5px;box-shadow:0 0 10px rgba(200,169,110,.4);}
+
+/* ── EVENT DETAIL ── */
+#ed{position:absolute;inset:0;bottom:var(--nav);z-index:800;background:var(--bg);transform:translateY(100%);transition:transform var(--spring);display:flex;flex-direction:column;overflow:hidden;}
+#ed.open{transform:translateY(0);}
+.ed-cov{position:relative;height:210px;flex-shrink:0;background:linear-gradient(155deg,#1c1a16,#0d0c0a);display:flex;align-items:center;justify-content:center;}
+.ed-cov svg{opacity:.1;}
+.ed-bk{position:absolute;top:var(--md);left:var(--md);width:34px;height:34px;border-radius:var(--rf);background:rgba(10,10,10,.75);border:1px solid var(--bdr);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;color:var(--mut);cursor:pointer;transition:color var(--ease);}
+.ed-bk:hover{color:var(--txt);}
+.ed-sc{overflow-y:auto;flex:1;padding:var(--lg) var(--md);scrollbar-width:none;}
+.ed-sc::-webkit-scrollbar{display:none;}
+.ed-ti{font-family:var(--fs);font-size:1.4rem;line-height:1.25;color:var(--txt);margin-bottom:var(--sm);}
+.ed-vn{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:.64rem;margin-bottom:var(--lg);}
+.ed-vn svg{width:11px;height:11px;flex-shrink:0;color:var(--acc);}
+.ed-mr{display:flex;gap:var(--sm);margin-bottom:var(--lg);flex-wrap:wrap;}
+.ed-ch{font-size:.51rem;letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--bdr);border-radius:var(--r);padding:5px 11px;color:var(--mut);display:flex;align-items:center;gap:5px;}
+.ed-ch svg{width:9px;height:9px;}
+.ed-ch.ac{border-color:var(--bdr-a);color:var(--acc);}
+.ed-de{font-size:.7rem;line-height:1.72;color:var(--mut);margin-bottom:var(--xl);}
+.ed-sb{background:var(--bg-e);border:1px solid var(--bdr-a);border-radius:var(--rm);padding:var(--md);margin-bottom:var(--xl);display:flex;align-items:center;gap:var(--md);}
+.ed-sn{font-family:var(--fs);font-size:2rem;color:var(--acc);line-height:1;}
+.ed-st{font-size:.59rem;line-height:1.6;color:var(--mut);}
+#ed-map{height:155px;border-radius:var(--rm);overflow:hidden;margin-bottom:var(--xl);border:1px solid var(--bdr);}
+.ed-ac{display:flex;gap:var(--sm);margin-bottom:var(--lg);}
+.ed-rv{flex:1;padding:14px;background:var(--acc);color:var(--bg);border:none;border-radius:var(--rm);font-size:.6rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;cursor:pointer;transition:all var(--ease);}
+.ed-rv:hover{background:#d4b87a;box-shadow:0 4px 18px rgba(200,169,110,.28);}
+.ed-sh{width:48px;height:48px;background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);display:flex;align-items:center;justify-content:center;color:var(--mut);cursor:pointer;transition:all var(--ease);flex-shrink:0;}
+.ed-sh:hover{color:var(--acc);border-color:var(--bdr-a);}
+.ed-sh svg{width:15px;height:15px;}
+
+/* ── CREATE ── */
+#s-create{overflow-y:auto;scrollbar-width:none;background:var(--bg);}
+#s-create::-webkit-scrollbar{display:none;}
+.cr-hd{padding:calc(var(--st)+14px) var(--md) var(--md);display:flex;align-items:center;gap:var(--md);border-bottom:1px solid var(--bdr);flex-shrink:0;}
+.cr-tt{font-family:var(--fs);font-style:italic;font-size:1rem;color:var(--acc);}
+.cov-z{position:relative;height:195px;background:linear-gradient(155deg,#1a1814,#0d0c0a);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sm);cursor:pointer;flex-shrink:0;overflow:hidden;transition:background var(--ease);}
+.cov-z:hover{background:linear-gradient(155deg,#1f1c17,#110f0a);}
+.cov-z svg{opacity:.2;}
+.cov-z span{font-size:.5rem;letter-spacing:.2em;text-transform:uppercase;color:var(--sub);}
+.cov-bb{position:absolute;bottom:var(--sm);left:var(--md);display:flex;gap:var(--sm);}
+.cb{font-size:.47rem;letter-spacing:.13em;text-transform:uppercase;background:rgba(10,10,10,.82);border:1px solid var(--bdr);color:var(--mut);padding:5px 10px;border-radius:999px;backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;gap:4px;transition:color var(--ease),border-color var(--ease);}
+.cb:hover{color:var(--acc);border-color:var(--bdr-a);}
+.cb svg{width:9px;height:9px;}
+.cf{padding:var(--lg) var(--md);display:flex;flex-direction:column;gap:var(--xl);}
+.fg{display:flex;flex-direction:column;gap:var(--sm);}
+.fl{font-size:.51rem;letter-spacing:.22em;text-transform:uppercase;color:var(--mut);}
+.fl span{color:var(--sub);margin-left:4px;font-size:.44rem;}
+.fi{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:13px var(--md);color:var(--txt);font-family:var(--fm);font-size:.77rem;outline:none;width:100%;transition:border-color var(--ease);}
+.fi::placeholder{color:var(--sub);font-style:italic;}
+.fi:focus{border-color:var(--bdr-a);}
+textarea.fi{resize:none;min-height:86px;line-height:1.65;}
+
+/* VENUE */
+.vp{background:var(--surf);border:1px solid var(--bdr-a);border-radius:var(--rm);overflow:hidden;}
+.vsr{display:flex;align-items:center;gap:var(--sm);padding:var(--sm) var(--md);border-bottom:1px solid var(--bdr);}
+.vsr svg{color:var(--mut);flex-shrink:0;width:13px;height:13px;}
+.vi{flex:1;background:none;border:none;outline:none;color:var(--txt);font-family:var(--fm);font-size:.72rem;padding:5px 0;}
+.vi::placeholder{color:var(--sub);font-style:italic;}
+.vres{max-height:195px;overflow-y:auto;scrollbar-width:none;}
+.vres::-webkit-scrollbar{display:none;}
+.vri{padding:11px var(--md);cursor:pointer;border-bottom:1px solid var(--bdr);transition:background var(--ease);}
+.vri:last-child{border-bottom:none;}
+.vri:hover{background:var(--acc-d);}
+.vn{font-size:.7rem;color:var(--txt);margin-bottom:2px;}
+.va{font-size:.52rem;letter-spacing:.05em;color:var(--mut);}
+.vnote{padding:var(--sm) var(--md);font-size:.44rem;letter-spacing:.08em;color:var(--sub);border-top:1px solid var(--bdr);display:flex;align-items:center;gap:5px;}
+.vnote svg{width:9px;height:9px;flex-shrink:0;}
+.vload{padding:var(--lg);text-align:center;font-size:.52rem;letter-spacing:.12em;color:var(--sub);}
+
+/* DETAILS CARD */
+.dc{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);overflow:hidden;}
+.dr{display:flex;align-items:center;gap:var(--md);padding:13px var(--md);cursor:pointer;border-bottom:1px solid var(--bdr);transition:background var(--ease);}
+.dr:last-child{border-bottom:none;}
+.dr:hover{background:var(--acc-d);}
+.di{width:16px;height:16px;color:var(--mut);flex-shrink:0;}
+.dl{flex:1;font-size:.68rem;color:var(--txt);}
+.dv{font-size:.6rem;color:var(--mut);display:flex;align-items:center;gap:var(--sm);}
+.dv svg{width:11px;height:11px;color:var(--sub);}
+.dch{background:var(--bg-e);border:1px solid var(--bdr);border-radius:var(--r);padding:3px 9px;font-size:.58rem;color:var(--mut);}
+.dch.st{border-color:var(--bdr-a);color:var(--acc);}
+
+/* PRICE */
+.pr{display:flex;align-items:center;gap:var(--sm);}
+.cur{background:var(--bg-e);border:1px solid var(--bdr);border-radius:var(--rm);padding:13px var(--sm) 13px var(--md);color:var(--mut);font-family:var(--fm);font-size:.7rem;outline:none;cursor:pointer;width:70px;}
+.cur:focus{border-color:var(--bdr-a);}
+.ph{font-size:.46rem;letter-spacing:.09em;color:var(--sub);line-height:1.55;}
+
+/* SHARE */
+.sb{display:flex;align-items:center;gap:var(--sm);background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:12px var(--md);}
+.sl{flex:1;font-size:.57rem;letter-spacing:.04em;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sc{font-size:.45rem;letter-spacing:.15em;text-transform:uppercase;background:none;border:1px solid var(--bdr-a);color:var(--acc);padding:5px 10px;border-radius:var(--r);cursor:pointer;flex-shrink:0;transition:background var(--ease);}
+.sc:hover{background:var(--acc-d);}
+.pub{width:100%;padding:15px;background:var(--acc);color:var(--bg);border:none;border-radius:var(--rm);font-size:.62rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;cursor:pointer;transition:all var(--ease);}
+.pub:hover{background:#d4b87a;box-shadow:0 4px 20px rgba(200,169,110,.28);}
+.pub:active{transform:scale(.98);}
+
+/* ── PROFILE ── */
+#s-profile{overflow-y:auto;scrollbar-width:none;padding:0 var(--md) var(--2xl);}
+#s-profile::-webkit-scrollbar{display:none;}
+.pt{display:flex;flex-direction:column;align-items:center;gap:var(--md);padding:calc(var(--st)+28px) 0 var(--2xl);}
+.pav{width:70px;height:70px;border-radius:var(--rf);background:var(--surf);border:1px solid var(--bdr-a);display:flex;align-items:center;justify-content:center;font-family:var(--fs);font-style:italic;font-size:1.3rem;color:var(--acc);}
+.pn{font-family:var(--fs);font-style:italic;font-size:1.15rem;color:var(--txt);}
+.ps{font-size:.45rem;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);}
+.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--bdr);border-radius:var(--rm);overflow:hidden;margin-bottom:var(--xl);}
+.sc2{background:var(--surf);padding:var(--md) var(--sm);display:flex;flex-direction:column;align-items:center;gap:4px;}
+.sn{font-family:var(--fs);font-size:1.35rem;color:var(--acc);}
+.sl2{font-size:.43rem;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);text-align:center;}
+.sh{font-size:.45rem;letter-spacing:.25em;text-transform:uppercase;color:var(--mut);margin-bottom:var(--md);display:flex;align-items:center;gap:var(--sm);}
+.sh::after{content:'';flex:1;height:1px;background:var(--bdr);}
+.pkc{background:var(--bg-e);border:1px solid var(--bdr-a);border-radius:var(--rm);padding:var(--lg);display:flex;align-items:flex-start;gap:var(--md);margin-bottom:var(--xl);}
+.pki{width:36px;height:36px;border-radius:var(--rm);flex-shrink:0;background:var(--acc-d);border:1px solid var(--bdr-a);display:flex;align-items:center;justify-content:center;color:var(--acc);}
+.pki svg{width:15px;height:15px;}
+.pkb{flex:1;}
+.pkt{font-size:.7rem;color:var(--txt);margin-bottom:4px;}
+.pkd{font-size:.55rem;line-height:1.65;color:var(--mut);margin-bottom:var(--md);}
+.pkbtn{font-size:.5rem;letter-spacing:.18em;text-transform:uppercase;background:none;border:1px solid var(--bdr-a);color:var(--acc);padding:8px 16px;border-radius:var(--r);cursor:pointer;transition:all var(--ease);}
+.pkbtn:hover{background:var(--acc-d);}
+.eli{display:flex;align-items:center;gap:var(--md);background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:var(--md);margin-bottom:var(--sm);cursor:pointer;transition:border-color var(--ease);}
+.eli:hover{border-color:var(--bdr-a);}
+.elt{width:40px;height:40px;border-radius:var(--rm);background:var(--bg-e);border:1px solid var(--bdr);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--sub);}
+.elt svg{width:15px;height:15px;}
+.elb{flex:1;min-width:0;}
+.eln{font-size:.7rem;color:var(--txt);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.elm{font-size:.47rem;letter-spacing:.08em;color:var(--mut);}
+.tag-a{color:var(--acc);border-color:var(--bdr-a);background:var(--acc-d);border:1px solid;border-radius:var(--r);padding:3px 8px;font-size:.46rem;letter-spacing:.12em;text-transform:uppercase;}
+
+/* MODALS */
+.mo{position:absolute;inset:0;z-index:600;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:none;align-items:flex-end;}
+.mo.open{display:flex;animation:fi .18s ease both;}
+.ms{width:100%;background:var(--bg-e);border-radius:var(--rl) var(--rl) 0 0;border-top:1px solid var(--bdr-a);padding:var(--lg) var(--md) calc(var(--xl) + var(--sb));animation:su var(--spring) both;}
+.mt{font-family:var(--fs);font-style:italic;font-size:1rem;color:var(--acc);margin-bottom:var(--lg);}
+.dtg{display:grid;grid-template-columns:1fr 1fr;gap:var(--sm);margin-bottom:var(--lg);}
+.dtf{display:flex;flex-direction:column;gap:var(--xs);}
+.dtf label{font-size:.47rem;letter-spacing:.18em;text-transform:uppercase;color:var(--mut);}
+.dtf input{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:11px var(--md);color:var(--txt);font-family:var(--fm);font-size:.72rem;outline:none;width:100%;transition:border-color var(--ease);color-scheme:dark;}
+.dtf input:focus{border-color:var(--bdr-a);}
+.cap-g{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sm);margin-bottom:var(--lg);}
+.co{padding:12px var(--sm);background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);font-size:.6rem;letter-spacing:.07em;color:var(--mut);text-align:center;cursor:pointer;transition:all var(--ease);}
+.co:hover,.co.active{border-color:var(--bdr-a);color:var(--acc);background:var(--acc-d);}
+.mc{width:100%;padding:14px;background:var(--acc);color:var(--bg);border:none;border-radius:var(--rm);font-size:.6rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;cursor:pointer;transition:all var(--ease);}
+.mc:hover{background:#d4b87a;}
+.mcn{width:100%;padding:10px;background:none;border:1px solid var(--bdr);color:var(--mut);border-radius:var(--rm);margin-top:var(--sm);font-size:.55rem;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;transition:all var(--ease);}
+.mcn:hover{border-color:var(--mut);color:var(--txt);}
+
+/* LEAFLET */
+.leaflet-container{background:#0a0a0a!important;font-family:var(--fm)!important;}
+.leaflet-control-zoom{border:1px solid var(--bdr)!important;border-radius:var(--rm)!important;overflow:hidden;box-shadow:none!important;}
+.leaflet-control-zoom a{background:rgba(10,10,10,.92)!important;color:var(--mut)!important;border-bottom-color:var(--bdr)!important;font-family:var(--fm)!important;backdrop-filter:blur(8px);width:30px!important;height:30px!important;line-height:30px!important;}
+.leaflet-control-zoom a:hover{background:var(--acc-d)!important;color:var(--acc)!important;}
+.leaflet-control-attribution{display:none!important;}
+.leaflet-popup-content-wrapper{background:var(--bg-e)!important;border:1px solid var(--bdr-a)!important;border-radius:var(--rm)!important;box-shadow:0 8px 32px rgba(0,0,0,.6)!important;color:var(--txt)!important;font-family:var(--fm)!important;padding:0!important;}
+.leaflet-popup-content{margin:0!important;padding:12px 14px!important;}
+.leaflet-popup-tip{background:var(--bg-e)!important;}
+.leaflet-popup-close-button{color:var(--mut)!important;top:8px!important;right:8px!important;}
+
+/* SPINNER */
+.spin{width:15px;height:15px;border:2px solid var(--bdr);border-top-color:var(--acc);border-radius:var(--rf);animation:ro .7s linear infinite;}
+
+/* ANIMS */
+@keyframes fi{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes su{from{transform:translateY(100%);opacity:0;}to{transform:translateY(0);opacity:1;}}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 8px var(--red);}50%{opacity:.4;box-shadow:0 0 2px var(--red);}}
+@keyframes ro{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ████ EXPLORE ████ -->
+<div id="s-explore" class="screen active">
+  <div class="topbar">
+    <div class="spill">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input id="si" type="text" placeholder="Search events, venues…" autocomplete="off"/>
+    </div>
+    <button class="tbb" id="dbtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+    </button>
+    <button class="tbb" id="lbtn" title="My location">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+    </button>
+  </div>
+  <div class="dd" id="ddd">
+    <div class="ddi active" data-v="any">Any time <span>✓</span></div>
+    <div class="ddi" data-v="today">Today</div>
+    <div class="ddi" data-v="tomorrow">Tomorrow</div>
+    <div class="ddi" data-v="week">This week</div>
+    <div class="ddi" data-v="weekend">This weekend</div>
+  </div>
+  <div id="map"></div>
+  <div class="cats">
+    <div class="cat active" data-c="all">All</div>
+    <div class="cat" data-c="tonight">Tonight</div>
+    <div class="cat" data-c="music">Music</div>
+    <div class="cat" data-c="arts">Arts</div>
+    <div class="cat" data-c="food">Food &amp; Drink</div>
+    <div class="cat" data-c="sport">Sport</div>
+    <div class="cat" data-c="wellness">Wellness</div>
+    <div class="cat" data-c="community">Community</div>
+  </div>
+  <div class="bsh s-p" id="bsh">
+    <div class="bsh-h" id="bsh-h">
+      <div class="bsh-hd"></div>
+      <div class="bsh-hr"><span class="bsh-t">events near you</span><span class="bsh-c" id="ecnt">— events</span></div>
+    </div>
+    <div class="bsh-s">
+      <div class="bndl"><div class="bndl-l">familiar faces going</div><div class="bndl-r" id="r-soc"></div></div>
+      <div class="bndl"><div class="bndl-l">tonight</div><div class="bndl-r" id="r-ton"></div></div>
+      <div class="bndl"><div class="bndl-l">trending this week</div><div class="bndl-r" id="r-tre"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ████ EVENT DETAIL ████ -->
+<div id="ed">
+  <div class="ed-cov">
+    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".7"><path d="M9 19V6l12-3v13M9 19c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-3c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2z"/></svg>
+    <button class="ed-bk" onclick="closeDetail()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
+  </div>
+  <div class="ed-sc">
+    <div class="ed-ti" id="ed-ti">—</div>
+    <div class="ed-vn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span id="ed-vn">—</span></div>
+    <div class="ed-mr" id="ed-mr"></div>
+    <p class="ed-de" id="ed-de"></p>
+    <div class="ed-sb" id="ed-sb" style="display:none"><div class="ed-sn" id="ed-sn">0</div><div class="ed-st">people you've crossed<br>paths with are going</div></div>
+    <div id="ed-map" style="display:none"></div>
+    <div class="ed-ac">
+      <button class="ed-rv" id="ed-rv">RSVP — I'm going</button>
+      <button class="ed-sh" id="ed-sh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button>
+    </div>
+  </div>
+</div>
+
+<!-- ████ CREATE ████ -->
+<div id="s-create" class="screen">
+  <div class="cr-hd">
+    <button onclick="goHome()" style="background:none;border:none;color:var(--mut);display:flex;align-items:center;">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <span class="cr-tt">new event</span>
+  </div>
+  <div class="cov-z">
+    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    <span>add cover photo</span>
+    <div class="cov-bb">
+      <button class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Cover</button>
+      <button class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Gallery</button>
+    </div>
+  </div>
+  <div class="cf">
+    <!-- Title -->
+    <div class="fg"><label class="fl">Event title</label><input id="ev-ti" type="text" class="fi" placeholder="Give your event a name…"/></div>
+    <!-- Desc -->
+    <div class="fg"><label class="fl">Description <span>optional</span></label><textarea id="ev-de" class="fi" placeholder="What happens, what to bring, who it's for…"></textarea></div>
+    <!-- Venue -->
+    <div class="fg">
+      <label class="fl">Location &amp; venue</label>
+      <!-- venue search -->
+      <div class="vp" id="vp">
+        <div class="vsr">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="vi" class="vi" type="text" placeholder="Search venue name or address…" autocomplete="off"/>
+          <div class="spin" id="vspin" style="display:none"></div>
+        </div>
+        <div id="vres" class="vres"><div class="vload">Type to search · powered by Nominatim / OSM</div></div>
+        <div class="vnote">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          No API key needed · OSM Nominatim · <span style="color:var(--acc);margin-left:3px">upgrade to Foursquare/Geoapify planned Jun 2026</span>
+        </div>
+      </div>
+      <!-- selected venue -->
+      <div id="vs" style="display:none">
+        <div class="dc">
+          <div class="dr" onclick="resetVenue()">
+            <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <div style="flex:1;min-width:0"><div style="font-size:.7rem;color:var(--acc)" id="svn">—</div><div style="font-size:.52rem;color:var(--mut);margin-top:2px" id="sva">—</div></div>
+            <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Details -->
+    <div class="fg">
+      <label class="fl">Details</label>
+      <div class="dc">
+        <div class="dr" onclick="openMo('mo-dt')">
+          <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="dl">Date &amp; Time</span>
+          <span class="dv"><span class="dch" id="ch-d">Set date</span><span class="dch" id="ch-t">Set time</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
+        <div class="dr" onclick="openMo('mo-cap')">
+          <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span class="dl">Capacity</span>
+          <span class="dv"><span class="dch" id="ch-cap">Any size</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
+        <div class="dr" onclick="openMo('mo-cat')">
+          <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span class="dl">Category</span>
+          <span class="dv"><span class="dch" id="ch-cat">Choose</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
+      </div>
+    </div>
+    <!-- Price -->
+    <div class="fg">
+      <label class="fl">Admission <span>leave 0 for free</span></label>
+      <div class="pr">
+        <select class="fi cur" id="ev-cur"><option>EUR</option><option>GBP</option><option>USD</option><option>IDR</option><option>THB</option><option>AUD</option></select>
+        <input id="ev-pr" type="number" min="0" step="any" class="fi" placeholder="0" style="flex:1"/>
+      </div>
+      <div class="ph">Price shown on the event page. Payment is collected externally — cash or link.</div>
+    </div>
+    <!-- Share link -->
+    <div class="fg">
+      <label class="fl">Share link</label>
+      <div class="sb"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--mut);flex-shrink:0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span class="sl" id="slt">bich.app/e/—</span><button class="sc" id="scb" onclick="copyLink()">copy</button></div>
+    </div>
+    <button class="pub" onclick="publishEvent()">Publish event</button>
+  </div>
+</div>
+
+<!-- ████ PROFILE ████ -->
+<div id="s-profile" class="screen">
+  <div class="pt">
+    <div class="pav" id="pav">—</div>
+    <div class="pn" id="pn">—</div>
+    <div class="ps">member since <span id="psi">—</span></div>
+  </div>
+  <div class="sg">
+    <div class="sc2"><span class="sn" id="st-at">0</span><span class="sl2">attended</span></div>
+    <div class="sc2"><span class="sn" id="st-cr">0</span><span class="sl2">crossings</span></div>
+    <div class="sc2"><span class="sn" id="st-ev">0</span><span class="sl2">created</span></div>
+  </div>
+  <div class="sh">identity &amp; access</div>
+  <div class="pkc">
+    <div class="pki"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div>
+    <div class="pkb">
+      <div class="pkt">Keep your history safe</div>
+      <div class="pkd">We don't collect personal information. Your username is randomly generated — save a passkey to access your history across devices and browsers.</div>
+      <button class="pkbtn">Create passkey</button>
+    </div>
+  </div>
+  <div class="sh">your events</div>
+  <div id="mel"><div style="padding:var(--lg);text-align:center;font-size:.55rem;letter-spacing:.1em;color:var(--sub);">No events yet. Create your first one.</div></div>
+</div>
+
+<!-- NAV -->
+<nav>
+  <button class="nb active" id="nb-ex" onclick="switchScreen('explore')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    <span>Explore</span>
+  </button>
+  <div class="nc-wrap"><button class="nc" onclick="switchScreen('create')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button><span>Create</span></div>
+  <button class="nb" id="nb-pr" onclick="switchScreen('profile')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    <span>Profile</span>
+  </button>
+</nav>
+
+<!-- MODAL: Date/Time -->
+<div class="mo" id="mo-dt" onclick="closeMoOut(event,'mo-dt')">
+  <div class="ms" onclick="event.stopPropagation()">
+    <div class="mt">Date &amp; Time</div>
+    <div class="dtg">
+      <div class="dtf"><label>Start date</label><input type="date" id="i-ds"/></div>
+      <div class="dtf"><label>End date <span style="color:var(--sub);font-size:.42rem">opt.</span></label><input type="date" id="i-de"/></div>
+      <div class="dtf"><label>Start time</label><input type="time" id="i-ts"/></div>
+      <div class="dtf"><label>End time <span style="color:var(--sub);font-size:.42rem">opt.</span></label><input type="time" id="i-te"/></div>
+    </div>
+    <button class="mc" onclick="confirmDt()">Confirm</button>
+    <button class="mcn" onclick="closeMo('mo-dt')">Cancel</button>
+  </div>
+</div>
+
+<!-- MODAL: Capacity -->
+<div class="mo" id="mo-cap" onclick="closeMoOut(event,'mo-cap')">
+  <div class="ms" onclick="event.stopPropagation()">
+    <div class="mt">Group capacity</div>
+    <div class="cap-g">
+      <div class="co active" data-cap="any">Any size</div>
+      <div class="co" data-cap="10">Up to 10</div>
+      <div class="co" data-cap="25">Up to 25</div>
+      <div class="co" data-cap="50">Up to 50</div>
+      <div class="co" data-cap="100">Up to 100</div>
+      <div class="co" data-cap="500+">500+</div>
+    </div>
+    <button class="mc" onclick="confirmCap()">Confirm</button>
+    <button class="mcn" onclick="closeMo('mo-cap')">Cancel</button>
+  </div>
+</div>
+
+<!-- MODAL: Category -->
+<div class="mo" id="mo-cat" onclick="closeMoOut(event,'mo-cat')">
+  <div class="ms" onclick="event.stopPropagation()">
+    <div class="mt">Category</div>
+    <div class="cap-g" style="grid-template-columns:repeat(2,1fr)">
+      <div class="co" data-cat="Music">Music</div>
+      <div class="co" data-cat="Arts">Arts</div>
+      <div class="co" data-cat="Food &amp; Drink">Food &amp; Drink</div>
+      <div class="co" data-cat="Sport">Sport</div>
+      <div class="co" data-cat="Wellness">Wellness</div>
+      <div class="co" data-cat="Community">Community</div>
+      <div class="co" data-cat="Networking">Networking</div>
+      <div class="co" data-cat="Other">Other</div>
+    </div>
+    <button class="mc" onclick="confirmCat()">Confirm</button>
+    <button class="mcn" onclick="closeMo('mo-cat')">Cancel</button>
+  </div>
+</div>
+
+</div>
+
+<script>
+/* ════════════════════════════════════════════════
+   BICH SERVICE — CORE LOGIC
+   Map stack:    Leaflet + OSM tiles (no key needed)
+   Geocoding:    Nominatim (no key, 1req/s limit)
+   Venue search: Nominatim POI search (no key)
+   ⚠ UPGRADE PLAN after Jun 1 2026:
+     tiles  → Maptiler / Stadia Maps
+     venue  → Foursquare Places API or Geoapify
+     geocode→ Geoapify
+   Identity:  anonymous username (localStorage)
+   History:   localStorage (passkey upgrade path)
+════════════════════════════════════════════════ */
+
+/* ── WORDLIST for username gen ── */
+const W=['bark','beam','bell','bird','bold','bond','brew','calm','cane','cape','card','cave','clay','coal','coin','cove','crew','crop','curl','dawn','deal','deck','deer','dew','dial','disk','dock','dome','dove','drum','dune','dusk','earl','edge','fawn','fern','film','fire','firm','flag','flat','flex','flip','flow','foam','fold','font','ford','fork','form','fort','fowl','free','fuel','gale','gate','gaze','gear','gild','glow','gold','gong','gown','gram','gray','grid','grim','grip','grit','grow','gulf','gust','hale','harp','haze','heal','heap','helm','herb','herd','hide','hill','hive','hold','holm','hone','horn','hull','hush','idle','iris','isle','jade','jest','keen','kelp','kern','kite','knot','lace','lake','lamp','lane','lark','lath','lawn','leaf','lean','leap','lend','lens','lift','lime','lint','loft','lone','loom','lore','lull','lure','lynx','mace','malt','mare','mark','mast','mate','maze','mead','mesa','mesh','mild','mill','mist','moan','moat','mold','mole','moor','moss','mote','mull','musk','nail','nave','nest','newt','node','nook','norm','note','oath','once','oral','pact','pane','park','pass','past','path','peak','peat','peel','pine','pipe','pith','plum','pole','pond','pool','port','pose','pour','pump','quay','rack','raft','raid','rail','ramp','rank','reap','reef','reed','reel','rest','rice','rind','ring','rink','rise','road','roam','roar','robe','rock','rope','rose','ruin','rule','rune','rush','rust','sage','sail','salt','sand','sash','seal','seam','seed','self','shed','ship','shoe','silk','silt','sing','sire','site','size','skin','skip','slab','slew','slip','slug','snap','snow','soak','soil','sole','song','sort','soul','span','spar','spin','spot','stem','step','stir','stop','stub','suit','swan','sway','tack','tame','tang','tape','tarn','teal','term','thaw','tide','till','tilt','tine','toll','tome','tone','tool','tore','toss','tour','town','trim','trip','tuft','tune','tusk','vale','vane','vibe','vine','void','wade','wake','wall','wand','ward','warm','warp','weft','well','wick','wild','wilt','wind','wine','wing','wire','wish','wisp','wold','wolf','worn','wrap','wren','yarn','yawn','yell','yoke','zeal','zinc','zone','zoom'];
+
+function gen(){return W[Math.floor(Math.random()*W.length)]+' '+W[Math.floor(Math.random()*W.length)];}
+function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}
+
+/* ── USER ── */
+let U=JSON.parse(localStorage.getItem('bich_u')||'null');
+if(!U){U={username:gen(),since:new Date().toLocaleDateString('en-GB',{month:'short',year:'numeric'}),attended:0,crossings:47,created:0};localStorage.setItem('bich_u',JSON.stringify(U));}
+
+function saveU(){localStorage.setItem('bich_u',JSON.stringify(U));}
+
+function renderProfile(){
+  const i=U.username.split(' ').map(w=>w[0]).join('');
+  document.getElementById('pav').textContent=i;
+  document.getElementById('pn').textContent=U.username;
+  document.getElementById('psi').textContent=U.since;
+  document.getElementById('st-at').textContent=U.attended;
+  document.getElementById('st-cr').textContent=U.crossings;
+  document.getElementById('st-ev').textContent=U.created;
+}
+renderProfile();
+
+/* ── SCREENS ── */
+function switchScreen(n){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
+  document.getElementById('s-'+n).classList.add('active');
+  if(n==='explore'){document.getElementById('nb-ex').classList.add('active');setTimeout(()=>{if(map)map.invalidateSize();else initMap();},60);}
+  if(n==='profile'){document.getElementById('nb-pr').classList.add('active');renderProfile();}
+  if(n==='create')updateLink();
+}
+function goHome(){closeDetail();switchScreen('explore');}
+
+/* ── MODALS ── */
+function openMo(id){document.getElementById(id).classList.add('open');}
+function closeMo(id){document.getElementById(id).classList.remove('open');}
+function closeMoOut(e,id){if(e.target===document.getElementById(id))closeMo(id);}
+
+/* ── DATE DROPDOWN ── */
+const ddd=document.getElementById('ddd');
+document.getElementById('dbtn').onclick=e=>{e.stopPropagation();ddd.classList.toggle('open');};
+document.addEventListener('click',()=>ddd.classList.remove('open'));
+document.querySelectorAll('.ddi').forEach(el=>{
+  el.onclick=e=>{
+    e.stopPropagation();
+    document.querySelectorAll('.ddi').forEach(i=>{i.classList.remove('active');const s=i.querySelector('span');if(s)s.remove();});
+    el.classList.add('active');
+    const s=document.createElement('span');s.textContent='✓';el.appendChild(s);
+    ddd.classList.remove('open');
+  };
+});
+
+/* ── CATEGORY CHIPS ── */
+document.querySelectorAll('.cat').forEach(c=>{c.onclick=()=>{document.querySelectorAll('.cat').forEach(x=>x.classList.remove('active'));c.classList.add('active');};});
+
+/* ── BUNDLES SHEET ── */
+const bsh=document.getElementById('bsh');
+let bs='s-p';
+document.getElementById('bsh-h').onclick=()=>{bs=bs==='s-o'?'s-p':'s-o';bsh.className='bsh '+bs;};
+
+/* ── EVENT DATA ── */
+const EVENTS=[
+  {id:'e01',lat:-6.1944,lng:106.8229,title:'Jazz at the Rooftop',venue:'Braga Art Space',addr:'Jl. Braga 22, Bandung',date:'Fri 04 Apr',time:'21:00',end:'23:30',cat:'Music',going:34,social:12,price:0,cur:'IDR',desc:'An intimate evening of jazz and soul music on the rooftop terrace. Bring friends, bring curiosity. Doors open at 20:30.',bundle:'social'},
+  {id:'e02',lat:-6.2607,lng:106.8107,title:'Dub Session Vol.3',venue:'Blok M Basement',addr:'Blok M Plaza, Jakarta Selatan',date:'Mon 30 Mar',time:'22:00',end:'02:00',cat:'Music',going:89,social:0,price:75000,cur:'IDR',desc:'Deep dub sounds in an underground setting. Third edition of the monthly gathering. Sound system by Ruang Dengar.',bundle:'tonight'},
+  {id:'e03',lat:-6.2241,lng:106.8095,title:'Chinese Tea Ceremony',venue:'Garden House Kemang',addr:'Jl. Kemang Raya 12, Jakarta',date:'Sun 06 Apr',time:'10:00',end:'13:00',cat:'Wellness',going:18,social:7,price:200000,cur:'IDR',desc:'Guided gongfu cha ceremony exploring oolongs and aged puerh. Limited to 20 people. Tea and light refreshments included.',bundle:'social'},
+  {id:'e04',lat:-6.1801,lng:106.8300,title:'Film Night: Analog',venue:'Bioskop Kecil Cikini',addr:'Jl. Cikini Raya 58, Jakarta',date:'Sat 05 Apr',time:'19:30',end:'22:00',cat:'Arts',going:55,social:5,price:50000,cur:'IDR',desc:'Analog film projection night — Super 8 and 16mm shorts from local filmmakers followed by a conversation.',bundle:'social'},
+  {id:'e05',lat:-6.2297,lng:106.8230,title:'Sunrise Run Club',venue:'GBK Sports Complex',addr:'Jl. Pintu Satu Senayan, Jakarta',date:'Sat 05 Apr',time:'05:30',end:'07:00',cat:'Sport',going:142,social:3,price:0,cur:'IDR',desc:'Weekly 5K around the Gelora Bung Karno track. All paces welcome. Bring water and good energy.',bundle:'trending'},
+  {id:'e06',lat:-6.2183,lng:106.8020,title:'Open Studio Night',venue:'Rumah Seni Senopati',addr:'Jl. Senopati 75, Jakarta',date:'Mon 30 Mar',time:'19:00',end:'22:00',cat:'Arts',going:24,social:0,price:0,cur:'IDR',desc:'Monthly open studio — artists share works in progress. Drop in, stay as long as you like.',bundle:'tonight'},
+  {id:'e07',lat:51.5074,lng:-0.1278,title:'Hackney Wick Rave',venue:'Colour Factory',addr:"8 Queen's Yard, London E9",date:'Sat 05 Apr',time:'22:00',end:'06:00',cat:'Music',going:300,social:0,price:15,cur:'GBP',desc:'Industrial warehouse rave in east London. Techno and electronics through the night.',bundle:'trending'},
+  {id:'e08',lat:51.5194,lng:-0.0862,title:'Spitalfields Market Day',venue:'Old Spitalfields Market',addr:'16 Horner Square, London E1',date:'Sun 06 Apr',time:'10:00',end:'18:00',cat:'Food & Drink',going:450,social:0,price:0,cur:'GBP',desc:'Independent vendors, street food and live music in the heart of east London.',bundle:'trending'},
+  {id:'e09',lat:43.2965,lng:5.3698,title:'Bouillabaisse Night',venue:'Le Vieux Port',addr:'Quai du Port, Marseille',date:'Fri 04 Apr',time:'20:00',end:'23:30',cat:'Food & Drink',going:22,social:0,price:45,cur:'EUR',desc:'Traditional Provençal feast prepared by a local chef. Open table, communal dining.',bundle:'social'},
+  {id:'e10',lat:-8.6705,lng:115.2126,title:'Sunset Cacao Ceremony',venue:'Bambu Indah',addr:'Sayan, Ubud, Bali',date:'Sat 05 Apr',time:'17:00',end:'20:00',cat:'Wellness',going:16,social:4,price:350000,cur:'IDR',desc:'Guided cacao ceremony at dusk in the rice field pavilion. Followed by live sound bath with crystal bowls.',bundle:'social'},
+  {id:'e11',lat:-8.7222,lng:115.1680,title:'Kecak Fire Dance',venue:'Uluwatu Temple',addr:'Uluwatu, Pecatu, Badung, Bali',date:'Sat 05 Apr',time:'18:00',end:'19:30',cat:'Arts',going:200,social:0,price:150000,cur:'IDR',desc:'Traditional Kecak performance at the cliff-edge temple at sunset. Iconic Balinese ritual — book ahead.',bundle:'trending'},
+  {id:'e12',lat:-8.6478,lng:115.1385,title:'Canggu Market Night',venue:'Canggu Beach Park',addr:'Jl. Pantai Batu Bolong, Canggu, Bali',date:'Thu 03 Apr',time:'18:00',end:'23:00',cat:'Community',going:340,social:2,price:0,cur:'IDR',desc:'Weekly night market with local designers, artists and food stalls by the beach.',bundle:'tonight'},
+  {id:'e13',lat:48.8566,lng:2.3522,title:'Marché des Créateurs',venue:'Place de la Bastille',addr:'Place de la Bastille, Paris',date:'Sun 06 Apr',time:'09:00',end:'16:00',cat:'Community',going:180,social:0,price:0,cur:'EUR',desc:'Independent designers and artists market in the heart of Paris every Sunday.',bundle:'trending'},
+  {id:'e14',lat:52.3702,lng:4.8952,title:'Amsterdam Jazz Jam',venue:'Paradiso',addr:'Weteringschans 6-8, Amsterdam',date:'Fri 04 Apr',time:'20:00',end:'00:00',cat:'Music',going:95,social:0,price:12,cur:'EUR',desc:'Open jazz jam session at the legendary Paradiso venue. All instruments welcome after midnight.',bundle:'social'},
+];
+
+document.getElementById('ecnt').textContent=EVENTS.length+' events';
+
+/* ── RENDER CARDS ── */
+const ICONS={
+  Music:`<path d="M9 19V6l12-3v13M9 19c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-3c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2z"/>`,
+  Arts:`<path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>`,
+  'Food & Drink':`<path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/>`,
+  Sport:`<circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`,
+  Wellness:`<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>`,
+  default:`<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>`
+};
+
+function mkCard(ev){
+  const free=!ev.price||ev.price===0;
+  const pstr=free?'Free':ev.cur+' '+ev.price.toLocaleString();
+  const foot=ev.social>0?`<span class="ec-so">${ev.social} met</span>`:`<span class="ec-pr">${pstr}</span>`;
+  const icon=ICONS[ev.cat]||ICONS.default;
+  return`<div class="ec" onclick="openDetail('${ev.id}')"><div class="ec-th"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="rgba(200,169,110,0.15)" stroke-width=".8">${icon}</svg></div><div class="ec-b"><div class="ec-ti">${ev.title}</div><div class="ec-me">${ev.date} · ${ev.time} · ${ev.venue}</div><div class="ec-ft"><div class="ec-go"><div class="gd"></div>${ev.going} going</div>${foot}</div></div></div>`;
+}
+
+function renderBundles(){
+  document.getElementById('r-soc').innerHTML=EVENTS.filter(e=>e.social>0).sort((a,b)=>b.social-a.social).map(mkCard).join('');
+  document.getElementById('r-ton').innerHTML=EVENTS.filter(e=>e.bundle==='tonight').map(mkCard).join('');
+  document.getElementById('r-tre').innerHTML=EVENTS.filter(e=>e.bundle==='trending').map(mkCard).join('');
+}
+renderBundles();
+
+/* ═══════════════════════════════════════
+   MAP — Leaflet + OSM tiles
+   No API key needed for development.
+   ⚠ OSM tile policy: do not hammer in prod.
+   Upgrade tiles to Maptiler/Stadia for launch.
+═══════════════════════════════════════ */
+let map,edMap,mapOk=false,edMapOk=false;
+const DC=[-8.67,115.21]; // default: Bali
+
+function mkMarker(ev){
+  const big=ev.going>100;
+  const ic=L.divIcon({className:'',html:big?`<div class="mc">${ev.going}</div>`:`<div class="md"></div>`,iconSize:big?null:[11,11],iconAnchor:big?null:[5,5]});
+  return L.marker([ev.lat,ev.lng],{icon:ic}).on('click',()=>openDetail(ev.id));
+}
+
+function initMap(){
+  if(mapOk){map.invalidateSize();return;}
+  mapOk=true;
+  map=L.map('map',{center:DC,zoom:11,zoomControl:true,attributionControl:false,tap:true});
+  /* OSM tiles — free, no key.
+     NOTE: For production use Maptiler or Stadia (see upgrade note). */
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  EVENTS.forEach(ev=>mkMarker(ev).addTo(map));
+  document.getElementById('lbtn').onclick=()=>{
+    if(!navigator.geolocation)return;
+    navigator.geolocation.getCurrentPosition(p=>map.flyTo([p.coords.latitude,p.coords.longitude],14,{duration:1.2}));
+  };
+}
+
+/* ── EVENT DETAIL ── */
+function openDetail(id){
+  const ev=EVENTS.find(e=>e.id===id);if(!ev)return;
+  document.getElementById('ed-ti').textContent=ev.title;
+  document.getElementById('ed-vn').textContent=ev.venue+' · '+ev.addr;
+  const free=!ev.price||ev.price===0;
+  const pstr=free?'Free entry':ev.cur+' '+ev.price.toLocaleString();
+  document.getElementById('ed-mr').innerHTML=`
+    <span class="ed-ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>${ev.date}</span>
+    <span class="ed-ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>${ev.time}${ev.end?' – '+ev.end:''}</span>
+    <span class="ed-ch">${ev.cat}</span>
+    <span class="ed-ch ${free?'ac':''}">${pstr}</span>`;
+  document.getElementById('ed-de').textContent=ev.desc;
+  const sb=document.getElementById('ed-sb');
+  if(ev.social>0){sb.style.display='flex';document.getElementById('ed-sn').textContent=ev.social;}else{sb.style.display='none';}
+  document.getElementById('ed-map').style.display='block';
+  document.getElementById('ed').classList.add('open');
+  // RSVP state
+  const rk='rsvp_'+id;
+  const gone=localStorage.getItem(rk);
+  const btn=document.getElementById('ed-rv');
+  btn.textContent=gone?'✓ You\'re going':'RSVP — I\'m going';
+  btn.style.cssText=gone?'background:var(--surf);color:var(--acc);border:1px solid var(--bdr-a)':'';
+  btn.onclick=()=>{
+    if(localStorage.getItem(rk))return;
+    localStorage.setItem(rk,'1');
+    btn.textContent='✓ You\'re going';
+    btn.style.cssText='background:var(--surf);color:var(--acc);border:1px solid var(--bdr-a)';
+    U.attended++;saveU();
+  };
+  // share
+  document.getElementById('ed-sh').onclick=()=>{
+    if(navigator.share)navigator.share({title:'bich.service — '+ev.title,url:'https://bich.app/e/'+slug(ev.title)});
+  };
+  // mini map
+  setTimeout(()=>{
+    if(!edMapOk){
+      edMapOk=true;
+      edMap=L.map('ed-map',{center:[ev.lat,ev.lng],zoom:15,zoomControl:false,attributionControl:false,dragging:false,scrollWheelZoom:false,tap:false});
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(edMap);
+    }else{edMap.setView([ev.lat,ev.lng],15);}
+    edMap.eachLayer(l=>{if(l instanceof L.Marker)edMap.removeLayer(l);});
+    const ic=L.divIcon({className:'',html:'<div class="md" style="width:14px;height:14px;border-width:3px"></div>',iconSize:[14,14],iconAnchor:[7,7]});
+    L.marker([ev.lat,ev.lng],{icon:ic}).addTo(edMap);
+    edMap.invalidateSize();
+  },220);
+}
+function closeDetail(){document.getElementById('ed').classList.remove('open');}
+
+/* ═══════════════════════════════════════
+   VENUE SEARCH — Nominatim
+   Endpoint: nominatim.openstreetmap.org
+   No API key needed.
+   Rate limit: max 1 req/sec (debounced 1s).
+   countrycodes: Europe + Indonesia (Bali focus)
+   ⚠ Upgrade to Foursquare/Geoapify after Jun 2026
+   for better POI coverage and higher rate limits.
+═══════════════════════════════════════ */
+let vtimer=null,selV=null;
+const vinput=document.getElementById('vi');
+const vres=document.getElementById('vres');
+const vspin=document.getElementById('vspin');
+
+vinput.addEventListener('input',()=>{
+  clearTimeout(vtimer);
+  const q=vinput.value.trim();
+  if(q.length<3){vres.innerHTML='<div class="vload">Type at least 3 chars · OSM Nominatim</div>';return;}
+  vspin.style.display='block';
+  /* 1 second debounce respects Nominatim 1req/s policy */
+  vtimer=setTimeout(()=>doVenueSearch(q),1000);
+});
+
+async function doVenueSearch(q){
+  try{
+    const p=new URLSearchParams({
+      q,format:'json',limit:'7',addressdetails:'1',
+      /* Focus: Indonesia (id) + key European countries + UK */
+      countrycodes:'id,gb,fr,de,es,it,nl,pt,gr,hr,at,ch,be,dk,se,no',
+      'accept-language':'en'
+    });
+    const r=await fetch(`https://nominatim.openstreetmap.org/search?${p}`,{headers:{'User-Agent':'bich.service/prototype'}});
+    const d=await r.json();
+    vspin.style.display='none';
+    if(!d.length){vres.innerHTML=`<div class="vload">No results for "${q}"</div>`;return;}
+    vres.innerHTML=d.map(item=>{
+      const nm=item.name||item.display_name.split(',')[0];
+      const ad=item.display_name.replace(nm+', ','').split(',').slice(0,3).join(', ');
+      const data=JSON.stringify({name:nm.replace(/'/g,'\u2019'),addr:ad.replace(/'/g,'\u2019'),lat:parseFloat(item.lat),lng:parseFloat(item.lon)});
+      return`<div class="vri" onclick='selectV(${JSON.stringify(data)})'><div class="vn">${nm}</div><div class="va">${ad}</div></div>`;
+    }).join('');
+  }catch(e){vspin.style.display='none';vres.innerHTML='<div class="vload">Search unavailable. Check connection.</div>';}
+}
+
+function selectV(jsonStr){
+  const v=JSON.parse(jsonStr);
+  selV=v;
+  document.getElementById('vp').style.display='none';
+  document.getElementById('vs').style.display='block';
+  document.getElementById('svn').textContent=v.name;
+  document.getElementById('sva').textContent=v.addr;
+  updateLink();
+}
+function resetVenue(){
+  selV=null;
+  document.getElementById('vp').style.display='block';
+  document.getElementById('vs').style.display='none';
+  vinput.value='';
+  vres.innerHTML='<div class="vload">Type to search · powered by Nominatim / OSM</div>';
+}
+
+/* ── DATETIME MODAL ── */
+let EDT={d:'',t:''};
+function confirmDt(){
+  const d=document.getElementById('i-ds').value;
+  const t=document.getElementById('i-ts').value;
+  EDT.d=d;EDT.t=t;
+  if(d){const p=new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});const c=document.getElementById('ch-d');c.textContent=p;c.classList.add('st');}
+  if(t){const c=document.getElementById('ch-t');c.textContent=t;c.classList.add('st');}
+  closeMo('mo-dt');
+}
+
+/* ── CAPACITY MODAL ── */
+let selCap='any';
+document.querySelectorAll('.co[data-cap]').forEach(el=>{el.onclick=()=>{document.querySelectorAll('.co[data-cap]').forEach(x=>x.classList.remove('active'));el.classList.add('active');selCap=el.dataset.cap;};});
+function confirmCap(){
+  const m={any:'Any size','10':'Up to 10','25':'Up to 25','50':'Up to 50','100':'Up to 100','500+':'500+'};
+  const c=document.getElementById('ch-cap');c.textContent=m[selCap]||selCap;c.classList.add('st');
+  closeMo('mo-cap');
+}
+
+/* ── CATEGORY MODAL ── */
+let selCat='';
+document.querySelectorAll('.co[data-cat]').forEach(el=>{el.onclick=()=>{document.querySelectorAll('.co[data-cat]').forEach(x=>x.classList.remove('active'));el.classList.add('active');selCat=el.dataset.cat;};});
+function confirmCat(){
+  if(!selCat){closeMo('mo-cat');return;}
+  const c=document.getElementById('ch-cat');c.textContent=selCat;c.classList.add('st');
+  closeMo('mo-cat');
+}
+
+/* ── SHARE LINK ── */
+function updateLink(){
+  const t=document.getElementById('ev-ti').value.trim();
+  const s=t?slug(t):slug(U.username)+'-event';
+  document.getElementById('slt').textContent='bich.app/e/'+s;
+}
+document.getElementById('ev-ti').addEventListener('input',updateLink);
+function copyLink(){
+  const txt=document.getElementById('slt').textContent;
+  navigator.clipboard?.writeText('https://'+txt).catch(()=>{});
+  const b=document.getElementById('scb');b.textContent='copied ✓';
+  setTimeout(()=>{b.textContent='copy';},2000);
+}
+
+/* ── PUBLISH ── */
+function publishEvent(){
+  const ti=document.getElementById('ev-ti').value.trim();
+  if(!ti){
+    const inp=document.getElementById('ev-ti');
+    inp.style.borderColor='var(--red)';inp.focus();
+    setTimeout(()=>{inp.style.borderColor='';},2200);
+    return;
+  }
+  const ev={
+    id:'u_'+Date.now(),
+    title:ti,
+    venue:selV?.name||'—',
+    addr:selV?.addr||'',
+    lat:selV?.lat||DC[0],lng:selV?.lng||DC[1],
+    date:EDT.d||'—',time:EDT.t||'—',end:'',
+    cat:selCat||'Other',going:1,social:0,
+    price:parseFloat(document.getElementById('ev-pr').value)||0,
+    cur:document.getElementById('ev-cur').value,
+    desc:document.getElementById('ev-de').value.trim()||'',
+    bundle:'trending',createdBy:U.username
+  };
+  EVENTS.push(ev);
+  U.created++;saveU();
+  if(map&&mapOk)mkMarker(ev).addTo(map);
+  renderBundles();
+  document.getElementById('ecnt').textContent=EVENTS.length+' events';
+  renderMyEvents();
+  const btn=document.querySelector('.pub');
+  btn.textContent='Published ✓';btn.style.cssText='background:var(--surf);color:var(--acc);border:1px solid var(--bdr-a)';
+  setTimeout(()=>{
+    btn.textContent='Publish event';btn.style.cssText='';
+    document.getElementById('ev-ti').value='';document.getElementById('ev-de').value='';document.getElementById('ev-pr').value='';
+    const chips=[['ch-d','Set date'],['ch-t','Set time'],['ch-cap','Any size'],['ch-cat','Choose']];
+    chips.forEach(([id,txt])=>{const c=document.getElementById(id);c.textContent=txt;c.classList.remove('st');});
+    resetVenue();EDT={d:'',t:''};updateLink();
+    goHome();
+    if(map)map.flyTo([ev.lat,ev.lng],14,{duration:1.5});
+  },1800);
+}
+
+/* ── MY EVENTS ── */
+function renderMyEvents(){
+  const mine=EVENTS.filter(e=>e.createdBy===U.username);
+  const el=document.getElementById('mel');
+  if(!mine.length){el.innerHTML='<div style="padding:var(--lg);text-align:center;font-size:.55rem;letter-spacing:.1em;color:var(--sub);">No events yet. Create your first one.</div>';return;}
+  el.innerHTML=mine.map(ev=>`<div class="eli" onclick="openDetail('${ev.id}')"><div class="elt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 19V6l12-3v13M9 19c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-3c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2z"/></svg></div><div class="elb"><div class="eln">${ev.title}</div><div class="elm">${ev.date} · ${ev.going} going · ${ev.venue}</div></div><span class="tag-a">live</span></div>`).join('');
+}
+renderMyEvents();
+
+/* ── BOOT MAP ── */
+window.addEventListener('load',()=>setTimeout(initMap,100));
+</script>
+</body>
+</html>
