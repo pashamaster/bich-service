@@ -703,7 +703,10 @@ function openDetail(id){
     if(!edMapOk){
       edMapOk=true;
       edMap=L.map('ed-map',{center:[ev.lat,ev.lng],zoom:15,zoomControl:false,attributionControl:false,dragging:false,scrollWheelZoom:false,tap:false});
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(edMap);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(edMap);
     }else{edMap.setView([ev.lat,ev.lng],15);}
     edMap.eachLayer(l=>{if(l instanceof L.Marker)edMap.removeLayer(l);});
     const ic=L.divIcon({className:'',html:'<div class="md" style="width:14px;height:14px;border-width:3px"></div>',iconSize:[14,14],iconAnchor:[7,7]});
