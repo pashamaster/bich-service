@@ -1,1454 +1,1558 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
-<meta name="theme-color" content="#0a0a0a"/>
-<meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-<title>bich service</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a0a" />
+<title>bich.service — events that find their people</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500&family=Playfair+Display:ital@0;1&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
 <style>
-/* ═══════════════════════════════════════════════
-   BICH SERVICE — DESIGN SYSTEM + RESPONSIVE UI
-   Mobile-first. Desktop enhancements via @media.
-   Font scale: clamp() for all readable text.
-═══════════════════════════════════════════════ */
+/* ─── BICHRADIO DESIGN SYSTEM (inlined) ─── */
 :root {
-  /* Palette */
-  --bg:#0a0a0a; --bg-e:#161410; --surf:#111111;
-  --bdr:rgba(255,255,255,0.07); --bdr-a:rgba(200,169,110,0.2);
-  --txt:#e8e2d9; --mut:rgba(232,226,217,0.35); --sub:rgba(232,226,217,0.18);
-  --acc:#c8a96e; --acc-d:rgba(200,169,110,0.07); --red:#e05252;
-  /* Typography */
-  --fm:'Geist Mono',monospace; --fs:'Playfair Display',serif;
-  /* Spacing */
-  --xs:4px; --sm:8px; --md:16px; --lg:24px; --xl:28px; --2xl:40px;
-  /* Radii */
-  --r:2px; --rm:10px; --rl:16px; --rf:50%;
-  /* Motion */
-  --ease:0.2s ease; --spring:0.4s cubic-bezier(0.16,1,0.3,1);
-  /* Layout */
-  --nav:66px;
-  --sb:max(env(safe-area-inset-bottom,0px),14px);
-  --st:max(env(safe-area-inset-top,0px),0px);
-  --sl:max(env(safe-area-inset-left,0px),0px);
-
-  /* ── FLUID FONT SCALE ──
-     clamp(min, preferred, max)
-     min = small phone (320px)
-     max = large desktop (1440px)
-     All UI text scales smoothly between devices. */
-  --f-label:  clamp(0.6rem,  1.8vw, 0.72rem);
-  --f-caption:clamp(0.65rem, 1.9vw, 0.75rem);
-  --f-body:   clamp(0.78rem, 2.2vw, 0.88rem);
-  --f-sub:    clamp(0.7rem,  2.0vw, 0.82rem);
-  --f-title:  clamp(1.1rem,  3.5vw, 1.5rem);
-  --f-display:clamp(1.3rem,  4vw,   1.9rem);
-  --f-chip:   clamp(0.62rem, 1.7vw, 0.7rem);
-  --f-nav:    clamp(0.5rem,  1.4vw, 0.58rem);
-  --f-tiny:   clamp(0.56rem, 1.5vw, 0.64rem);
+  --bg:          #0a0a0a;
+  --bg-elevated: #161410;
+  --surface:     #111111;
+  --border:      rgba(255, 255, 255, 0.07);
+  --border-accent: rgba(200, 169, 110, 0.2);
+  --text:        #e8e2d9;
+  --muted:       rgba(232, 226, 217, 0.35);
+  --subtle:      rgba(232, 226, 217, 0.20);
+  --accent:      #c8a96e;
+  --accent-dim:  rgba(200, 169, 110, 0.07);
+  --red:         #e05252;
+  --font-mono:   'Geist Mono', monospace;
+  --font-serif:  'Playfair Display', serif;
+  --space-xs: 4px; --space-sm: 8px; --space-md: 16px;
+  --space-lg: 24px; --space-xl: 28px; --space-2xl: 40px;
+  --radius-sm: 2px; --radius-md: 10px; --radius-full: 50%;
+  --ease: 0.2s ease;
+  --ease-slow: 0.4s ease;
+  --ease-spring: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Desktop overrides */
-@media(min-width:768px){
-  :root{
-    --nav:0px; /* desktop uses sidebar nav, not bottom bar */
-    --f-label:0.72rem; --f-caption:0.75rem; --f-body:0.88rem;
-    --f-chip:0.68rem; --f-tiny:0.62rem;
-  }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--txt);font-family:var(--fm);-webkit-font-smoothing:antialiased;}
-button,input,textarea,select{font-family:var(--fm);cursor:pointer;}
-input,textarea{cursor:text;}
-
-/* GRAIN */
-body::before{content:'';position:fixed;inset:0;z-index:9000;pointer-events:none;opacity:.028;
-  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");}
-
-/* ════════════════════════════════════
-   APP SHELL — MOBILE (default)
-════════════════════════════════════ */
-#app{
-  height:100dvh;
-  display:flex;
-  flex-direction:column;
-  position:relative;
-  overflow:hidden;
+/* Film grain overlay */
+.grain::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E");
+  opacity: 0.028;
+  pointer-events: none;
+  z-index: 1000;
 }
 
-/* ── SCREENS (mobile: full height minus nav) ── */
-.screen{
-  position:absolute;
-  inset:0;
-  bottom:var(--nav);
-  display:flex;
-  flex-direction:column;
-  opacity:0;
-  pointer-events:none;
-  transition:opacity .22s ease;
-  overflow:hidden;
+/* Typography */
+.text-display { font-family: var(--font-serif); font-style: italic; color: var(--accent); letter-spacing: 0.04em; }
+.text-title { font-family: var(--font-serif); line-height: 1.25; color: var(--text); }
+.text-label { font-family: var(--font-mono); font-size: 0.55rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
+.text-caption { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.1em; color: var(--muted); }
+.text-accent  { color: var(--accent); }
+.text-muted   { color: var(--muted); }
+.text-subtle  { color: var(--subtle); }
+
+/* Buttons */
+.btn {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: var(--space-sm) 22px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--ease);
+  min-height: 40px;
 }
-.screen.active{opacity:1;pointer-events:all;}
+.btn:hover  { border-color: var(--accent); color: var(--accent); }
+.btn:active { transform: scale(0.96); }
+.btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.btn--primary { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.btn--block { width: 100%; }
 
-/* ════════════════════════════════════
-   MOBILE BOTTOM NAV
-════════════════════════════════════ */
-#bot-nav{
-  position:absolute;
-  bottom:0;left:0;right:0;
-  height:var(--nav);
-  padding-bottom:var(--sb);
-  background:var(--bg-e);
-  border-top:1px solid var(--bdr);
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-around;
-  padding-top:10px;
-  z-index:500;
+.btn-icon {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); padding: var(--space-sm);
+  display: flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px;
+  transition: color var(--ease), transform 0.15s;
 }
-.nb{
-  display:flex;flex-direction:column;align-items:center;gap:4px;
-  background:none;border:none;color:var(--mut);
-  transition:color var(--ease);padding:2px 18px;min-width:44px;min-height:44px;
-}
-.nb svg{width:22px;height:22px;stroke-width:1.5;}
-.nb span{font-size:var(--f-nav);letter-spacing:.18em;text-transform:uppercase;}
-.nb.active,.nb:hover{color:var(--acc);}
+.btn-icon:hover { color: var(--text); transform: scale(1.08); }
+.btn-icon:active { transform: scale(0.95); }
 
-/* Centre create button — floats above nav */
-.nc-wrap{
-  display:flex;flex-direction:column;align-items:center;gap:4px;
-  padding:0 18px;margin-top:-18px;
-}
-.nc-wrap>span{font-size:var(--f-nav);letter-spacing:.18em;text-transform:uppercase;color:var(--mut);}
-.nc{
-  width:48px;height:48px;border-radius:var(--rf);
-  background:var(--acc);color:var(--bg);
-  display:flex;align-items:center;justify-content:center;
-  transition:transform var(--ease),box-shadow var(--ease);
-  box-shadow:0 0 18px rgba(200,169,110,.3);
-  border:none;
-}
-.nc:hover{transform:scale(1.08);box-shadow:0 0 30px rgba(200,169,110,.5);}
-.nc:active{transform:scale(.94);}
-.nc svg{width:22px;height:22px;}
-
-/* ════════════════════════════════════
-   DESKTOP LAYOUT
-   Side panel replaces bottom nav.
-   Content area shifts right.
-════════════════════════════════════ */
-@media(min-width:768px){
-  #bot-nav{display:none;} /* hide mobile nav */
-
-  #app{flex-direction:row;}
-
-  /* Desktop sidebar */
-  #side-nav{
-    display:flex;
-    flex-direction:column;
-    width:220px;
-    flex-shrink:0;
-    background:var(--bg-e);
-    border-right:1px solid var(--bdr);
-    padding:var(--lg) var(--md);
-    gap:var(--sm);
-    z-index:500;
-    position:relative;
-  }
-  .side-logo{
-    font-family:var(--fs);font-style:italic;
-    font-size:1.1rem;color:var(--acc);
-    padding:var(--sm) var(--sm) var(--xl);
-    letter-spacing:.04em;
-  }
-  .snb{
-    display:flex;align-items:center;gap:var(--md);
-    background:none;border:none;color:var(--mut);
-    padding:12px var(--md);border-radius:var(--rm);
-    transition:background var(--ease),color var(--ease);
-    font-size:var(--f-caption);letter-spacing:.08em;
-    width:100%;text-align:left;
-  }
-  .snb svg{width:18px;height:18px;stroke-width:1.5;flex-shrink:0;}
-  .snb:hover{background:var(--acc-d);color:var(--txt);}
-  .snb.active{background:var(--acc-d);color:var(--acc);}
-  .snb-create{
-    margin-top:auto;
-    background:var(--acc);color:var(--bg);
-    border-radius:var(--rm);padding:14px var(--md);
-    font-size:var(--f-caption);letter-spacing:.1em;
-    display:flex;align-items:center;gap:var(--md);
-    transition:all var(--ease);border:none;width:100%;
-    font-weight:500;
-  }
-  .snb-create:hover{background:#d4b87a;box-shadow:0 4px 18px rgba(200,169,110,.25);}
-  .snb-create svg{width:16px;height:16px;}
-  .side-user{
-    margin-top:var(--sm);
-    padding:var(--md);
-    background:var(--surf);
-    border:1px solid var(--bdr);
-    border-radius:var(--rm);
-    display:flex;align-items:center;gap:var(--sm);
-  }
-  .side-av{
-    width:32px;height:32px;border-radius:var(--rf);
-    background:var(--bg-e);border:1px solid var(--bdr-a);
-    display:flex;align-items:center;justify-content:center;
-    font-family:var(--fs);font-style:italic;font-size:.85rem;color:var(--acc);
-    flex-shrink:0;
-  }
-  .side-uname{font-size:var(--f-tiny);color:var(--txt);}
-
-  /* Screens fill remaining space */
-  .screen{
-    position:static;
-    flex:1;
-    bottom:auto;
-    opacity:1;
-    pointer-events:all;
-    display:none;
-  }
-  .screen.active{display:flex;}
-
-  /* Event detail is inset panel on desktop */
-  #ed{
-    position:absolute;
-    inset:0;
-    bottom:0;
-    left:220px; /* sidebar width */
-  }
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
 }
 
-/* ════════════════════════════════════
-   DESKTOP SIDEBAR (hidden on mobile)
-════════════════════════════════════ */
-#side-nav{display:none;}
-
-/* ════════════════════════════════════
-   SHARED TOPBAR (Explore screen)
-════════════════════════════════════ */
-.topbar{
-  position:absolute;top:0;left:0;right:0;z-index:200;
-  padding:calc(var(--st) + 10px) var(--md) var(--sm);
-  display:flex;gap:var(--sm);align-items:center;
+/* Tag */
+.tag {
+  display: inline-flex; align-items: center;
+  font-family: var(--font-mono); font-size: 0.55rem;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
 }
-.spill{
-  flex:1;display:flex;align-items:center;gap:var(--sm);
-  background:rgba(10,10,10,.92);border:1px solid var(--bdr);
-  border-radius:999px;padding:11px var(--md);
-  backdrop-filter:blur(14px);transition:border-color var(--ease);
-}
-.spill:focus-within{border-color:var(--bdr-a);}
-.spill svg{color:var(--mut);flex-shrink:0;width:14px;height:14px;}
-.spill input{
-  background:none;border:none;outline:none;color:var(--txt);
-  font-family:var(--fm);font-size:var(--f-body);width:100%;
-}
-.spill input::placeholder{color:var(--mut);}
-.tbb{
-  width:42px;height:42px;border-radius:var(--rm);flex-shrink:0;
-  background:rgba(10,10,10,.92);border:1px solid var(--bdr);
-  backdrop-filter:blur(14px);display:flex;align-items:center;justify-content:center;
-  color:var(--mut);transition:color var(--ease),border-color var(--ease);border:none;
-  border:1px solid var(--bdr);
-}
-.tbb:hover,.tbb:focus{color:var(--acc);border-color:var(--bdr-a);}
-.tbb svg{width:16px;height:16px;}
-
-/* Date dropdown */
-.dd{
-  position:absolute;top:70px;right:var(--md);z-index:300;
-  background:rgba(10,10,10,.97);border:1px solid var(--bdr-a);
-  border-radius:var(--rm);overflow:hidden;backdrop-filter:blur(18px);
-  min-width:150px;display:none;animation:fi .18s ease both;
-}
-.dd.open{display:block;}
-.ddi{
-  padding:12px var(--md);font-size:var(--f-caption);letter-spacing:.08em;
-  color:var(--mut);cursor:pointer;border-bottom:1px solid var(--bdr);
-  display:flex;justify-content:space-between;align-items:center;
-  transition:background var(--ease),color var(--ease);
-}
-.ddi:last-child{border-bottom:none;}
-.ddi:hover{background:var(--acc-d);color:var(--txt);}
-.ddi.active{color:var(--acc);}
-
-/* Map */
-#map{
-  position:absolute;inset:0;
-  filter:brightness(.82) contrast(1.08) saturate(.45);
-}
-
-/* Category chips */
-.cats{
-  position:absolute;bottom:0;left:0;right:0;z-index:200;
-  display:flex;gap:var(--sm);padding:var(--sm) var(--md);
-  overflow-x:auto;scrollbar-width:none;pointer-events:none;
-}
-.cats::-webkit-scrollbar{display:none;}
-.cat{
-  pointer-events:all;flex-shrink:0;font-family:var(--fm);
-  font-size:var(--f-tiny);letter-spacing:.12em;text-transform:uppercase;
-  white-space:nowrap;cursor:pointer;padding:8px 16px;border-radius:999px;
-  background:rgba(10,10,10,.92);border:1px solid var(--bdr);color:var(--mut);
-  backdrop-filter:blur(10px);transition:all var(--ease);
-  min-height:36px;display:flex;align-items:center;
-}
-.cat:hover,.cat.active{border-color:var(--acc);color:var(--acc);}
-
-/* ════════════════════════════════════
-   BUNDLES SHEET
-════════════════════════════════════ */
-.bsh{
-  position:absolute;bottom:0;left:0;right:0;z-index:250;
-  background:var(--bg-e);border-top:1px solid var(--bdr-a);
-  border-radius:var(--rl) var(--rl) 0 0;
-  transition:transform var(--spring);
-  display:flex;flex-direction:column;max-height:80%;
-}
-.bsh.s-c{transform:translateY(calc(100% - 82px));}
-.bsh.s-p{transform:translateY(calc(100% - 240px));}
-.bsh.s-o{transform:translateY(0);}
-
-.bsh-h{
-  padding:var(--md) var(--md) var(--sm);
-  display:flex;flex-direction:column;align-items:center;gap:var(--sm);
-  cursor:pointer;flex-shrink:0;
-  /* big touch target */
-  min-height:54px;justify-content:center;
-}
-.bsh-hd{width:36px;height:3px;border-radius:999px;background:var(--mut);opacity:.35;}
-.bsh-hr{width:100%;display:flex;align-items:baseline;justify-content:space-between;}
-.bsh-t{font-family:var(--fs);font-style:italic;font-size:var(--f-sub);color:var(--acc);}
-.bsh-c{font-size:var(--f-tiny);letter-spacing:.18em;text-transform:uppercase;color:var(--mut);}
-.bsh-s{overflow-y:auto;overflow-x:hidden;flex:1;padding:0 var(--md) var(--2xl);scrollbar-width:none;}
-.bsh-s::-webkit-scrollbar{display:none;}
-.bndl{margin-bottom:var(--xl);}
-.bndl-l{
-  font-size:var(--f-tiny);letter-spacing:.22em;text-transform:uppercase;
-  color:var(--mut);margin-bottom:var(--sm);
-  display:flex;align-items:center;gap:var(--sm);
-}
-.bndl-l::after{content:'';flex:1;height:1px;background:var(--bdr);}
-.bndl-r{display:flex;gap:var(--sm);overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
-.bndl-r::-webkit-scrollbar{display:none;}
-
-/* ════════════════════════════════════
-   EVENT CARD
-════════════════════════════════════ */
-.ec{
-  flex-shrink:0;width:200px;border-radius:var(--rm);overflow:hidden;
-  border:1px solid var(--bdr);background:var(--surf);cursor:pointer;
-  transition:border-color var(--ease),transform var(--ease);
-}
-.ec:hover{border-color:var(--bdr-a);transform:translateY(-2px);}
-.ec-th{width:100%;height:112px;background:var(--bg-e);display:flex;align-items:center;justify-content:center;}
-.ec-th svg{opacity:.14;}
-.ec-b{padding:var(--sm) var(--sm) 11px;}
-.ec-ti{font-family:var(--fs);font-size:var(--f-sub);line-height:1.28;color:var(--txt);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.ec-me{font-size:var(--f-tiny);letter-spacing:.05em;color:var(--mut);margin-bottom:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.ec-ft{display:flex;align-items:center;justify-content:space-between;}
-.ec-go{display:flex;align-items:center;gap:5px;font-size:var(--f-tiny);color:var(--mut);}
-.gd{width:5px;height:5px;border-radius:var(--rf);background:var(--acc);flex-shrink:0;}
-.ec-so{font-size:var(--f-tiny);color:var(--acc);background:var(--acc-d);border:1px solid var(--bdr-a);border-radius:var(--r);padding:2px 7px;}
-.ec-pr{font-size:var(--f-tiny);color:var(--mut);border:1px solid var(--bdr);border-radius:var(--r);padding:2px 7px;}
-
-/* Desktop: wider cards */
-@media(min-width:768px){
-  .ec{width:220px;}
-  .ec-th{height:120px;}
-}
-
-/* ════════════════════════════════════
-   MAP MARKERS
-════════════════════════════════════ */
-.md{width:12px;height:12px;border-radius:var(--rf);background:var(--acc);border:2px solid #0a0a0a;box-shadow:0 0 8px rgba(200,169,110,.6);}
-.mc-lbl{min-width:28px;height:28px;border-radius:12px;background:var(--acc);border:2px solid #0a0a0a;display:flex;align-items:center;justify-content:center;font-family:var(--fm);font-size:.58rem;font-weight:500;color:#0a0a0a;padding:0 6px;box-shadow:0 0 10px rgba(200,169,110,.4);}
-
-/* ════════════════════════════════════
-   EVENT DETAIL OVERLAY
-════════════════════════════════════ */
-#ed{
-  position:absolute;inset:0;bottom:var(--nav);z-index:800;
-  background:var(--bg);
-  transform:translateY(100%);
-  transition:transform var(--spring);
-  display:flex;flex-direction:column;overflow:hidden;
-}
-#ed.open{transform:translateY(0);}
-
-/* Mobile: swipe-down handle instead of back button */
-.ed-handle-bar{
-  display:flex;
-  align-items:center;justify-content:center;
-  padding:10px 0 4px;
-  flex-shrink:0;
-  cursor:pointer;
-}
-.ed-handle{width:36px;height:4px;border-radius:999px;background:var(--mut);opacity:.4;}
-
-/* Desktop: conventional back button, no handle */
-@media(min-width:768px){
-  .ed-handle-bar{display:none;}
-  .ed-bk-desktop{display:flex;}
-}
-.ed-bk-desktop{
-  display:none;
-  position:absolute;top:var(--md);left:var(--md);z-index:10;
-  align-items:center;gap:var(--sm);
-  background:rgba(10,10,10,.82);border:1px solid var(--bdr);
-  border-radius:999px;padding:7px 14px 7px 10px;
-  backdrop-filter:blur(8px);color:var(--mut);cursor:pointer;
-  font-size:var(--f-tiny);letter-spacing:.12em;text-transform:uppercase;
-  transition:color var(--ease),border-color var(--ease);
-}
-.ed-bk-desktop:hover{color:var(--txt);border-color:var(--mut);}
-.ed-bk-desktop svg{width:13px;height:13px;}
-
-.ed-cov{
-  position:relative;height:200px;flex-shrink:0;
-  background:linear-gradient(155deg,#1c1a16,#0d0c0a);
-  display:flex;align-items:center;justify-content:center;overflow:hidden;
-}
-.ed-cov>svg{opacity:.1;}
-.ed-sc{overflow-y:auto;flex:1;padding:var(--lg) var(--md);scrollbar-width:none;}
-.ed-sc::-webkit-scrollbar{display:none;}
-.ed-ti{font-family:var(--fs);font-size:var(--f-title);line-height:1.22;color:var(--txt);margin-bottom:var(--sm);}
-.ed-vn{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:var(--f-caption);margin-bottom:var(--lg);}
-.ed-vn svg{width:12px;height:12px;flex-shrink:0;color:var(--acc);}
-.ed-mr{display:flex;gap:var(--sm);margin-bottom:var(--lg);flex-wrap:wrap;}
-.ed-ch{
-  font-size:var(--f-tiny);letter-spacing:.08em;text-transform:uppercase;
-  border:1px solid var(--bdr);border-radius:var(--r);padding:6px 12px;
-  color:var(--mut);display:flex;align-items:center;gap:5px;
-}
-.ed-ch svg{width:10px;height:10px;}
-.ed-ch.ac{border-color:var(--bdr-a);color:var(--acc);}
-.ed-de{font-size:var(--f-body);line-height:1.75;color:var(--mut);margin-bottom:var(--xl);}
-.ed-sb{
-  background:var(--bg-e);border:1px solid var(--bdr-a);border-radius:var(--rm);
-  padding:var(--md);margin-bottom:var(--xl);
-  display:flex;align-items:center;gap:var(--md);
-}
-.ed-sn{font-family:var(--fs);font-size:2.2rem;color:var(--acc);line-height:1;}
-.ed-st{font-size:var(--f-caption);line-height:1.6;color:var(--mut);}
-#ed-map{height:160px;border-radius:var(--rm);overflow:hidden;margin-bottom:var(--xl);border:1px solid var(--bdr);}
-.ed-ac{display:flex;gap:var(--sm);margin-bottom:var(--lg);}
-.ed-rv{
-  flex:1;padding:15px;background:var(--acc);color:var(--bg);border:none;
-  border-radius:var(--rm);font-size:var(--f-chip);letter-spacing:.18em;
-  text-transform:uppercase;font-weight:500;cursor:pointer;transition:all var(--ease);
-}
-.ed-rv:hover{background:#d4b87a;box-shadow:0 4px 18px rgba(200,169,110,.28);}
-.ed-rv:active{transform:scale(.98);}
-.ed-sh{
-  width:50px;height:50px;background:var(--surf);border:1px solid var(--bdr);
-  border-radius:var(--rm);display:flex;align-items:center;justify-content:center;
-  color:var(--mut);cursor:pointer;transition:all var(--ease);flex-shrink:0;
-}
-.ed-sh:hover{color:var(--acc);border-color:var(--bdr-a);}
-.ed-sh svg{width:16px;height:16px;}
-
-/* ════════════════════════════════════
-   SCREEN: CREATE
-════════════════════════════════════ */
-#s-create{overflow-y:auto;scrollbar-width:none;background:var(--bg);}
-#s-create::-webkit-scrollbar{display:none;}
-
-/* Mobile: sticky top bar with swipe-down feel */
-.cr-hd{
-  padding:calc(var(--st) + 12px) var(--md) var(--md);
-  display:flex;align-items:center;gap:var(--md);
-  border-bottom:1px solid var(--bdr);
-  flex-shrink:0;
-  position:sticky;top:0;z-index:10;
-  background:var(--bg);
-}
-/* Mobile close = down-chevron (feels natural for sheet) */
-.cr-close{
-  background:none;border:none;
-  color:var(--mut);display:flex;align-items:center;gap:6px;
-  font-size:var(--f-tiny);letter-spacing:.12em;text-transform:uppercase;
-  padding:6px;transition:color var(--ease);min-width:44px;min-height:44px;
-  justify-content:center;
-}
-.cr-close:hover{color:var(--txt);}
-.cr-close svg{width:20px;height:20px;}
-.cr-tt{font-family:var(--fs);font-style:italic;font-size:var(--f-sub);color:var(--acc);}
-
-/* Desktop: back looks like sidebar nav item */
-@media(min-width:768px){
-  .cr-close svg{width:16px;height:16px;}
-}
-
-/* Cover zone */
-.cov-z{
-  position:relative;height:195px;
-  background:linear-gradient(155deg,#1a1814,#0d0c0a);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:var(--sm);cursor:pointer;flex-shrink:0;overflow:hidden;transition:background var(--ease);
-}
-.cov-z:hover{background:linear-gradient(155deg,#1f1c17,#110f0a);}
-.cov-z>svg{opacity:.2;}
-.cov-z>span{font-size:var(--f-tiny);letter-spacing:.18em;text-transform:uppercase;color:var(--sub);}
-.cov-bb{position:absolute;bottom:var(--sm);left:var(--md);display:flex;gap:var(--sm);}
-.cb{
-  font-size:var(--f-tiny);letter-spacing:.12em;text-transform:uppercase;
-  background:rgba(10,10,10,.84);border:1px solid var(--bdr);color:var(--mut);
-  padding:7px 12px;border-radius:999px;backdrop-filter:blur(8px);cursor:pointer;
-  display:flex;align-items:center;gap:5px;transition:color var(--ease),border-color var(--ease);
-  min-height:36px;
-}
-.cb:hover{color:var(--acc);border-color:var(--bdr-a);}
-.cb svg{width:10px;height:10px;}
-
-/* Form */
-.cf{padding:var(--lg) var(--md);display:flex;flex-direction:column;gap:var(--xl);}
-.fg{display:flex;flex-direction:column;gap:var(--sm);}
-.fl{font-size:var(--f-tiny);letter-spacing:.2em;text-transform:uppercase;color:var(--mut);}
-.fl span{color:var(--sub);margin-left:4px;font-size:var(--f-tiny);}
-.fi{
-  background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);
-  padding:14px var(--md);color:var(--txt);font-family:var(--fm);
-  font-size:var(--f-body);outline:none;width:100%;transition:border-color var(--ease);
-}
-.fi::placeholder{color:var(--sub);font-style:italic;}
-.fi:focus{border-color:var(--bdr-a);}
-textarea.fi{resize:none;min-height:90px;line-height:1.65;}
-
-/* Desktop: two-col form */
-@media(min-width:768px){
-  .cf{max-width:680px;}
-}
-
-/* Venue panel */
-.vp{background:var(--surf);border:1px solid var(--bdr-a);border-radius:var(--rm);overflow:hidden;}
-.vsr{display:flex;align-items:center;gap:var(--sm);padding:var(--sm) var(--md);border-bottom:1px solid var(--bdr);}
-.vsr svg{color:var(--mut);flex-shrink:0;width:14px;height:14px;}
-.vi{flex:1;background:none;border:none;outline:none;color:var(--txt);font-family:var(--fm);font-size:var(--f-body);padding:6px 0;}
-.vi::placeholder{color:var(--sub);font-style:italic;}
-.vres{max-height:200px;overflow-y:auto;scrollbar-width:none;}
-.vres::-webkit-scrollbar{display:none;}
-.vri{padding:13px var(--md);cursor:pointer;border-bottom:1px solid var(--bdr);transition:background var(--ease);}
-.vri:last-child{border-bottom:none;}
-.vri:hover{background:var(--acc-d);}
-.vn{font-size:var(--f-body);color:var(--txt);margin-bottom:3px;}
-.va{font-size:var(--f-tiny);letter-spacing:.05em;color:var(--mut);}
-.vnote{
-  padding:var(--sm) var(--md);font-size:var(--f-tiny);letter-spacing:.06em;
-  color:var(--sub);border-top:1px solid var(--bdr);display:flex;align-items:flex-start;gap:5px;line-height:1.5;
-}
-.vnote svg{width:10px;height:10px;flex-shrink:0;margin-top:2px;}
-.vload{padding:var(--lg);text-align:center;font-size:var(--f-caption);color:var(--sub);}
-
-/* Details card */
-.dc{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);overflow:hidden;}
-.dr{
-  display:flex;align-items:center;gap:var(--md);padding:14px var(--md);
-  cursor:pointer;border-bottom:1px solid var(--bdr);transition:background var(--ease);
-  min-height:52px; /* touch target */
-}
-.dr:last-child{border-bottom:none;}
-.dr:hover{background:var(--acc-d);}
-.di{width:17px;height:17px;color:var(--mut);flex-shrink:0;}
-.dl{flex:1;font-size:var(--f-body);color:var(--txt);}
-.dv{font-size:var(--f-caption);color:var(--mut);display:flex;align-items:center;gap:var(--sm);}
-.dv svg{width:11px;height:11px;color:var(--sub);}
-.dch{background:var(--bg-e);border:1px solid var(--bdr);border-radius:var(--r);padding:4px 10px;font-size:var(--f-tiny);color:var(--mut);}
-.dch.st{border-color:var(--bdr-a);color:var(--acc);}
-
-/* Price */
-.pr{display:flex;align-items:center;gap:var(--sm);}
-.cur{background:var(--bg-e);border:1px solid var(--bdr);border-radius:var(--rm);padding:14px var(--sm) 14px var(--md);color:var(--mut);font-family:var(--fm);font-size:var(--f-body);outline:none;width:80px;}
-.cur:focus{border-color:var(--bdr-a);}
-.ph{font-size:var(--f-tiny);letter-spacing:.06em;color:var(--sub);line-height:1.6;}
-
-/* Share box */
-.sb-row{display:flex;align-items:center;gap:var(--sm);background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:13px var(--md);}
-.sl{flex:1;font-size:var(--f-caption);letter-spacing:.04em;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.sc2{
-  font-size:var(--f-tiny);letter-spacing:.14em;text-transform:uppercase;
-  background:none;border:1px solid var(--bdr-a);color:var(--acc);
-  padding:7px 12px;border-radius:var(--r);cursor:pointer;flex-shrink:0;
-  transition:background var(--ease);
-}
-.sc2:hover{background:var(--acc-d);}
-
-/* Publish */
-.pub{
-  width:100%;padding:16px;background:var(--acc);color:var(--bg);border:none;
-  border-radius:var(--rm);font-size:var(--f-chip);letter-spacing:.18em;
-  text-transform:uppercase;font-weight:500;cursor:pointer;transition:all var(--ease);
-}
-.pub:hover{background:#d4b87a;box-shadow:0 4px 20px rgba(200,169,110,.28);}
-.pub:active{transform:scale(.98);}
-
-/* ════════════════════════════════════
-   SCREEN: PROFILE
-════════════════════════════════════ */
-#s-profile{overflow-y:auto;scrollbar-width:none;padding:0 var(--md) var(--2xl);}
-#s-profile::-webkit-scrollbar{display:none;}
-.pt{display:flex;flex-direction:column;align-items:center;gap:var(--md);padding:calc(var(--st)+32px) 0 var(--2xl);}
-.pav{width:74px;height:74px;border-radius:var(--rf);background:var(--surf);border:1px solid var(--bdr-a);display:flex;align-items:center;justify-content:center;font-family:var(--fs);font-style:italic;font-size:1.4rem;color:var(--acc);}
-.pn{font-family:var(--fs);font-style:italic;font-size:var(--f-title);color:var(--txt);}
-.ps{font-size:var(--f-tiny);letter-spacing:.18em;text-transform:uppercase;color:var(--mut);}
-.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--bdr);border-radius:var(--rm);overflow:hidden;margin-bottom:var(--xl);}
-.sc3{background:var(--surf);padding:var(--md) var(--sm);display:flex;flex-direction:column;align-items:center;gap:5px;}
-.sn{font-family:var(--fs);font-size:1.4rem;color:var(--acc);}
-.sl2{font-size:var(--f-tiny);letter-spacing:.18em;text-transform:uppercase;color:var(--mut);text-align:center;}
-.sh2{font-size:var(--f-tiny);letter-spacing:.22em;text-transform:uppercase;color:var(--mut);margin-bottom:var(--md);display:flex;align-items:center;gap:var(--sm);}
-.sh2::after{content:'';flex:1;height:1px;background:var(--bdr);}
-.pkc{background:var(--bg-e);border:1px solid var(--bdr-a);border-radius:var(--rm);padding:var(--lg);display:flex;align-items:flex-start;gap:var(--md);margin-bottom:var(--xl);}
-.pki{width:38px;height:38px;border-radius:var(--rm);flex-shrink:0;background:var(--acc-d);border:1px solid var(--bdr-a);display:flex;align-items:center;justify-content:center;color:var(--acc);}
-.pki svg{width:16px;height:16px;}
-.pkb{flex:1;}
-.pkt{font-size:var(--f-body);color:var(--txt);margin-bottom:5px;}
-.pkd{font-size:var(--f-caption);line-height:1.7;color:var(--mut);margin-bottom:var(--md);}
-.pkbtn{font-size:var(--f-tiny);letter-spacing:.16em;text-transform:uppercase;background:none;border:1px solid var(--bdr-a);color:var(--acc);padding:10px 18px;border-radius:var(--r);cursor:pointer;transition:all var(--ease);min-height:40px;}
-.pkbtn:hover{background:var(--acc-d);}
-.eli{display:flex;align-items:center;gap:var(--md);background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:var(--md);margin-bottom:var(--sm);cursor:pointer;transition:border-color var(--ease);}
-.eli:hover{border-color:var(--bdr-a);}
-.elt{width:42px;height:42px;border-radius:var(--rm);background:var(--bg-e);border:1px solid var(--bdr);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--sub);}
-.elt svg{width:16px;height:16px;}
-.elb{flex:1;min-width:0;}
-.eln{font-size:var(--f-body);color:var(--txt);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.elm{font-size:var(--f-tiny);letter-spacing:.06em;color:var(--mut);}
-.tag-a{color:var(--acc);border:1px solid var(--bdr-a);background:var(--acc-d);border-radius:var(--r);padding:3px 8px;font-size:var(--f-tiny);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;}
-
-/* ════════════════════════════════════
-   MODALS
-════════════════════════════════════ */
-.mo{position:absolute;inset:0;z-index:700;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:none;align-items:flex-end;}
-.mo.open{display:flex;animation:fi .18s ease both;}
-.ms{width:100%;background:var(--bg-e);border-radius:var(--rl) var(--rl) 0 0;border-top:1px solid var(--bdr-a);padding:var(--lg) var(--md) calc(var(--xl) + var(--sb));animation:su var(--spring) both;}
-.mt{font-family:var(--fs);font-style:italic;font-size:var(--f-sub);color:var(--acc);margin-bottom:var(--lg);}
-.dtg{display:grid;grid-template-columns:1fr 1fr;gap:var(--sm);margin-bottom:var(--lg);}
-.dtf{display:flex;flex-direction:column;gap:var(--xs);}
-.dtf label{font-size:var(--f-tiny);letter-spacing:.16em;text-transform:uppercase;color:var(--mut);}
-.dtf input{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);padding:12px var(--md);color:var(--txt);font-family:var(--fm);font-size:var(--f-body);outline:none;width:100%;transition:border-color var(--ease);color-scheme:dark;}
-.dtf input:focus{border-color:var(--bdr-a);}
-.cap-g{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sm);margin-bottom:var(--lg);}
-.co{padding:13px var(--sm);background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rm);font-size:var(--f-caption);letter-spacing:.06em;color:var(--mut);text-align:center;cursor:pointer;transition:all var(--ease);min-height:44px;display:flex;align-items:center;justify-content:center;}
-.co:hover,.co.active{border-color:var(--bdr-a);color:var(--acc);background:var(--acc-d);}
-.btn-mo{width:100%;padding:15px;background:var(--acc);color:var(--bg);border:none;border-radius:var(--rm);font-size:var(--f-chip);letter-spacing:.18em;text-transform:uppercase;font-weight:500;cursor:pointer;transition:all var(--ease);min-height:50px;}
-.btn-mo:hover{background:#d4b87a;}
-.btn-mo-c{width:100%;padding:12px;background:none;border:1px solid var(--bdr);color:var(--mut);border-radius:var(--rm);margin-top:var(--sm);font-size:var(--f-caption);letter-spacing:.14em;text-transform:uppercase;cursor:pointer;transition:all var(--ease);min-height:46px;}
-.btn-mo-c:hover{border-color:var(--mut);color:var(--txt);}
-
-/* ════════════════════════════════════
-   LEAFLET OVERRIDES
-════════════════════════════════════ */
-.leaflet-container{background:#0a0a0a!important;font-family:var(--fm)!important;}
-/* Desktop: show zoom controls. Mobile: hidden (touch navigation) */
-.leaflet-control-zoom{border:1px solid var(--bdr)!important;border-radius:var(--rm)!important;overflow:hidden;box-shadow:none!important;display:none;}
-@media(min-width:768px){.leaflet-control-zoom{display:block!important;}}
-.leaflet-control-zoom a{background:rgba(10,10,10,.94)!important;color:var(--mut)!important;border-bottom-color:var(--bdr)!important;font-family:var(--fm)!important;backdrop-filter:blur(8px);width:32px!important;height:32px!important;line-height:32px!important;font-size:1.1rem!important;}
-.leaflet-control-zoom a:hover{background:var(--acc-d)!important;color:var(--acc)!important;}
-/* OSM attribution — visible and compliant */
-.leaflet-control-attribution{
-  background:rgba(10,10,10,.75)!important;
-  color:var(--sub)!important;
-  font-family:var(--fm)!important;
-  font-size:0.52rem!important;
-  letter-spacing:.04em!important;
-  backdrop-filter:blur(6px);
-}
-.leaflet-control-attribution a{color:var(--mut)!important;}
-.leaflet-popup-content-wrapper{background:var(--bg-e)!important;border:1px solid var(--bdr-a)!important;border-radius:var(--rm)!important;box-shadow:0 8px 32px rgba(0,0,0,.6)!important;color:var(--txt)!important;font-family:var(--fm)!important;padding:0!important;}
-.leaflet-popup-content{margin:0!important;padding:13px 15px!important;}
-.leaflet-popup-tip{background:var(--bg-e)!important;}
-.leaflet-popup-close-button{color:var(--mut)!important;top:8px!important;right:8px!important;font-size:16px!important;}
-
-/* Spinner */
-.spin{width:16px;height:16px;border:2px solid var(--bdr);border-top-color:var(--acc);border-radius:var(--rf);animation:ro .7s linear infinite;flex-shrink:0;}
+.tag--accent { color: var(--accent); border-color: var(--border-accent); background: var(--accent-dim); }
 
 /* Animations */
-@keyframes fi{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
-@keyframes su{from{transform:translateY(100%);opacity:0;}to{transform:translateY(0);opacity:1;}}
-@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 8px var(--red);}50%{opacity:.4;box-shadow:0 0 2px var(--red);}}
-@keyframes ro{to{transform:rotate(360deg);}}
+@keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideup { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--red); }
+  50% { opacity: 0.4; box-shadow: 0 0 2px var(--red); }
+}
+.animate-fadein  { animation: fadein 0.6s ease both; }
+.animate-slideup { animation: slideup var(--ease-spring) both; }
+
+/* ─── PHONE FRAME ─── */
+body { display: flex; align-items: center; justify-content: center; }
+
+.phone-stage {
+  position: relative;
+  width: 100%; max-width: 420px;
+  height: 100dvh;
+  max-height: 920px;
+  background: var(--bg);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+
+@media (min-width: 480px) {
+  body { background: #050505; }
+  .phone-stage {
+    border-radius: 36px;
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 30px 100px rgba(0,0,0,0.8), 0 0 0 8px #050505, 0 0 0 9px rgba(255,255,255,0.04);
+    margin: 20px;
+  }
+}
+
+/* ─── APP CHROME ─── */
+.app-header {
+  flex-shrink: 0;
+  padding: 20px var(--space-md) var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.4rem;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+.brand small {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.5rem;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+  display: block;
+  margin-top: 2px;
+}
+
+.handle-chip {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.6rem; letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--ease);
+}
+.handle-chip:hover { color: var(--accent); border-color: var(--border-accent); }
+.handle-chip__dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Screen container */
+.screen {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+}
+.screen::-webkit-scrollbar { width: 0; }
+
+/* Tab bar */
+.tabbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  padding: 8px 0 max(env(safe-area-inset-bottom, 8px), 8px);
+}
+.tab {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px;
+  padding: 8px;
+  background: none; border: none;
+  color: var(--subtle);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transition: color var(--ease);
+}
+.tab svg { width: 20px; height: 20px; }
+.tab.active { color: var(--accent); }
+.tab:hover { color: var(--text); }
+
+/* ─── HOME / BUNDLES ─── */
+.search-bar {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  flex: 1;
+}
+.search-bar input {
+  flex: 1; background: none; border: none; outline: none;
+  font-family: var(--font-mono); font-size: 0.75rem;
+  color: var(--text);
+}
+.search-bar input::placeholder { color: var(--subtle); letter-spacing: 0.05em; }
+
+.section-header {
+  padding: var(--space-lg) var(--space-md) var(--space-sm);
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+.section-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.event-list {
+  display: flex; flex-direction: column;
+  gap: var(--space-md);
+  padding: 0 var(--space-md) 100px;
+}
+
+.event-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all var(--ease);
+}
+.event-card:hover { border-color: var(--border-accent); }
+
+.event-card__media {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--bg-elevated);
+}
+.event-card__media::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 30%, rgba(0,0,0,0) 60%, rgba(10,10,10,0.85) 100%);
+}
+
+.event-card__overlay {
+  position: absolute; inset: 0;
+  padding: 12px;
+  display: flex; flex-direction: column; justify-content: space-between;
+  z-index: 1;
+}
+.event-card__overlay-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.event-card__overlay-bot { display: flex; justify-content: space-between; align-items: flex-end; }
+
+.crossed-paths {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(10,10,10,0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border-accent);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  color: var(--text);
+}
+.crossed-paths__count { color: var(--accent); font-weight: 500; }
+.crossed-paths__dots { display: flex; }
+.crossed-paths__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); opacity: 0.9;
+  margin-left: -2px;
+  border: 1px solid var(--bg);
+}
+
+.attendee-count {
+  background: rgba(10,10,10,0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.55rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.event-card__body {
+  padding: var(--space-md);
+}
+.event-card__title {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  line-height: 1.25;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.event-card__meta {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.event-card__meta-item { display: flex; align-items: center; gap: 5px; }
+.event-card__meta-item svg { width: 11px; height: 11px; opacity: 0.7; }
+
+/* Bundle header */
+.bundle-divider {
+  display: flex; align-items: center; gap: var(--space-md);
+  padding: var(--space-2xl) var(--space-md) var(--space-md);
+}
+.bundle-divider__line { flex: 1; height: 1px; background: var(--border); }
+.bundle-divider__text {
+  font-family: var(--font-serif); font-style: italic;
+  color: var(--accent); font-size: 0.85rem;
+  letter-spacing: 0.05em;
+}
+
+/* ─── FAB ─── */
+.fab {
+  position: fixed; bottom: 90px;
+  left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 22px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 100px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 8px 32px rgba(200, 169, 110, 0.25);
+  transition: all var(--ease);
+  z-index: 50;
+}
+.fab:hover { transform: translateX(-50%) scale(1.04); box-shadow: 0 12px 40px rgba(200, 169, 110, 0.35); }
+.fab:active { transform: translateX(-50%) scale(0.96); }
+.fab svg { width: 14px; height: 14px; }
+
+/* ─── MAP VIEW ─── */
+.map-screen { position: relative; height: 100%; }
+#map { width: 100%; height: 100%; background: var(--bg-elevated); }
+
+.leaflet-container { background: var(--bg-elevated) !important; font-family: var(--font-mono) !important; }
+.leaflet-control-attribution { background: rgba(10,10,10,0.7) !important; color: var(--muted) !important; font-size: 9px !important; }
+.leaflet-control-attribution a { color: var(--accent) !important; }
+.leaflet-control-zoom a { background: var(--surface) !important; color: var(--text) !important; border-color: var(--border) !important; }
+
+.map-marker {
+  width: 32px; height: 32px;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(200, 169, 110, 0.4);
+}
+.map-marker--single { width: 14px; height: 14px; }
+
+.map-filter-bar {
+  position: absolute; top: 16px; left: 16px; right: 16px;
+  display: flex; gap: 8px;
+  z-index: 500;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.map-filter-bar::-webkit-scrollbar { display: none; }
+.map-chip {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  background: rgba(10,10,10,0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all var(--ease);
+}
+.map-chip.active { color: var(--accent); border-color: var(--border-accent); background: rgba(200, 169, 110, 0.1); }
+
+.map-footer-sheet {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border-accent);
+  padding: var(--space-md) var(--space-md) calc(var(--space-md) + max(env(safe-area-inset-bottom, 0px), 0px));
+  z-index: 500;
+}
+.map-footer-sheet__count {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--accent);
+  text-align: center;
+}
+.map-footer-sheet__count .num {
+  font-family: var(--font-mono);
+  font-style: normal;
+  letter-spacing: 0.05em;
+}
+
+/* ─── CREATE EVENT MODAL ─── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: none;
+}
+.modal-overlay.visible { display: block; }
+
+.modal {
+  position: fixed;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%; max-width: 420px;
+  height: 100dvh; max-height: 920px;
+  background: var(--bg);
+  z-index: 1001;
+  display: none;
+  flex-direction: column;
+  animation: slideup var(--ease-spring);
+}
+@media (min-width: 480px) {
+  .modal { border-radius: 36px; max-height: 880px; }
+}
+.modal.visible { display: flex; }
+
+.modal-header {
+  padding: 20px var(--space-md) var(--space-md);
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-md);
+}
+.modal-body::-webkit-scrollbar { width: 0; }
+
+.modal-footer {
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
+}
+
+.form-section { margin-bottom: var(--space-xl); }
+.form-section__label {
+  display: block;
+  font-size: 0.55rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--space-sm);
+}
+
+.input, .textarea {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text);
+  transition: border-color var(--ease);
+}
+.input:focus, .textarea:focus { outline: none; border-color: var(--border-accent); }
+.input::placeholder, .textarea::placeholder { color: var(--subtle); }
+.textarea { resize: none; min-height: 90px; line-height: 1.4; }
+
+.input-group {
+  display: flex; gap: var(--space-sm);
+}
+
+.cover-picker {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all var(--ease);
+  position: relative;
+  overflow: hidden;
+}
+.cover-picker:hover { border-color: var(--border-accent); color: var(--accent); }
+.cover-picker svg { width: 22px; height: 22px; }
+.cover-picker__label { font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; }
+.cover-picker__hint { font-size: 0.55rem; letter-spacing: 0.1em; color: var(--subtle); }
+
+/* Mini map for create event */
+.mini-map-picker {
+  width: 100%;
+  height: 180px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+.mini-map-picker .leaflet-container { height: 100%; }
+
+.mini-map-overlay {
+  position: absolute;
+  bottom: 8px; left: 8px; right: 8px;
+  background: rgba(10,10,10,0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.65rem;
+  color: var(--text);
+  z-index: 500;
+  pointer-events: none;
+}
+
+/* Detail rows */
+.detail-list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.detail-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--ease);
+}
+.detail-row:last-child { border-bottom: none; }
+.detail-row:hover { background: var(--accent-dim); }
+.detail-row__left { display: flex; align-items: center; gap: var(--space-md); }
+.detail-row__icon {
+  width: 32px; height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted);
+}
+.detail-row__icon svg { width: 14px; height: 14px; }
+.detail-row__label {
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  color: var(--text);
+}
+.detail-row__value {
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+}
+.detail-row__chev { color: var(--subtle); }
+
+/* ─── ONBOARDING ─── */
+.onboard {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  z-index: 2000;
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: var(--space-2xl);
+  text-align: center;
+}
+.onboard.visible { display: flex; animation: fadein 0.6s ease both; }
+.onboard__brand {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 3rem;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.onboard__tagline {
+  font-size: 0.65rem;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--space-2xl);
+}
+.onboard__handle-display {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2rem;
+  color: var(--text);
+  margin: var(--space-md) 0;
+  letter-spacing: 0.03em;
+}
+.onboard__welcome {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.4rem;
+  color: var(--text);
+  margin-bottom: var(--space-md);
+}
+.onboard__sub {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.6;
+  max-width: 280px;
+  margin-bottom: var(--space-2xl);
+}
+.onboard__actions {
+  display: flex; flex-direction: column; gap: var(--space-sm);
+  width: 100%; max-width: 280px;
+}
+.onboard__reroll {
+  background: none; border: none;
+  color: var(--subtle);
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+.onboard__reroll:hover { color: var(--accent); }
+
+/* ─── EVENT DETAIL ─── */
+.detail-screen {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  z-index: 800;
+  display: none;
+  flex-direction: column;
+  animation: slideup var(--ease-spring);
+}
+.detail-screen.visible { display: flex; }
+
+.detail-hero {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+}
+.detail-hero::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 70%, var(--bg) 100%);
+}
+.detail-hero__close {
+  position: absolute; top: 16px; right: 16px;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: rgba(10,10,10,0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-md) 100px;
+  margin-top: -40px;
+  position: relative;
+  z-index: 2;
+}
+.detail-body::-webkit-scrollbar { width: 0; }
+
+.detail-title {
+  font-family: var(--font-serif);
+  font-size: 1.7rem;
+  line-height: 1.2;
+  color: var(--text);
+  margin-bottom: var(--space-md);
+}
+
+.detail-circle-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+.detail-circle-card__num {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.2rem;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.detail-circle-card__label {
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.detail-description {
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--text);
+  margin-bottom: var(--space-lg);
+}
+
+.detail-meta-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: var(--space-lg);
+}
+.detail-meta-grid__item {
+  background: var(--surface);
+  padding: var(--space-md);
+}
+.detail-meta-grid__label {
+  font-size: 0.5rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.detail-meta-grid__value {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.detail-actions {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  padding: var(--space-md);
+  background: linear-gradient(to top, var(--bg) 60%, transparent);
+  display: flex; gap: var(--space-sm);
+  z-index: 10;
+}
+@media (min-width: 480px) {
+  .detail-actions {
+    max-width: 420px;
+    margin: 0 auto;
+    position: absolute;
+  }
+}
+.btn--attend {
+  flex: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  min-height: 48px;
+  font-weight: 500;
+}
+.btn--attend:hover { background: #d4b878; }
+.btn--share {
+  background: var(--surface);
+  min-height: 48px;
+  padding: 0 18px;
+}
+
+/* Helper icons inline */
+.icon { width: 16px; height: 16px; flex-shrink: 0; }
+
+/* Recovery prompt */
+.recovery-prompt {
+  position: fixed;
+  top: 16px; left: 16px; right: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  z-index: 999;
+  display: none;
+  animation: fadein 0.6s ease both;
+}
+.recovery-prompt.visible { display: block; }
+.recovery-prompt__title {
+  font-family: var(--font-serif); font-style: italic;
+  font-size: 0.95rem; color: var(--text);
+  margin-bottom: 4px;
+}
+.recovery-prompt__sub {
+  font-size: 0.7rem; color: var(--muted);
+  margin-bottom: var(--space-md);
+  line-height: 1.5;
+}
+.recovery-prompt__actions { display: flex; gap: 8px; }
+
 </style>
 </head>
-<body>
-<div id="app">
+<body class="grain">
 
-<!-- ══ DESKTOP SIDEBAR (hidden on mobile) ══ -->
-<nav id="side-nav">
-  <div class="side-logo">bich service</div>
-  <button class="snb active" id="snb-ex" onclick="switchScreen('explore')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-    Explore
-  </button>
-  <button class="snb" id="snb-pr" onclick="switchScreen('profile')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-    Profile
-  </button>
-  <button class="snb-create" onclick="switchScreen('create')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    Create event
-  </button>
-  <div class="side-user">
-    <div class="side-av" id="side-av">—</div>
-    <div class="side-uname" id="side-uname">—</div>
-  </div>
-</nav>
+<div class="phone-stage">
 
-<!-- ══════════════════════════════════════
-     SCREEN: EXPLORE
-══════════════════════════════════════ -->
-<div id="s-explore" class="screen active">
-  <div class="topbar">
-    <div class="spill">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input id="si" type="text" placeholder="Search events, venues…" autocomplete="off"/>
+  <!-- HEADER -->
+  <header class="app-header">
+    <div class="brand">
+      bich
+      <small>· service ·</small>
     </div>
-    <button class="tbb" id="dbtn" aria-label="Filter by date">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-    </button>
-    <button class="tbb" id="lbtn" aria-label="Use my location">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-    </button>
-  </div>
+    <div class="handle-chip" id="handleChip" title="Your handle">
+      <span class="handle-chip__dot"></span>
+      <span id="handleText">slide tem</span>
+    </div>
+  </header>
 
-  <!-- Date filter dropdown -->
-  <div class="dd" id="ddd">
-    <div class="ddi active" data-v="any">Any time <span>✓</span></div>
-    <div class="ddi" data-v="today">Today</div>
-    <div class="ddi" data-v="tomorrow">Tomorrow</div>
-    <div class="ddi" data-v="week">This week</div>
-    <div class="ddi" data-v="weekend">This weekend</div>
-  </div>
-
-  <!-- OSM Map -->
-  <div id="map"></div>
-
-  <!-- Category chips -->
-  <div class="cats">
-    <div class="cat active" data-c="all">All</div>
-    <div class="cat" data-c="tonight">Tonight</div>
-    <div class="cat" data-c="music">Music</div>
-    <div class="cat" data-c="arts">Arts</div>
-    <div class="cat" data-c="food">Food &amp; Drink</div>
-    <div class="cat" data-c="sport">Sport</div>
-    <div class="cat" data-c="wellness">Wellness</div>
-    <div class="cat" data-c="community">Community</div>
-  </div>
-
-  <!-- Bundles sheet -->
-  <div class="bsh s-p" id="bsh">
-    <div class="bsh-h" id="bsh-h">
-      <div class="bsh-hd"></div>
-      <div class="bsh-hr">
-        <span class="bsh-t">events near you</span>
-        <span class="bsh-c" id="ecnt">— events</span>
+  <!-- HOME SCREEN -->
+  <main class="screen" id="screen-home">
+    <div style="padding: var(--space-md);">
+      <div class="search-bar">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color: var(--muted);">
+          <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+        </svg>
+        <input type="text" placeholder="search events, venues, vibes" />
       </div>
     </div>
-    <div class="bsh-s">
-      <div class="bndl"><div class="bndl-l">familiar faces going</div><div class="bndl-r" id="r-soc"></div></div>
-      <div class="bndl"><div class="bndl-l">tonight</div><div class="bndl-r" id="r-ton"></div></div>
-      <div class="bndl"><div class="bndl-l">trending this week</div><div class="bndl-r" id="r-tre"></div></div>
-    </div>
-  </div>
-</div>
 
-<!-- ══════════════════════════════════════
-     EVENT DETAIL OVERLAY
-══════════════════════════════════════ -->
-<div id="ed">
-  <!-- Mobile: pull-down handle -->
-  <div class="ed-handle-bar" onclick="closeDetail()">
-    <div class="ed-handle"></div>
-  </div>
-  <!-- Desktop: back button -->
-  <button class="ed-bk-desktop" onclick="closeDetail()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-    Back
-  </button>
-  <div class="ed-cov">
-    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".7"><path d="M9 19V6l12-3v13M9 19c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-3c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2z"/></svg>
-  </div>
-  <div class="ed-sc">
-    <div class="ed-ti" id="ed-ti">—</div>
-    <div class="ed-vn">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-      <span id="ed-vn">—</span>
-    </div>
-    <div class="ed-mr" id="ed-mr"></div>
-    <p class="ed-de" id="ed-de"></p>
-    <div class="ed-sb" id="ed-sb" style="display:none">
-      <div class="ed-sn" id="ed-sn">0</div>
-      <div class="ed-st">people you've crossed<br>paths with are going</div>
-    </div>
-    <div id="ed-map" style="display:none"></div>
-    <div class="ed-ac">
-      <button class="ed-rv" id="ed-rv">RSVP — I'm going</button>
-      <button class="ed-sh" id="ed-sh" aria-label="Share event">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════
-     SCREEN: CREATE
-══════════════════════════════════════ -->
-<div id="s-create" class="screen">
-  <div class="cr-hd">
-    <!-- Mobile: chevron-down = "dismiss / go back" -->
-    <button class="cr-close" onclick="goHome()" aria-label="Close">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-    </button>
-    <span class="cr-tt">new event</span>
-  </div>
-
-  <div class="cov-z">
-    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-    <span>add cover photo</span>
-    <div class="cov-bb">
-      <button class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Cover</button>
-      <button class="cb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Gallery</button>
-    </div>
-  </div>
-
-  <div class="cf">
-    <div class="fg">
-      <label class="fl">Event title</label>
-      <input id="ev-ti" type="text" class="fi" placeholder="Give your event a name…"/>
-    </div>
-    <div class="fg">
-      <label class="fl">Description <span>optional</span></label>
-      <textarea id="ev-de" class="fi" placeholder="What happens, what to bring, who it's for…"></textarea>
+    <!-- Bundle: For you -->
+    <div class="bundle-divider">
+      <div class="bundle-divider__line"></div>
+      <div class="bundle-divider__text">for you</div>
+      <div class="bundle-divider__line"></div>
     </div>
 
-    <!-- Venue search -->
-    <div class="fg">
-      <label class="fl">Location &amp; venue</label>
-      <div class="vp" id="vp">
-        <div class="vsr">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input id="vi" class="vi" type="text" placeholder="Search venue or address…" autocomplete="off"/>
-          <div class="spin" id="vspin" style="display:none"></div>
-        </div>
-        <div id="vres" class="vres"><div class="vload">Type to search · Nominatim / OSM</div></div>
-        <div class="vnote">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          Powered by Nominatim (OpenStreetMap) — no API key required.
-          <span style="color:var(--acc);margin-left:3px">Upgrade to Foursquare/Geoapify planned June 2026.</span>
-        </div>
+    <div class="event-list" id="eventListPersonal"></div>
+
+    <!-- Bundle: Nearby tonight -->
+    <div class="bundle-divider">
+      <div class="bundle-divider__line"></div>
+      <div class="bundle-divider__text">nearby · tonight</div>
+      <div class="bundle-divider__line"></div>
+    </div>
+
+    <div class="event-list" id="eventListNearby"></div>
+
+    <!-- Bundle: This weekend -->
+    <div class="bundle-divider">
+      <div class="bundle-divider__line"></div>
+      <div class="bundle-divider__text">this weekend</div>
+      <div class="bundle-divider__line"></div>
+    </div>
+
+    <div class="event-list" id="eventListWeekend"></div>
+  </main>
+
+  <!-- MAP SCREEN -->
+  <main class="screen map-screen" id="screen-map" style="display:none;">
+    <div class="map-filter-bar">
+      <button class="map-chip active" data-filter="any">any day</button>
+      <button class="map-chip" data-filter="today">today</button>
+      <button class="map-chip" data-filter="week">this week</button>
+      <button class="map-chip" data-filter="next">next week</button>
+    </div>
+    <div id="map"></div>
+    <div class="map-footer-sheet">
+      <div class="map-footer-sheet__count">
+        <span class="num">7</span> events in view
       </div>
-      <div id="vs" style="display:none">
-        <div class="dc">
-          <div class="dr" onclick="resetVenue()">
-            <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:var(--f-body);color:var(--acc)" id="svn">—</div>
-              <div style="font-size:var(--f-tiny);color:var(--mut);margin-top:3px" id="sva">—</div>
+    </div>
+  </main>
+
+  <!-- FAB -->
+  <button class="fab" id="fabCreate">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 5v14M5 12h14"/>
+    </svg>
+    new event
+  </button>
+
+  <!-- TAB BAR -->
+  <nav class="tabbar">
+    <button class="tab active" data-screen="home">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/>
+      </svg>
+      home
+    </button>
+    <button class="tab" data-screen="map">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>
+      </svg>
+      map
+    </button>
+    <button class="tab" data-screen="profile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>
+      </svg>
+      me
+    </button>
+  </nav>
+
+</div>
+
+<!-- CREATE EVENT MODAL -->
+<div class="modal-overlay" id="modalOverlay"></div>
+<div class="modal" id="createModal">
+  <header class="modal-header">
+    <div class="modal-title">new event</div>
+    <button class="btn-icon" id="closeModal">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="20" height="20">
+        <path d="M18 6 6 18M6 6l12 12"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="modal-body">
+
+    <!-- Cover -->
+    <div class="form-section">
+      <label class="form-section__label">cover</label>
+      <div class="cover-picker" id="coverPicker">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+        </svg>
+        <span class="cover-picker__label">add cover image</span>
+        <span class="cover-picker__hint">optional · tap to upload</span>
+      </div>
+    </div>
+
+    <!-- Title -->
+    <div class="form-section">
+      <label class="form-section__label">title</label>
+      <input type="text" class="input" placeholder="what's happening?" id="inputTitle" />
+    </div>
+
+    <!-- Description -->
+    <div class="form-section">
+      <label class="form-section__label">description · optional</label>
+      <textarea class="textarea" placeholder="what will you and the people do? anything to know before joining?" id="inputDesc"></textarea>
+    </div>
+
+    <!-- Location -->
+    <div class="form-section">
+      <label class="form-section__label">where</label>
+      <input type="text" class="input" placeholder="venue name" id="inputVenue" style="margin-bottom: 8px;" />
+      <div class="mini-map-picker">
+        <div id="miniMap"></div>
+        <div class="mini-map-overlay" id="coordsLabel">tap on map to set location</div>
+      </div>
+    </div>
+
+    <!-- Date & Time -->
+    <div class="form-section">
+      <label class="form-section__label">when</label>
+      <div class="input-group">
+        <input type="date" class="input" id="inputDate" />
+        <input type="time" class="input" id="inputTime" />
+      </div>
+    </div>
+
+    <!-- Price & Capacity -->
+    <div class="form-section">
+      <label class="form-section__label">details</label>
+      <div class="detail-list">
+        <div class="detail-row">
+          <div class="detail-row__left">
+            <div class="detail-row__icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 10h4.5a2 2 0 0 1 0 4H9"/>
+              </svg>
             </div>
-            <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <span class="detail-row__label">price</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <input type="number" class="input" placeholder="0" id="inputPrice" style="width: 80px; text-align:right; padding: 6px 10px;" />
+            <span class="detail-row__value">EUR</span>
+          </div>
+        </div>
+        <div class="detail-row">
+          <div class="detail-row__left">
+            <div class="detail-row__icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="9" cy="8" r="3"/><path d="M3 21a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M14 17a5 5 0 0 1 7 4"/>
+              </svg>
+            </div>
+            <span class="detail-row__label">capacity</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <input type="number" class="input" placeholder="any" id="inputCapacity" style="width: 80px; text-align:right; padding: 6px 10px;" />
+            <span class="detail-row__value">max</span>
+          </div>
+        </div>
+        <div class="detail-row">
+          <div class="detail-row__left">
+            <div class="detail-row__icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/>
+                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/>
+              </svg>
+            </div>
+            <span class="detail-row__label">share link</span>
+          </div>
+          <div class="detail-row__value">bich.app/e/xxxx</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer class="modal-footer">
+    <button class="btn btn--primary btn--block" id="publishBtn" style="min-height: 50px;">publish event</button>
+  </footer>
+</div>
+
+<!-- EVENT DETAIL SCREEN -->
+<div class="detail-screen" id="detailScreen">
+  <div class="detail-hero" id="detailHero">
+    <button class="detail-hero__close" id="closeDetail">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18">
+        <path d="M18 6 6 18M6 6l12 12"/>
+      </svg>
+    </button>
+  </div>
+  <div class="detail-body">
+    <h1 class="detail-title" id="detailTitle"></h1>
+
+    <div class="detail-circle-card" id="detailCircle">
+      <div class="detail-circle-card__num" id="detailCircleNum">—</div>
+      <div class="detail-circle-card__label">people you've crossed paths with are going</div>
+    </div>
+
+    <p class="detail-description" id="detailDesc"></p>
+
+    <div class="detail-meta-grid">
+      <div class="detail-meta-grid__item">
+        <div class="detail-meta-grid__label">when</div>
+        <div class="detail-meta-grid__value" id="detailWhen"></div>
+      </div>
+      <div class="detail-meta-grid__item">
+        <div class="detail-meta-grid__label">where</div>
+        <div class="detail-meta-grid__value" id="detailWhere"></div>
+      </div>
+      <div class="detail-meta-grid__item">
+        <div class="detail-meta-grid__label">price</div>
+        <div class="detail-meta-grid__value" id="detailPrice"></div>
+      </div>
+      <div class="detail-meta-grid__item">
+        <div class="detail-meta-grid__label">going</div>
+        <div class="detail-meta-grid__value" id="detailGoing"></div>
+      </div>
+    </div>
+
+    <div style="margin-top: 24px;">
+      <div class="text-label" style="margin-bottom: 8px;">hosted by</div>
+      <div style="font-family: var(--font-serif); font-style: italic; font-size: 1.1rem; color: var(--accent);" id="detailHost"></div>
+    </div>
+  </div>
+  <div class="detail-actions">
+    <button class="btn btn--attend" id="attendBtn">i'm going</button>
+    <button class="btn btn--share">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
+        <circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/>
+        <path d="m8.5 10.5 7-3M8.5 13.5l7 3"/>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<!-- ONBOARDING -->
+<div class="onboard" id="onboard">
+  <div class="onboard__brand">bich</div>
+  <div class="onboard__tagline">events that find their people</div>
+
+  <div class="onboard__welcome">you're</div>
+  <div class="onboard__handle-display" id="onboardHandle">slide tem</div>
+  <button class="onboard__reroll" id="rerollBtn">↺ try another name</button>
+
+  <p class="onboard__sub" style="margin-top: var(--space-2xl);">
+    no accounts, no email, no tracking.<br/>
+    save a passkey so your history follows you to other devices — later, whenever you want.
+  </p>
+
+  <div class="onboard__actions">
+    <button class="btn btn--primary btn--block" id="onboardContinue">start exploring</button>
+  </div>
+</div>
+
+<!-- RECOVERY PROMPT (would appear later in real flow) -->
+<div class="recovery-prompt" id="recoveryPrompt">
+  <div class="recovery-prompt__title">save a passkey?</div>
+  <div class="recovery-prompt__sub">you've attended a few events now. add a passkey so your history follows you to other devices.</div>
+  <div class="recovery-prompt__actions">
+    <button class="btn btn--primary" id="acceptPasskey">save passkey</button>
+    <button class="btn" id="dismissPasskey">maybe later</button>
+  </div>
+</div>
+
+<script>
+/* ─── WORDLIST FOR HANDLE GENERATION ─── */
+const WORDS_A = ['slide','oak','wisp','bram','linen','clove','flint','moss','rye','sage','vale','dusk','reed','dune','ivy','silk','wren','plume','tide','cove','elm','fawn','glen','heath','jade','lark','marsh','nook','onyx','pine'];
+const WORDS_B = ['tem','fern','toad','lin','star','blue','hum','low','dim','spar','tune','wave','rest','glow','flow','cast','tide','hush','arc','vow','peak','calm','wild','soft','near','far','quill','myrrh','seam','flax'];
+
+function genHandle() {
+  return WORDS_A[Math.floor(Math.random()*WORDS_A.length)] + ' ' +
+         WORDS_B[Math.floor(Math.random()*WORDS_B.length)];
+}
+
+/* ─── MOCK DATA ─── */
+const HOSTS = ['oak fern','wisp toad','linen hum','clove low','sage glow','marsh wild'];
+
+const EVENTS = [
+  {
+    id: 'e1',
+    title: 'Tea ceremony at dawn',
+    desc: 'A slow morning of gongfu cha. Bring nothing but yourself and an empty stomach. We brew, we sit, we leave when the light is high.',
+    cover: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=800&q=80',
+    venue: 'Casa del Té',
+    address: 'Carrer Major 14, Sóller',
+    lat: 39.766, lng: 2.715,
+    when: 'Sat · Nov 22 · 07:30',
+    price: 15,
+    going: 9,
+    crossed: 5,
+    host: 'oak fern',
+    bundle: 'personal'
+  },
+  {
+    id: 'e2',
+    title: 'Sunset cliff yoga',
+    desc: 'Vinyasa above the cliffs of Banyalbufar. Mats provided. Stay for the silence after.',
+    cover: 'https://images.unsplash.com/photo-1545389336-cf090694435e?w=800&q=80',
+    venue: 'Mirador de ses Ànimes',
+    address: 'Banyalbufar',
+    lat: 39.703, lng: 2.514,
+    when: 'Tonight · 18:15',
+    price: 0,
+    going: 22,
+    crossed: 8,
+    host: 'sage glow',
+    bundle: 'nearby'
+  },
+  {
+    id: 'e3',
+    title: 'Night swim & bonfire',
+    desc: 'Cove. Fire. Quiet conversation. Bring a towel and one thing to share — a bottle, a story, a song.',
+    cover: 'https://images.unsplash.com/photo-1517462964-21fdcec3f25b?w=800&q=80',
+    venue: 'Cala Deià',
+    address: 'Deià, Mallorca',
+    lat: 39.751, lng: 2.652,
+    when: 'Tonight · 22:00',
+    price: 0,
+    going: 14,
+    crossed: 3,
+    host: 'wisp toad',
+    bundle: 'nearby'
+  },
+  {
+    id: 'e4',
+    title: 'Vinyl listening · ambient sets',
+    desc: 'Two records, beginning to end, in near-dark. No phones, no talking. Tea served between sides.',
+    cover: 'https://images.unsplash.com/photo-1593697821252-0c9137d9fc45?w=800&q=80',
+    venue: 'Estudio Bich',
+    address: 'Palma · Santa Catalina',
+    lat: 39.572, lng: 2.633,
+    when: 'Sun · Nov 23 · 20:00',
+    price: 10,
+    going: 18,
+    crossed: 11,
+    host: 'linen hum',
+    bundle: 'weekend'
+  },
+  {
+    id: 'e5',
+    title: 'Slow run + breakfast',
+    desc: '8km along the bay at conversation pace. Coffee and tostada after. Beginners welcome.',
+    cover: 'https://images.unsplash.com/photo-1552674605-db6ffd4facb5?w=800&q=80',
+    venue: 'Parc de la Mar',
+    address: 'Palma',
+    lat: 39.566, lng: 2.652,
+    when: 'Sun · 08:00',
+    price: 0,
+    going: 31,
+    crossed: 4,
+    host: 'clove low',
+    bundle: 'weekend'
+  },
+  {
+    id: 'e6',
+    title: 'Kitchen experiments · fermentation',
+    desc: 'We open last month\'s jars, taste, and start new ones. Salt, time, and a few opinions.',
+    cover: 'https://images.unsplash.com/photo-1532634922-8fe0b757fb13?w=800&q=80',
+    venue: 'Mercat de l\'Olivar',
+    address: 'Palma',
+    lat: 39.574, lng: 2.654,
+    when: 'Sat · 11:00',
+    price: 20,
+    going: 12,
+    crossed: 6,
+    host: 'marsh wild',
+    bundle: 'personal'
+  },
+  {
+    id: 'e7',
+    title: 'Bali — full moon walk',
+    desc: 'Slow walk through the rice fields under the November full moon. No phones, no music. Bring a light if you want one.',
+    cover: 'https://images.unsplash.com/photo-1537956965359-7573183d1f57?w=800&q=80',
+    venue: 'Tegallalang',
+    address: 'Ubud · Bali',
+    lat: -8.430, lng: 115.276,
+    when: 'Wed · 19:30',
+    price: 5,
+    going: 27,
+    crossed: 0,
+    host: 'dune calm',
+    bundle: 'weekend'
+  }
+];
+
+/* ─── ICONS (inline) ─── */
+const icon = {
+  pin: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21s-7-7.5-7-12a7 7 0 0 1 14 0c0 4.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>',
+  clock: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  euro: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16 7a6 6 0 1 0 0 10M4 10h9M4 14h9"/></svg>'
+};
+
+/* ─── RENDER EVENT CARDS ─── */
+function renderEventCard(e) {
+  const crossed = e.crossed >= 3 ? `
+    <div class="crossed-paths">
+      <div class="crossed-paths__dots">
+        ${Array.from({length: Math.min(3, e.crossed)}).map(()=>'<span class="crossed-paths__dot"></span>').join('')}
+      </div>
+      <span><span class="crossed-paths__count">${e.crossed}</span> crossed paths</span>
+    </div>` : '';
+
+  return `
+    <article class="event-card" data-event-id="${e.id}">
+      <div class="event-card__media" style="background-image:url('${e.cover}')">
+        <div class="event-card__overlay">
+          <div class="event-card__overlay-top">
+            ${crossed}
+            <div class="attendee-count">+${e.going} going</div>
           </div>
         </div>
       </div>
-    </div>
-
-    <!-- Details -->
-    <div class="fg">
-      <label class="fl">Details</label>
-      <div class="dc">
-        <div class="dr" onclick="openMo('mo-dt')">
-          <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          <span class="dl">Date &amp; Time</span>
-          <span class="dv"><span class="dch" id="ch-d">Set date</span><span class="dch" id="ch-t">Set time</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
-        </div>
-        <div class="dr" onclick="openMo('mo-cap')">
-          <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          <span class="dl">Capacity</span>
-          <span class="dv"><span class="dch" id="ch-cap">Any size</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
-        </div>
-        <div class="dr" onclick="openMo('mo-cat')">
-          <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-          <span class="dl">Category</span>
-          <span class="dv"><span class="dch" id="ch-cat">Choose</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
+      <div class="event-card__body">
+        <h3 class="event-card__title">${e.title}</h3>
+        <div class="event-card__meta">
+          <span class="event-card__meta-item">${icon.pin} ${e.venue}</span>
+          <span class="event-card__meta-item">${icon.clock} ${e.when}</span>
+          ${e.price > 0 ? `<span class="event-card__meta-item">${icon.euro} €${e.price}</span>` : '<span class="event-card__meta-item tag--accent" style="color:var(--accent);">FREE</span>'}
         </div>
       </div>
-    </div>
-
-    <!-- Price -->
-    <div class="fg">
-      <label class="fl">Admission <span>leave 0 for free</span></label>
-      <div class="pr">
-        <select class="fi cur" id="ev-cur"><option>EUR</option><option>GBP</option><option>USD</option><option>IDR</option><option>THB</option><option>AUD</option></select>
-        <input id="ev-pr" type="number" min="0" step="any" class="fi" placeholder="0" style="flex:1"/>
-      </div>
-      <div class="ph">Price is shown on the event page. Payment collected externally — cash or link.</div>
-    </div>
-
-    <!-- Share link -->
-    <div class="fg">
-      <label class="fl">Share link</label>
-      <div class="sb-row">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--mut);flex-shrink:0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-        <span class="sl" id="slt">bich.app/e/—</span>
-        <button class="sc2" id="scb" onclick="copyLink()">copy</button>
-      </div>
-    </div>
-
-    <button class="pub" onclick="publishEvent()">Publish event</button>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════
-     SCREEN: PROFILE
-══════════════════════════════════════ -->
-<div id="s-profile" class="screen">
-  <div class="pt">
-    <div class="pav" id="pav">—</div>
-    <div class="pn" id="pn">—</div>
-    <div class="ps">member since <span id="psi">—</span></div>
-  </div>
-  <div class="sg">
-    <div class="sc3"><span class="sn" id="st-at">0</span><span class="sl2">attended</span></div>
-    <div class="sc3"><span class="sn" id="st-cr">0</span><span class="sl2">crossings</span></div>
-    <div class="sc3"><span class="sn" id="st-ev">0</span><span class="sl2">created</span></div>
-  </div>
-  <div class="sh2">identity &amp; access</div>
-  <div class="pkc">
-    <div class="pki"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div>
-    <div class="pkb">
-      <div class="pkt">Keep your history safe</div>
-      <div class="pkd">We don't collect personal information. Your username is randomly generated — save a passkey to access your history across devices and browsers.</div>
-      <button class="pkbtn">Create passkey</button>
-    </div>
-  </div>
-  <div class="sh2">your events</div>
-  <div id="mel">
-    <div style="padding:var(--lg);text-align:center;font-size:var(--f-caption);color:var(--sub);">No events yet. Create your first one.</div>
-  </div>
-</div>
-
-<!-- ══ MOBILE BOTTOM NAV (always visible on mobile) ══ -->
-<div id="bot-nav">
-  <button class="nb active" id="nb-ex" onclick="switchScreen('explore')" aria-label="Explore">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-    <span>Explore</span>
-  </button>
-  <div class="nc-wrap">
-    <button class="nc" onclick="switchScreen('create')" aria-label="Create event">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
-    <span>Create</span>
-  </div>
-  <button class="nb" id="nb-pr" onclick="switchScreen('profile')" aria-label="Profile">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-    <span>Profile</span>
-  </button>
-</div>
-
-<!-- ══ MODALS ══ -->
-<div class="mo" id="mo-dt" onclick="closeMoOut(event,'mo-dt')">
-  <div class="ms" onclick="event.stopPropagation()">
-    <div class="mt">Date &amp; Time</div>
-    <div class="dtg">
-      <div class="dtf"><label>Start date</label><input type="date" id="i-ds"/></div>
-      <div class="dtf"><label>End date <span style="color:var(--sub)">opt.</span></label><input type="date" id="i-de"/></div>
-      <div class="dtf"><label>Start time</label><input type="time" id="i-ts"/></div>
-      <div class="dtf"><label>End time <span style="color:var(--sub)">opt.</span></label><input type="time" id="i-te"/></div>
-    </div>
-    <button class="btn-mo" onclick="confirmDt()">Confirm</button>
-    <button class="btn-mo-c" onclick="closeMo('mo-dt')">Cancel</button>
-  </div>
-</div>
-
-<div class="mo" id="mo-cap" onclick="closeMoOut(event,'mo-cap')">
-  <div class="ms" onclick="event.stopPropagation()">
-    <div class="mt">Group capacity</div>
-    <div class="cap-g">
-      <div class="co active" data-cap="any">Any size</div>
-      <div class="co" data-cap="10">Up to 10</div>
-      <div class="co" data-cap="25">Up to 25</div>
-      <div class="co" data-cap="50">Up to 50</div>
-      <div class="co" data-cap="100">Up to 100</div>
-      <div class="co" data-cap="500+">500+</div>
-    </div>
-    <button class="btn-mo" onclick="confirmCap()">Confirm</button>
-    <button class="btn-mo-c" onclick="closeMo('mo-cap')">Cancel</button>
-  </div>
-</div>
-
-<div class="mo" id="mo-cat" onclick="closeMoOut(event,'mo-cat')">
-  <div class="ms" onclick="event.stopPropagation()">
-    <div class="mt">Category</div>
-    <div class="cap-g" style="grid-template-columns:repeat(2,1fr)">
-      <div class="co" data-cat="Music">Music</div>
-      <div class="co" data-cat="Arts">Arts</div>
-      <div class="co" data-cat="Food &amp; Drink">Food &amp; Drink</div>
-      <div class="co" data-cat="Sport">Sport</div>
-      <div class="co" data-cat="Wellness">Wellness</div>
-      <div class="co" data-cat="Community">Community</div>
-      <div class="co" data-cat="Networking">Networking</div>
-      <div class="co" data-cat="Other">Other</div>
-    </div>
-    <button class="btn-mo" onclick="confirmCat()">Confirm</button>
-    <button class="btn-mo-c" onclick="closeMo('mo-cat')">Cancel</button>
-  </div>
-</div>
-
-</div><!-- #app -->
-<script>
-/* ════════════════════════════════════════════════════
-   BICH SERVICE — APP LOGIC
-   ─────────────────────────────────────────────────
-   Map:       Leaflet + OSM tiles (openstreetmap.org)
-              No API key required.
-              © OpenStreetMap contributors (ODbL)
-              ⚠ OSM tile policy: add attribution (done),
-                do not use for heavy production traffic.
-                Upgrade tiles to Maptiler or Stadia Maps
-                before public launch.
-
-   Geocoding: Nominatim (nominatim.openstreetmap.org)
-              No API key required.
-              Rate limit: 1 request / second max.
-              Debounced 1000ms to comply.
-              User-Agent header set as required.
-              ⚠ Upgrade to Geoapify or Foursquare
-                Places API after June 1, 2026.
-
-   Identity:  Anonymous username in localStorage.
-              Passkey / WebAuthn: planned next phase.
-════════════════════════════════════════════════════ */
-
-/* ── WORDLIST ── */
-const W=['bark','beam','bell','bird','bold','bond','brew','calm','cane','cape','card','cave','clay','coal','coin','cove','crew','crop','curl','dawn','deal','deck','deer','dew','disk','dock','dome','dove','drum','dune','dusk','earl','edge','fawn','fern','film','fire','firm','flag','flat','flex','flip','flow','foam','fold','font','ford','fork','form','fort','fowl','free','fuel','gale','gate','gaze','gear','gild','glow','gold','gong','gown','gram','gray','grid','grim','grip','grit','grow','gulf','gust','hale','harp','haze','heal','heap','helm','herb','herd','hide','hill','hive','hold','holm','hone','horn','hull','hush','idle','iris','isle','jade','jest','keen','kelp','kern','kite','knot','lace','lake','lamp','lane','lark','lath','lawn','leaf','lean','leap','lend','lens','lift','lime','lint','loft','lone','loom','lore','lull','lure','lynx','mace','malt','mare','mark','mast','mate','maze','mead','mesa','mesh','mild','mill','mist','moan','moat','mold','mole','moor','moss','mote','mull','musk','nail','nave','nest','newt','node','nook','norm','note','oath','once','oral','pact','pane','park','pass','past','path','peak','peat','peel','pine','pipe','pith','plum','pole','pond','pool','port','pose','pour','pump','quay','rack','raft','raid','rail','ramp','rank','reap','reef','reed','reel','rest','rice','rind','ring','rink','rise','road','roam','roar','robe','rock','rope','rose','ruin','rule','rune','rush','rust','sage','sail','salt','sand','sash','seal','seam','seed','self','shed','ship','shoe','silk','silt','sing','sire','site','size','skin','skip','slab','slew','slip','slug','snap','snow','soak','soil','sole','song','sort','soul','span','spar','spin','spot','stem','step','stir','stop','stub','suit','swan','sway','tack','tame','tang','tape','tarn','teal','term','thaw','tide','till','tilt','tine','toll','tome','tone','tool','tore','toss','tour','town','trim','trip','tuft','tune','tusk','vale','vane','vibe','vine','void','wade','wake','wall','wand','ward','warm','warp','weft','well','wick','wild','wilt','wind','wine','wing','wire','wish','wisp','wold','wolf','worn','wrap','wren','yarn','yawn','yell','yoke','zeal','zinc','zone','zoom'];
-function gen(){return W[Math.floor(Math.random()*W.length)]+' '+W[Math.floor(Math.random()*W.length)];}
-function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}
-
-/* ── USER IDENTITY ── */
-let U=JSON.parse(localStorage.getItem('bich_u')||'null');
-if(!U){U={username:gen(),since:new Date().toLocaleDateString('en-GB',{month:'short',year:'numeric'}),attended:0,crossings:47,created:0};localStorage.setItem('bich_u',JSON.stringify(U));}
-function saveU(){localStorage.setItem('bich_u',JSON.stringify(U));}
-
-function renderProfile(){
-  const ini=U.username.split(' ').map(w=>w[0]).join('');
-  document.getElementById('pav').textContent=ini;
-  document.getElementById('pn').textContent=U.username;
-  document.getElementById('psi').textContent=U.since;
-  document.getElementById('st-at').textContent=U.attended;
-  document.getElementById('st-cr').textContent=U.crossings;
-  document.getElementById('st-ev').textContent=U.created;
-  // Desktop sidebar
-  const sa=document.getElementById('side-av');
-  const su=document.getElementById('side-uname');
-  if(sa){sa.textContent=ini;}
-  if(su){su.textContent=U.username;}
-}
-renderProfile();
-
-/* ── SCREEN SWITCHING ── */
-const isDesktop=()=>window.innerWidth>=768;
-
-function switchScreen(n){
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  // mobile nav
-  document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
-  // desktop nav
-  document.querySelectorAll('.snb').forEach(b=>b.classList.remove('active'));
-
-  document.getElementById('s-'+n).classList.add('active');
-
-  if(n==='explore'){
-    document.getElementById('nb-ex')?.classList.add('active');
-    document.getElementById('snb-ex')?.classList.add('active');
-    setTimeout(()=>{if(map)map.invalidateSize();else initMap();},60);
-  }
-  if(n==='profile'){
-    document.getElementById('nb-pr')?.classList.add('active');
-    document.getElementById('snb-pr')?.classList.add('active');
-    renderProfile();
-  }
-  if(n==='create') updateLink();
+    </article>`;
 }
 
-function goHome(){closeDetail();switchScreen('explore');}
+function renderBundles() {
+  document.getElementById('eventListPersonal').innerHTML =
+    EVENTS.filter(e => e.bundle === 'personal').map(renderEventCard).join('');
+  document.getElementById('eventListNearby').innerHTML =
+    EVENTS.filter(e => e.bundle === 'nearby').map(renderEventCard).join('');
+  document.getElementById('eventListWeekend').innerHTML =
+    EVENTS.filter(e => e.bundle === 'weekend').map(renderEventCard).join('');
 
-/* ── MODALS ── */
-function openMo(id){document.getElementById(id).classList.add('open');}
-function closeMo(id){document.getElementById(id).classList.remove('open');}
-function closeMoOut(e,id){if(e.target===document.getElementById(id))closeMo(id);}
+  document.querySelectorAll('.event-card').forEach(el => {
+    el.addEventListener('click', () => openDetail(el.dataset.eventId));
+  });
+}
 
-/* ── DATE DROPDOWN ── */
-const ddd=document.getElementById('ddd');
-document.getElementById('dbtn').onclick=e=>{e.stopPropagation();ddd.classList.toggle('open');};
-document.addEventListener('click',()=>ddd.classList.remove('open'));
-document.querySelectorAll('.ddi').forEach(el=>{
-  el.onclick=e=>{
-    e.stopPropagation();
-    document.querySelectorAll('.ddi').forEach(i=>{i.classList.remove('active');i.querySelector('span')?.remove();});
-    el.classList.add('active');
-    const s=document.createElement('span');s.textContent='✓';el.appendChild(s);
-    ddd.classList.remove('open');
-  };
+/* ─── EVENT DETAIL ─── */
+function openDetail(id) {
+  const e = EVENTS.find(x => x.id === id);
+  if (!e) return;
+  document.getElementById('detailHero').style.backgroundImage = `url('${e.cover}')`;
+  document.getElementById('detailTitle').textContent = e.title;
+  document.getElementById('detailDesc').textContent = e.desc;
+  document.getElementById('detailWhen').textContent = e.when;
+  document.getElementById('detailWhere').textContent = e.venue + ' · ' + e.address;
+  document.getElementById('detailPrice').textContent = e.price > 0 ? `€${e.price}` : 'free';
+  document.getElementById('detailGoing').textContent = `${e.going} people`;
+  document.getElementById('detailHost').textContent = e.host;
+  if (e.crossed >= 3) {
+    document.getElementById('detailCircle').style.display = '';
+    document.getElementById('detailCircleNum').textContent = e.crossed;
+  } else {
+    document.getElementById('detailCircle').style.display = 'none';
+  }
+  document.getElementById('detailScreen').classList.add('visible');
+}
+document.getElementById('closeDetail').addEventListener('click', () => {
+  document.getElementById('detailScreen').classList.remove('visible');
 });
 
-/* ── CATEGORY CHIPS ── */
-document.querySelectorAll('.cat').forEach(c=>{
-  c.onclick=()=>{document.querySelectorAll('.cat').forEach(x=>x.classList.remove('active'));c.classList.add('active');};
+document.getElementById('attendBtn').addEventListener('click', (e) => {
+  const btn = e.currentTarget;
+  if (btn.textContent.trim() === "i'm going") {
+    btn.textContent = "✓ you're going";
+    btn.style.background = 'var(--accent-dim)';
+    btn.style.color = 'var(--accent)';
+    btn.style.borderColor = 'var(--border-accent)';
+  } else {
+    btn.textContent = "i'm going";
+    btn.style.background = 'var(--accent)';
+    btn.style.color = 'var(--bg)';
+    btn.style.borderColor = 'var(--accent)';
+  }
 });
 
-/* ── BUNDLES SHEET ── */
-const bsh=document.getElementById('bsh');
-let bs='s-p';
-document.getElementById('bsh-h').onclick=()=>{
-  bs=bs==='s-o'?'s-p':'s-o';
-  bsh.className='bsh '+bs;
-};
-
-/* ════════════════════════════════════
-   EVENT DATA (seeded)
-════════════════════════════════════ */
-const EVENTS=[
-  {id:'e01',lat:-6.1944,lng:106.8229,title:'Jazz at the Rooftop',venue:'Braga Art Space',addr:'Jl. Braga 22, Bandung',date:'Fri 04 Apr',time:'21:00',end:'23:30',cat:'Music',going:34,social:12,price:0,cur:'IDR',desc:'An intimate evening of jazz and soul music on the rooftop terrace. Bring friends, bring curiosity. Doors open 20:30.',bundle:'social'},
-  {id:'e02',lat:-6.2607,lng:106.8107,title:'Dub Session Vol.3',venue:'Blok M Basement',addr:'Blok M Plaza, Jakarta Selatan',date:'Mon 30 Mar',time:'22:00',end:'02:00',cat:'Music',going:89,social:0,price:75000,cur:'IDR',desc:'Deep dub sounds in an underground setting. Third edition of the monthly gathering.',bundle:'tonight'},
-  {id:'e03',lat:-6.2241,lng:106.8095,title:'Chinese Tea Ceremony',venue:'Garden House Kemang',addr:'Jl. Kemang Raya 12, Jakarta',date:'Sun 06 Apr',time:'10:00',end:'13:00',cat:'Wellness',going:18,social:7,price:200000,cur:'IDR',desc:'Guided gongfu cha ceremony. Limited to 20 people. Tea and light refreshments included.',bundle:'social'},
-  {id:'e04',lat:-6.1801,lng:106.8300,title:'Film Night: Analog',venue:'Bioskop Kecil Cikini',addr:'Jl. Cikini Raya 58, Jakarta',date:'Sat 05 Apr',time:'19:30',end:'22:00',cat:'Arts',going:55,social:5,price:50000,cur:'IDR',desc:'Analog film projection — Super 8 and 16mm shorts from local filmmakers.',bundle:'social'},
-  {id:'e05',lat:-6.2297,lng:106.8230,title:'Sunrise Run Club',venue:'GBK Sports Complex',addr:'Jl. Pintu Satu Senayan, Jakarta',date:'Sat 05 Apr',time:'05:30',end:'07:00',cat:'Sport',going:142,social:3,price:0,cur:'IDR',desc:'Weekly 5K around the GBK track. All paces welcome.',bundle:'trending'},
-  {id:'e06',lat:-6.2183,lng:106.8020,title:'Open Studio Night',venue:'Rumah Seni Senopati',addr:'Jl. Senopati 75, Jakarta',date:'Mon 30 Mar',time:'19:00',end:'22:00',cat:'Arts',going:24,social:0,price:0,cur:'IDR',desc:'Monthly open studio — artists share works in progress.',bundle:'tonight'},
-  {id:'e07',lat:51.5074,lng:-0.1278,title:'Hackney Wick Rave',venue:'Colour Factory',addr:"8 Queen's Yard, London E9",date:'Sat 05 Apr',time:'22:00',end:'06:00',cat:'Music',going:300,social:0,price:15,cur:'GBP',desc:'Industrial warehouse rave in east London. Techno and electronics through the night.',bundle:'trending'},
-  {id:'e08',lat:51.5194,lng:-0.0862,title:'Spitalfields Market Day',venue:'Old Spitalfields Market',addr:'16 Horner Square, London E1',date:'Sun 06 Apr',time:'10:00',end:'18:00',cat:'Food & Drink',going:450,social:0,price:0,cur:'GBP',desc:'Independent vendors, street food and live music.',bundle:'trending'},
-  {id:'e09',lat:43.2965,lng:5.3698,title:'Bouillabaisse Night',venue:'Le Vieux Port',addr:'Quai du Port, Marseille',date:'Fri 04 Apr',time:'20:00',end:'23:30',cat:'Food & Drink',going:22,social:0,price:45,cur:'EUR',desc:'Traditional Provençal feast, open table, communal dining.',bundle:'social'},
-  {id:'e10',lat:-8.6705,lng:115.2126,title:'Sunset Cacao Ceremony',venue:'Bambu Indah',addr:'Sayan, Ubud, Bali',date:'Sat 05 Apr',time:'17:00',end:'20:00',cat:'Wellness',going:16,social:4,price:350000,cur:'IDR',desc:'Guided cacao ceremony at dusk in the rice field pavilion. Followed by sound bath.',bundle:'social'},
-  {id:'e11',lat:-8.7222,lng:115.1680,title:'Kecak Fire Dance',venue:'Uluwatu Temple',addr:'Uluwatu, Pecatu, Badung, Bali',date:'Sat 05 Apr',time:'18:00',end:'19:30',cat:'Arts',going:200,social:0,price:150000,cur:'IDR',desc:'Traditional Kecak performance at the cliff-edge temple at sunset.',bundle:'trending'},
-  {id:'e12',lat:-8.6478,lng:115.1385,title:'Canggu Market Night',venue:'Canggu Beach Park',addr:'Jl. Pantai Batu Bolong, Canggu, Bali',date:'Thu 03 Apr',time:'18:00',end:'23:00',cat:'Community',going:340,social:2,price:0,cur:'IDR',desc:'Weekly night market with local designers, artists and food stalls by the beach.',bundle:'tonight'},
-  {id:'e13',lat:48.8566,lng:2.3522,title:'Marché des Créateurs',venue:'Place de la Bastille',addr:'Place de la Bastille, Paris',date:'Sun 06 Apr',time:'09:00',end:'16:00',cat:'Community',going:180,social:0,price:0,cur:'EUR',desc:'Independent designers and artists market every Sunday.',bundle:'trending'},
-  {id:'e14',lat:52.3702,lng:4.8952,title:'Amsterdam Jazz Jam',venue:'Paradiso',addr:'Weteringschans 6-8, Amsterdam',date:'Fri 04 Apr',time:'20:00',end:'00:00',cat:'Music',going:95,social:0,price:12,cur:'EUR',desc:'Open jazz jam session at the legendary Paradiso venue.',bundle:'social'},
-];
-
-document.getElementById('ecnt').textContent=EVENTS.length+' events';
-
-/* ── RENDER EVENT CARDS ── */
-const ICONS={
-  Music:`<path d="M9 19V6l12-3v13M9 19c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-3c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2z"/>`,
-  Arts:`<path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>`,
-  'Food & Drink':`<path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/>`,
-  Sport:`<circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>`,
-  Wellness:`<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>`,
-  default:`<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>`
-};
-
-function mkCard(ev){
-  const free=!ev.price||ev.price===0;
-  const pstr=free?'Free':ev.cur+' '+ev.price.toLocaleString();
-  const foot=ev.social>0?`<span class="ec-so">${ev.social} met</span>`:`<span class="ec-pr">${pstr}</span>`;
-  return`<div class="ec" onclick="openDetail('${ev.id}')"><div class="ec-th"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="rgba(200,169,110,0.14)" stroke-width=".8">${ICONS[ev.cat]||ICONS.default}</svg></div><div class="ec-b"><div class="ec-ti">${ev.title}</div><div class="ec-me">${ev.date} · ${ev.time} · ${ev.venue}</div><div class="ec-ft"><div class="ec-go"><div class="gd"></div>${ev.going} going</div>${foot}</div></div></div>`;
-}
-
-function renderBundles(){
-  document.getElementById('r-soc').innerHTML=EVENTS.filter(e=>e.social>0).sort((a,b)=>b.social-a.social).map(mkCard).join('');
-  document.getElementById('r-ton').innerHTML=EVENTS.filter(e=>e.bundle==='tonight').map(mkCard).join('');
-  document.getElementById('r-tre').innerHTML=EVENTS.filter(e=>e.bundle==='trending').map(mkCard).join('');
-}
-renderBundles();
-
-/* ════════════════════════════════════════════════════
-   MAP — Leaflet + OpenStreetMap
-   Tiles: https://{s}.tile.openstreetmap.org/
-   © OpenStreetMap contributors, ODbL licence.
-   Attribution shown via leaflet attribution control
-   (leaflet-control-attribution — NOT hidden).
-   Zoom controls: desktop only (CSS hides on mobile).
-   Touch pan/zoom works natively on mobile.
-   ⚠ Before production launch:
-     Replace tile URL with Maptiler or Stadia Maps.
-     Both offer styled dark tiles + higher rate limits.
-════════════════════════════════════════════════════ */
-let map,edMap,mapOk=false,edMapOk=false;
-const DC=[-8.67,115.21]; // default: Bali
-
-function mkMarker(ev){
-  const big=ev.going>100;
-  const ic=L.divIcon({
-    className:'',
-    html:big?`<div class="mc-lbl">${ev.going}</div>`:`<div class="md"></div>`,
-    iconSize:big?null:[12,12],
-    iconAnchor:big?null:[6,6]
+/* ─── TAB SWITCHING ─── */
+const screens = { home: 'screen-home', map: 'screen-map' };
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.screen;
+    if (target === 'profile') return; // not implemented in prototype
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    Object.entries(screens).forEach(([k, id]) => {
+      document.getElementById(id).style.display = k === target ? '' : 'none';
+    });
+    if (target === 'map' && !window._mapReady) initMap();
+    // Hide FAB on map view (already crowded)
+    document.getElementById('fabCreate').style.display = target === 'home' ? '' : 'none';
   });
-  return L.marker([ev.lat,ev.lng],{icon:ic}).on('click',()=>openDetail(ev.id));
-}
+});
 
-function initMap(){
-  if(mapOk){map.invalidateSize();return;}
-  mapOk=true;
-
-  map=L.map('map',{
-    center:DC,zoom:11,
-    zoomControl:true,   // shown on desktop, hidden on mobile via CSS
-    attributionControl:true, // OSM compliance
-    tap:true,
-    tapTolerance:15
+/* ─── MAP (using OSM tiles for prototype only) ─── */
+function initMap() {
+  const map = L.map('map', {
+    center: [39.62, 2.65],
+    zoom: 10,
+    zoomControl: true,
+    attributionControl: true
   });
 
-  /* OSM tile layer with proper attribution as required by ODbL */
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    maxZoom:19,
-    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+  // NOTE: For production, swap to Protomaps self-hosted or Stadia per spec.
+  // This is dev-only use of OSM public tiles for the prototype.
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    attribution: '© OSM · © CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
   }).addTo(map);
 
-  EVENTS.forEach(ev=>mkMarker(ev).addTo(map));
+  // Add labels layer for readability
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd',
+    maxZoom: 19,
+    pane: 'shadowPane'
+  }).addTo(map);
 
-  /* Location button */
-  document.getElementById('lbtn').onclick=()=>{
-    if(!navigator.geolocation)return;
-    navigator.geolocation.getCurrentPosition(
-      p=>map.flyTo([p.coords.latitude,p.coords.longitude],14,{duration:1.2}),
-      ()=>{}
-    );
-  };
+  // Cluster groups (simulated — single markers, with one cluster bubble)
+  EVENTS.forEach(e => {
+    const m = L.marker([e.lat, e.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="map-marker map-marker--single"></div>',
+        iconSize: [14, 14]
+      })
+    }).addTo(map);
+    m.on('click', () => openDetail(e.id));
+  });
+
+  // Simulated cluster
+  L.marker([39.58, 2.65], {
+    icon: L.divIcon({
+      className: '',
+      html: '<div class="map-marker">7</div>',
+      iconSize: [32, 32]
+    })
+  }).addTo(map);
+
+  window._mapReady = true;
+  window._map = map;
 }
 
-/* ── EVENT DETAIL ── */
-function openDetail(id){
-  const ev=EVENTS.find(e=>e.id===id);if(!ev)return;
-  document.getElementById('ed-ti').textContent=ev.title;
-  document.getElementById('ed-vn').textContent=ev.venue+' · '+ev.addr;
+/* ─── CREATE EVENT MODAL ─── */
+const modal = document.getElementById('createModal');
+const overlay = document.getElementById('modalOverlay');
 
-  const free=!ev.price||ev.price===0;
-  const pstr=free?'Free entry':ev.cur+' '+ev.price.toLocaleString();
-  document.getElementById('ed-mr').innerHTML=`
-    <span class="ed-ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>${ev.date}</span>
-    <span class="ed-ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>${ev.time}${ev.end?' – '+ev.end:''}</span>
-    <span class="ed-ch">${ev.cat}</span>
-    <span class="ed-ch ${free?'ac':''}">${pstr}</span>`;
-  document.getElementById('ed-de').textContent=ev.desc;
+function openCreate() {
+  modal.classList.add('visible');
+  overlay.classList.add('visible');
+  setTimeout(initMiniMap, 100);
+}
+function closeCreate() {
+  modal.classList.remove('visible');
+  overlay.classList.remove('visible');
+}
+document.getElementById('fabCreate').addEventListener('click', openCreate);
+document.getElementById('closeModal').addEventListener('click', closeCreate);
+overlay.addEventListener('click', closeCreate);
 
-  const sb=document.getElementById('ed-sb');
-  if(ev.social>0){sb.style.display='flex';document.getElementById('ed-sn').textContent=ev.social;}
-  else{sb.style.display='none';}
-
-  document.getElementById('ed-map').style.display='block';
-  document.getElementById('ed').classList.add('open');
-
-  /* RSVP state */
-  const rk='rsvp_'+id;
-  const gone=localStorage.getItem(rk);
-  const btn=document.getElementById('ed-rv');
-  const setGone=()=>{btn.textContent='✓ You\'re going';btn.style.cssText='background:var(--surf);color:var(--acc);border:1px solid var(--bdr-a)';};
-  const setNotGone=()=>{btn.textContent='RSVP — I\'m going';btn.style.cssText='';};
-  gone?setGone():setNotGone();
-  btn.onclick=()=>{
-    if(localStorage.getItem(rk))return;
-    localStorage.setItem(rk,'1');
-    setGone();
-    U.attended++;saveU();
-    renderProfile();
-  };
-
-  document.getElementById('ed-sh').onclick=()=>{
-    if(navigator.share)navigator.share({title:'bich — '+ev.title,url:'https://bich.app/e/'+slug(ev.title)});
-  };
-
-  /* Mini map */
-  setTimeout(()=>{
-    if(!edMapOk){
-      edMapOk=true;
-      edMap=L.map('ed-map',{center:[ev.lat,ev.lng],zoom:15,zoomControl:false,attributionControl:false,dragging:false,scrollWheelZoom:false,tap:false});
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(edMap);
-    }else{edMap.setView([ev.lat,ev.lng],15);}
-    edMap.eachLayer(l=>{if(l instanceof L.Marker)edMap.removeLayer(l);});
-    const ic=L.divIcon({className:'',html:'<div class="md" style="width:14px;height:14px;border-width:3px"></div>',iconSize:[14,14],iconAnchor:[7,7]});
-    L.marker([ev.lat,ev.lng],{icon:ic}).addTo(edMap);
-    edMap.invalidateSize();
-  },220);
+function initMiniMap() {
+  if (window._miniReady) return;
+  const m = L.map('miniMap', {
+    center: [39.62, 2.65], zoom: 10,
+    zoomControl: false, attributionControl: false
+  });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd', maxZoom: 19
+  }).addTo(m);
+  let marker = null;
+  m.on('click', (e) => {
+    if (marker) m.removeLayer(marker);
+    marker = L.marker([e.latlng.lat, e.latlng.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="map-marker map-marker--single" style="width:18px;height:18px;"></div>',
+        iconSize: [18, 18]
+      })
+    }).addTo(m);
+    document.getElementById('coordsLabel').textContent =
+      `📍 ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)} · ready to publish`;
+  });
+  window._miniReady = true;
 }
 
-function closeDetail(){document.getElementById('ed').classList.remove('open');}
-
-/* ════════════════════════════════════════════════════
-   VENUE SEARCH — Nominatim (OpenStreetMap)
-   URL: https://nominatim.openstreetmap.org/search
-   No API key required.
-   User-Agent header: required by Nominatim policy.
-   Debounce: 1000ms (max 1 request/second).
-   countrycodes: Europe + Indonesia.
-   ⚠ Upgrade after June 1, 2026:
-     → Foursquare Places API (better POI coverage)
-     → or Geoapify Places (OSM-based, keyed, faster)
-════════════════════════════════════════════════════ */
-let vtimer=null,selV=null;
-const vinput=document.getElementById('vi');
-const vresEl=document.getElementById('vres');
-const vspin=document.getElementById('vspin');
-
-vinput.addEventListener('input',()=>{
-  clearTimeout(vtimer);
-  const q=vinput.value.trim();
-  if(q.length<3){vresEl.innerHTML='<div class="vload">Type at least 3 characters…</div>';return;}
-  vspin.style.display='block';
-  vtimer=setTimeout(()=>doVenueSearch(q),1000);
+document.getElementById('publishBtn').addEventListener('click', () => {
+  // Just close in prototype
+  const btn = document.getElementById('publishBtn');
+  btn.textContent = '✓ event published';
+  setTimeout(() => {
+    closeCreate();
+    btn.textContent = 'publish event';
+  }, 1000);
 });
 
-async function doVenueSearch(q){
-  try{
-    const p=new URLSearchParams({
-      q,
-      format:'json',
-      limit:'7',
-      addressdetails:'1',
-      /* Europe: gb,fr,de,es,it,nl,pt,gr,hr,at,ch,be,dk,se,no,fi
-         Southeast Asia: id (Bali / Indonesia) */
-      countrycodes:'id,gb,fr,de,es,it,nl,pt,gr,hr,at,ch,be,dk,se,no,fi',
-      'accept-language':'en'
-    });
-    const r=await fetch(`https://nominatim.openstreetmap.org/search?${p}`,{
-      headers:{
-        /* Required by Nominatim usage policy */
-        'User-Agent':'bich.service/1.0 (prototype; bich.app)'
-      }
-    });
-    const d=await r.json();
-    vspin.style.display='none';
-    if(!d.length){vresEl.innerHTML=`<div class="vload">No results for "${q}"</div>`;return;}
-    vresEl.innerHTML=d.map(item=>{
-      const nm=item.name||item.display_name.split(',')[0];
-      const ad=item.display_name.replace(nm+', ','').split(',').slice(0,3).join(', ');
-      const data=JSON.stringify({name:nm.replace(/'/g,'\u2019'),addr:ad.replace(/'/g,'\u2019'),lat:parseFloat(item.lat),lng:parseFloat(item.lon)});
-      return`<div class="vri" onclick='selectV(${JSON.stringify(data)})'><div class="vn">${nm}</div><div class="va">${ad}</div></div>`;
-    }).join('');
-  }catch(e){
-    vspin.style.display='none';
-    vresEl.innerHTML='<div class="vload">Search unavailable. Check your connection.</div>';
-  }
+/* ─── ONBOARDING + HANDLE ─── */
+const onboard = document.getElementById('onboard');
+const handleText = document.getElementById('handleText');
+const onboardHandle = document.getElementById('onboardHandle');
+
+let currentHandle = genHandle();
+
+function showHandle() {
+  handleText.textContent = currentHandle;
+  onboardHandle.textContent = currentHandle;
 }
 
-function selectV(jsonStr){
-  const v=JSON.parse(jsonStr);selV=v;
-  document.getElementById('vp').style.display='none';
-  document.getElementById('vs').style.display='block';
-  document.getElementById('svn').textContent=v.name;
-  document.getElementById('sva').textContent=v.addr;
-  updateLink();
-}
-function resetVenue(){
-  selV=null;
-  document.getElementById('vp').style.display='block';
-  document.getElementById('vs').style.display='none';
-  vinput.value='';
-  vresEl.innerHTML='<div class="vload">Type to search · Nominatim / OSM</div>';
+// Show onboarding on first load (no localStorage per artifact constraints — simulated)
+if (!window._onboarded) {
+  onboard.classList.add('visible');
+  showHandle();
 }
 
-/* ── DATETIME ── */
-let EDT={d:'',t:''};
-function confirmDt(){
-  const d=document.getElementById('i-ds').value;
-  const t=document.getElementById('i-ts').value;
-  EDT={d,t};
-  if(d){const p=new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});const c=document.getElementById('ch-d');c.textContent=p;c.classList.add('st');}
-  if(t){const c=document.getElementById('ch-t');c.textContent=t;c.classList.add('st');}
-  closeMo('mo-dt');
-}
+document.getElementById('rerollBtn').addEventListener('click', () => {
+  currentHandle = genHandle();
+  onboardHandle.style.opacity = '0';
+  setTimeout(() => {
+    showHandle();
+    onboardHandle.style.opacity = '1';
+  }, 200);
+});
 
-/* ── CAPACITY ── */
-let selCap='any';
-document.querySelectorAll('.co[data-cap]').forEach(el=>{el.onclick=()=>{document.querySelectorAll('.co[data-cap]').forEach(x=>x.classList.remove('active'));el.classList.add('active');selCap=el.dataset.cap;};});
-function confirmCap(){
-  const m={any:'Any size','10':'Up to 10','25':'Up to 25','50':'Up to 50','100':'Up to 100','500+':'500+'};
-  const c=document.getElementById('ch-cap');c.textContent=m[selCap]||selCap;c.classList.add('st');
-  closeMo('mo-cap');
-}
+document.getElementById('onboardContinue').addEventListener('click', () => {
+  onboard.classList.remove('visible');
+  window._onboarded = true;
+  showHandle();
+});
 
-/* ── CATEGORY ── */
-let selCat='';
-document.querySelectorAll('.co[data-cat]').forEach(el=>{el.onclick=()=>{document.querySelectorAll('.co[data-cat]').forEach(x=>x.classList.remove('active'));el.classList.add('active');selCat=el.dataset.cat;};});
-function confirmCat(){
-  if(!selCat){closeMo('mo-cat');return;}
-  const c=document.getElementById('ch-cat');c.textContent=selCat;c.classList.add('st');
-  closeMo('mo-cat');
-}
+document.getElementById('handleChip').addEventListener('click', () => {
+  // Simulate showing recovery prompt
+  const rp = document.getElementById('recoveryPrompt');
+  rp.classList.add('visible');
+  setTimeout(() => rp.classList.remove('visible'), 6000);
+});
+document.getElementById('acceptPasskey')?.addEventListener('click', () => {
+  document.getElementById('recoveryPrompt').classList.remove('visible');
+});
+document.getElementById('dismissPasskey')?.addEventListener('click', () => {
+  document.getElementById('recoveryPrompt').classList.remove('visible');
+});
 
-/* ── SHARE LINK ── */
-function updateLink(){
-  const t=document.getElementById('ev-ti').value.trim();
-  const s=t?slug(t):slug(U.username)+'-event';
-  document.getElementById('slt').textContent='bich.app/e/'+s;
-}
-document.getElementById('ev-ti').addEventListener('input',updateLink);
-function copyLink(){
-  const txt=document.getElementById('slt').textContent;
-  navigator.clipboard?.writeText('https://'+txt).catch(()=>{});
-  const b=document.getElementById('scb');b.textContent='copied ✓';
-  setTimeout(()=>{b.textContent='copy';},2000);
-}
+/* Filter chips */
+document.querySelectorAll('.map-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.map-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+  });
+});
 
-/* ── PUBLISH ── */
-function publishEvent(){
-  const ti=document.getElementById('ev-ti').value.trim();
-  if(!ti){
-    const inp=document.getElementById('ev-ti');
-    inp.style.borderColor='var(--red)';inp.focus();
-    setTimeout(()=>{inp.style.borderColor='';},2200);
-    return;
-  }
-  const ev={
-    id:'u_'+Date.now(),
-    title:ti,venue:selV?.name||'—',addr:selV?.addr||'',
-    lat:selV?.lat||DC[0],lng:selV?.lng||DC[1],
-    date:EDT.d||'—',time:EDT.t||'—',end:'',
-    cat:selCat||'Other',going:1,social:0,
-    price:parseFloat(document.getElementById('ev-pr').value)||0,
-    cur:document.getElementById('ev-cur').value,
-    desc:document.getElementById('ev-de').value.trim()||'',
-    bundle:'trending',createdBy:U.username
-  };
-  EVENTS.push(ev);
-  U.created++;saveU();
-  if(map&&mapOk)mkMarker(ev).addTo(map);
-  renderBundles();
-  document.getElementById('ecnt').textContent=EVENTS.length+' events';
-  renderMyEvents();
+/* ─── INIT ─── */
+renderBundles();
 
-  const btn=document.querySelector('.pub');
-  btn.textContent='Published ✓';
-  btn.style.cssText='background:var(--surf);color:var(--acc);border:1px solid var(--bdr-a)';
-  setTimeout(()=>{
-    btn.textContent='Publish event';btn.style.cssText='';
-    document.getElementById('ev-ti').value='';
-    document.getElementById('ev-de').value='';
-    document.getElementById('ev-pr').value='';
-    [['ch-d','Set date'],['ch-t','Set time'],['ch-cap','Any size'],['ch-cat','Choose']].forEach(([id,txt])=>{
-      const c=document.getElementById(id);c.textContent=txt;c.classList.remove('st');
-    });
-    resetVenue();EDT={d:'',t:''};updateLink();
-    goHome();
-    if(map)map.flyTo([ev.lat,ev.lng],14,{duration:1.5});
-  },1800);
-}
-
-/* ── MY EVENTS ── */
-function renderMyEvents(){
-  const mine=EVENTS.filter(e=>e.createdBy===U.username);
-  const el=document.getElementById('mel');
-  if(!mine.length){el.innerHTML='<div style="padding:var(--lg);text-align:center;font-size:var(--f-caption);color:var(--sub);">No events yet. Create your first one.</div>';return;}
-  el.innerHTML=mine.map(ev=>`<div class="eli" onclick="openDetail('${ev.id}')"><div class="elt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 19V6l12-3v13M9 19c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm12-3c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2z"/></svg></div><div class="elb"><div class="eln">${ev.title}</div><div class="elm">${ev.date} · ${ev.going} going · ${ev.venue}</div></div><span class="tag-a">live</span></div>`).join('');
-}
-renderMyEvents();
-
-/* ── SWIPE DOWN TO CLOSE DETAIL (mobile) ── */
-let tsY=0;
-document.getElementById('ed').addEventListener('touchstart',e=>{tsY=e.touches[0].clientY;},{passive:true});
-document.getElementById('ed').addEventListener('touchend',e=>{
-  const dy=e.changedTouches[0].clientY-tsY;
-  if(dy>60)closeDetail(); // swipe down 60px closes detail
-},{passive:true});
-
-/* ── BOOT ── */
-window.addEventListener('load',()=>setTimeout(initMap,100));
+// Set default date/time for create form
+const today = new Date();
+today.setDate(today.getDate() + 1);
+document.getElementById('inputDate').value = today.toISOString().split('T')[0];
+document.getElementById('inputTime').value = '19:00';
 </script>
+
 </body>
 </html>
