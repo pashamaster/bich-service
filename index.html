@@ -566,6 +566,35 @@ body { display: flex; align-items: center; justify-content: center; }
 .cover-picker__label { font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; }
 .cover-picker__hint { font-size: 0.55rem; letter-spacing: 0.1em; color: var(--subtle); }
 
+/* Cover — image chosen */
+.cover-picker.has-image { border-style: solid; cursor: default; }
+.cover-picker__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cover-picker__grad { position: absolute; inset: 0; background: linear-gradient(to top, rgba(10,10,10,0.55), transparent 55%); }
+.cover-picker__replace {
+  position: absolute; bottom: 8px; right: 8px; z-index: 3;
+  background: rgba(10,10,10,0.65); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer;
+  font-size: 0.55rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text);
+}
+/* Analyzing overlay */
+.cover-picker__busy {
+  position: absolute; inset: 0; z-index: 4; display: none;
+  flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: rgba(10,10,10,0.78); color: var(--muted);
+}
+.cover-picker__busy.show { display: flex; }
+.cover-picker__spinner {
+  width: 22px; height: 22px; border-radius: var(--radius-full);
+  border: 1.5px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+.cover-picker__busy span { font-size: 0.6rem; letter-spacing: 0.1em; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* Notice line under cover after extraction */
+.cover-notice { font-size: 0.62rem; letter-spacing: 0.04em; color: var(--accent); margin-top: 8px; display: none; }
+.cover-notice.show { display: block; }
+.cover-notice.err { color: var(--red); }
+
 /* Mini map for create event */
 .mini-map-picker {
   width: 100%;
@@ -984,13 +1013,19 @@ body { display: flex; align-items: center; justify-content: center; }
     <!-- Cover -->
     <div class="form-section">
       <label class="form-section__label">cover</label>
-      <div class="cover-picker" id="coverPicker">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <div class="cover-picker" id="coverPicker" role="button" tabindex="0" aria-label="add cover image">
+        <svg id="coverIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
         </svg>
-        <span class="cover-picker__label">add cover image</span>
-        <span class="cover-picker__hint">optional · tap to upload</span>
+        <span class="cover-picker__label" id="coverLabel">add cover image</span>
+        <span class="cover-picker__hint" id="coverHint">optional · tap to upload — we'll read the details</span>
+        <img class="cover-picker__img" id="coverImg" alt="" hidden />
+        <div class="cover-picker__grad" id="coverGrad" hidden></div>
+        <button type="button" class="cover-picker__replace" id="coverReplace" hidden>replace</button>
+        <div class="cover-picker__busy" id="coverBusy"><div class="cover-picker__spinner"></div><span>reading your photo</span></div>
       </div>
+      <input type="file" id="coverInput" accept="image/jpeg,image/png,image/webp" hidden />
+      <p class="cover-notice" id="coverNotice"></p>
     </div>
 
     <!-- Title -->
@@ -1455,6 +1490,10 @@ document.getElementById('fabCreate').addEventListener('click', openCreate);
 document.getElementById('closeModal').addEventListener('click', closeCreate);
 overlay.addEventListener('click', closeCreate);
 
+/* draft state for the event being created */
+const draft = { cover: null, lat: null, lng: null, city: '', timeFinish: '', mapsLink: '' };
+let miniMarker = null;
+
 function initMiniMap() {
   if (window._miniReady) return;
   const m = L.map('miniMap', {
@@ -1464,30 +1503,320 @@ function initMiniMap() {
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
     subdomains: 'abcd', maxZoom: 19
   }).addTo(m);
-  let marker = null;
-  m.on('click', (e) => {
-    if (marker) m.removeLayer(marker);
-    marker = L.marker([e.latlng.lat, e.latlng.lng], {
-      icon: L.divIcon({
-        className: '',
-        html: '<div class="map-marker map-marker--single" style="width:18px;height:18px;"></div>',
-        iconSize: [18, 18]
-      })
-    }).addTo(m);
-    document.getElementById('coordsLabel').textContent =
-      `📍 ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)} · ready to publish`;
-  });
+  m.on('click', (e) => setEventLocation(e.latlng.lat, e.latlng.lng, false));
+  window._miniMap = m;
   window._miniReady = true;
 }
 
-document.getElementById('publishBtn').addEventListener('click', () => {
-  // Just close in prototype
+/* single source of truth for the pin — used by map taps AND photo extraction */
+function setEventLocation(lat, lng, fromPhoto) {
+  draft.lat = +lat; draft.lng = +lng;
+  const m = window._miniMap;
+  if (m) {
+    if (miniMarker) m.removeLayer(miniMarker);
+    miniMarker = L.marker([lat, lng], {
+      icon: L.divIcon({ className: '', html: '<div class="map-marker map-marker--single" style="width:18px;height:18px;"></div>', iconSize: [18, 18] })
+    }).addTo(m);
+    m.setView([lat, lng], 14);
+  }
+  document.getElementById('coordsLabel').textContent =
+    `${draft.lat.toFixed(4)}, ${draft.lng.toFixed(4)}${fromPhoto ? ' · from photo' : ''} · ready to publish`;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   PHOTO → EVENT RECOGNITION
+   Production: POST the image to YOUR backend (n8n webhook), which runs
+   the vision model with the photo_to_event_tool.md prompt + server-side
+   EXIF. The browser must never hold a model key. Set API_BASE and the
+   demo path below switches off automatically.
+   ──────────────────────────────────────────────────────────────── */
+const API_BASE = '';                                       // e.g. 'https://n8n.bich.app/webhook'
+const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
+const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
+
+const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read a single uploaded photo and turn it into structured event records for a database. The photo can be an event flyer, a poster, a screenshot of a maps pin, a screenshot of a social post, or a photo of a printed sign. Some photos carry EXIF data with GPS coordinates and a capture timestamp, which may be supplied alongside the image.
+
+Create one row per distinct event found in the photo. A flyer listing four dates produces four rows. Fill all 10 fields. Leave a value blank when the photo gives nothing and a guess would not help. Never invent coordinates, names or prices not supported by the photo or supplied EXIF.
+
+Fields per row (exact keys): event_name, longitude, latitude, date, time_start, time_finish, google_maps_link, city, description, space_name
+
+Rules:
+- longitude/latitude: decimal degrees, west and south negative. Blank if unknown.
+- date: ISO YYYY-MM-DD. A bare month+day = next upcoming occurrence. A weekday with no date = next occurrence of that weekday from today.
+- time_start/time_finish: 24h HH:MM. Start but no finish and known activity = assume 45-90 min (yoga/fitness 60). "Opens 5pm" on a venue = time_start, leave time_finish blank.
+- google_maps_link: https://www.google.com/maps/search/?api=1&query=LAT,LNG (latitude first). Blank if no coords.
+- city: from coordinates or text in the photo.
+- description: 2-3 short phrases inferred from activity type, folding in host/contact/context. No dashes of any kind.
+- space_name: venue, studio, host or community name.
+- Printed coordinates / a labelled pin beat EXIF. EXIF GPS is location fallback only. EXIF capture time is NOT the event time.
+- Multi-date flyers: one row per date, repeating shared fields.
+
+Output a JSON array of row objects only. No commentary, no markdown fences.`;
+
+/* read GPS + capture date from a JPEG's raw bytes (must run BEFORE canvas re-encode, which strips EXIF) */
+function readJpegExif(buf){
+  try{
+    const dv = new DataView(buf);
+    if (dv.getUint16(0) !== 0xFFD8) return null;
+    let off = 2;
+    while (off < dv.byteLength){
+      if (dv.getUint16(off) !== 0xFFE1){
+        if ((dv.getUint16(off) & 0xFF00) !== 0xFF00) break;
+        off += 2 + dv.getUint16(off+2); continue;
+      }
+      const exifStart = off + 4;
+      if (dv.getUint32(exifStart) !== 0x45786966) return null;     // "Exif"
+      const tiff = exifStart + 6;
+      const little = dv.getUint16(tiff) === 0x4949;
+      const u16 = o => dv.getUint16(o, little), u32 = o => dv.getUint32(o, little);
+      const ifd0 = tiff + u32(tiff + 4);
+      let gpsPtr = 0, exifPtr = 0;
+      const n0 = u16(ifd0);
+      for (let i=0;i<n0;i++){ const e=ifd0+2+i*12, tag=u16(e);
+        if (tag===0x8825) gpsPtr = tiff + u32(e+8);
+        if (tag===0x8769) exifPtr = tiff + u32(e+8);
+      }
+      const rat = o => u32(o)/(u32(o+4)||1);
+      const dms = o => rat(o)+rat(o+8)/60+rat(o+16)/3600;
+      let lat=null,lng=null,dt=null;
+      if (gpsPtr){
+        const ng=u16(gpsPtr); let latRef='N',lngRef='E',latO=0,lngO=0;
+        for (let i=0;i<ng;i++){ const e=gpsPtr+2+i*12, tag=u16(e);
+          if (tag===1) latRef=String.fromCharCode(dv.getUint8(e+8));
+          if (tag===2) latO=tiff+u32(e+8);
+          if (tag===3) lngRef=String.fromCharCode(dv.getUint8(e+8));
+          if (tag===4) lngO=tiff+u32(e+8);
+        }
+        if (latO&&lngO){ lat=+(dms(latO)*(latRef==='S'?-1:1)).toFixed(6); lng=+(dms(lngO)*(lngRef==='W'?-1:1)).toFixed(6); }
+      }
+      if (exifPtr){
+        const ne=u16(exifPtr);
+        for (let i=0;i<ne;i++){ const e=exifPtr+2+i*12;
+          if (u16(e)===0x9003){ let s='',p=tiff+u32(e+8); for(let k=0;k<19;k++) s+=String.fromCharCode(dv.getUint8(p+k)); dt=s; }
+        }
+      }
+      return { lat, lng, dt };
+    }
+  } catch(_){}
+  return null;
+}
+
+/* downscale + re-encode to JPEG (shrinks payload AND strips EXIF from the stored cover — privacy) */
+function compress(file, maxW=1100, q=0.82){
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, maxW/img.width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width*s); c.height = Math.round(img.height*s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      const dataUrl = c.toDataURL('image/jpeg', q);
+      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+
+async function extractEvent(base64, exif){
+  // PRODUCTION: hand off to your n8n webhook (keeps the model key server-side)
+  if (PHOTO_ENDPOINT){
+    const r = await fetch(PHOTO_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ image: base64, exif }) });
+    if (!r.ok) throw new Error('extract failed');
+    const rows = await r.json();
+    return Array.isArray(rows) ? rows : [rows];
+  }
+  // DEMO: inline model call so the flow runs without a backend
+  const exifLine = exif && (exif.lat!=null || exif.dt)
+    ? `\n\nEXIF supplied (location fallback only, not the event date): GPS ${exif.lat ?? '?'}, ${exif.lng ?? '?'} · captured ${exif.dt ?? '?'}` : '';
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      model:'claude-sonnet-4-6', max_tokens:1000, system: PHOTO_SYSTEM_PROMPT,
+      messages:[{ role:'user', content:[
+        { type:'image', source:{ type:'base64', media_type:'image/jpeg', data: base64 } },
+        { type:'text', text:'Extract the event(s) from this photo as a JSON array of row objects.' + exifLine }
+      ]}]
+    })
+  });
+  if (!res.ok) throw new Error('model ' + res.status);
+  const data = await res.json();
+  const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n')
+    .replace(/```json/gi,'').replace(/```/g,'').trim();
+  const parsed = JSON.parse(text);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElementById(id).value = v; }
+
+function fillForm(row){
+  setVal('inputTitle', row.event_name);
+  setVal('inputDesc', row.description);
+  setVal('inputVenue', row.space_name);
+  setVal('inputDate', row.date);
+  if (row.time_start) setVal('inputTime', String(row.time_start).slice(0,5));
+  draft.city = row.city || '';
+  draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
+  draft.mapsLink = row.google_maps_link || '';
+  const lat = (row.latitude!=null && row.latitude!=='') ? Number(row.latitude) : null;
+  const lng = (row.longitude!=null && row.longitude!=='') ? Number(row.longitude) : null;
+  if (lat!=null && lng!=null && !Number.isNaN(lat) && !Number.isNaN(lng)) setEventLocation(lat, lng, true);
+  else if (draft.city) document.getElementById('coordsLabel').textContent = `${draft.city} · drop a pin to set the spot`;
+}
+
+/* ── cover upload wiring ── */
+const coverPicker = document.getElementById('coverPicker');
+const coverInput  = document.getElementById('coverInput');
+const coverBusy   = document.getElementById('coverBusy');
+const coverNotice = document.getElementById('coverNotice');
+
+function openPicker(){ coverInput.click(); }
+coverPicker.addEventListener('click', (e) => {
+  if (e.target.id === 'coverReplace') return;
+  if (!coverPicker.classList.contains('has-image')) openPicker();
+});
+coverPicker.addEventListener('keydown', (e) => {
+  if ((e.key==='Enter'||e.key===' ') && !coverPicker.classList.contains('has-image')){ e.preventDefault(); openPicker(); }
+});
+document.getElementById('coverReplace').addEventListener('click', openPicker);
+
+coverInput.addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  coverInput.value = '';
+  if (!file) return;
+  coverNotice.className = 'cover-notice';
+
+  // EXIF from ORIGINAL bytes first (jpeg only)
+  let exif = null;
+  if (/jpe?g$/i.test(file.type) || /jpe?g$/i.test(file.name)){
+    try { exif = readJpegExif(await file.arrayBuffer()); } catch(_){}
+  }
+  const img = await compress(file);
+  if (!img){ coverNotice.classList.add('show','err'); coverNotice.textContent = "couldn't read that image. try a jpg or png?"; return; }
+
+  // preview
+  draft.cover = img.dataUrl;
+  document.getElementById('coverImg').src = img.dataUrl;
+  document.getElementById('coverImg').hidden = false;
+  document.getElementById('coverGrad').hidden = false;
+  document.getElementById('coverReplace').hidden = false;
+  document.getElementById('coverIcon').style.display = 'none';
+  document.getElementById('coverLabel').style.display = 'none';
+  document.getElementById('coverHint').style.display = 'none';
+  coverPicker.classList.add('has-image');
+
+  // recognize
+  coverBusy.classList.add('show');
+  try {
+    const rows = await extractEvent(img.base64, exif);
+    coverBusy.classList.remove('show');
+    if (rows && rows.length){
+      fillForm(rows[0]);
+      coverNotice.classList.add('show');
+      coverNotice.textContent = rows.length > 1
+        ? `filled from your photo — ${rows.length} dates found, showing the first. edit anything.`
+        : 'filled from your photo. edit anything.';
+    } else {
+      coverNotice.classList.add('show'); coverNotice.textContent = 'nothing to read there. fill it in yourself.';
+    }
+  } catch(err){
+    coverBusy.classList.remove('show');
+    coverNotice.classList.add('show','err');
+    coverNotice.textContent = "couldn't read that photo. fill it in yourself?";
+    if (exif && exif.lat!=null) setEventLocation(exif.lat, exif.lng, true);   // location still works
+  }
+});
+
+/* reset the form after a successful publish */
+function resetCreateForm(){
+  ['inputTitle','inputDesc','inputVenue','inputDate','inputTime','inputPrice','inputCapacity'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('coverImg').hidden = true;
+  document.getElementById('coverGrad').hidden = true;
+  document.getElementById('coverReplace').hidden = true;
+  document.getElementById('coverIcon').style.display = '';
+  document.getElementById('coverLabel').style.display = '';
+  document.getElementById('coverHint').style.display = '';
+  coverPicker.classList.remove('has-image');
+  coverNotice.className = 'cover-notice';
+  document.getElementById('coordsLabel').textContent = 'tap on map to set location';
+  if (window._miniMap && miniMarker){ window._miniMap.removeLayer(miniMarker); miniMarker = null; }
+  Object.assign(draft, { cover:null, lat:null, lng:null, city:'', timeFinish:'', mapsLink:'' });
+  // restore default date/time
+  const t = new Date(); t.setDate(t.getDate()+1);
+  document.getElementById('inputDate').value = t.toISOString().split('T')[0];
+  document.getElementById('inputTime').value = '19:00';
+}
+
+function formatWhen(dateStr, timeStr){
+  if (!dateStr) return timeStr || '';
+  const d = new Date(`${dateStr}T${timeStr||'00:00'}`);
+  if (Number.isNaN(d.getTime())) return [dateStr, timeStr].filter(Boolean).join(' · ');
+  const day = d.toLocaleDateString('en-GB', { weekday:'short', month:'short', day:'numeric' });
+  return `${day}${timeStr ? ' · ' + timeStr : ''}`;
+}
+
+/* ── publish: build the event, save it, show it in the feed ── */
+document.getElementById('publishBtn').addEventListener('click', async () => {
+  const title = document.getElementById('inputTitle').value.trim();
+  const venue = document.getElementById('inputVenue').value.trim();
+  const date  = document.getElementById('inputDate').value;
+  const time  = document.getElementById('inputTime').value;
+  if (!title || !venue || !date || !time){
+    coverNotice.classList.add('show','err');
+    coverNotice.textContent = 'missing: ' + [['title',title],['venue',venue],['date',date],['time',time]].filter(([,v])=>!v).map(([k])=>k).join(', ');
+    return;
+  }
   const btn = document.getElementById('publishBtn');
+  btn.disabled = true;
+
+  // event shaped for the prototype feed (renderEventCard)
+  const ev = {
+    id: 'e_' + Math.random().toString(36).slice(2,10),     // opaque short id (nanoid in prod)
+    title,
+    desc: document.getElementById('inputDesc').value.trim(),
+    cover: draft.cover || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80',
+    venue,
+    address: draft.city || '',
+    lat: draft.lat ?? 39.62, lng: draft.lng ?? 2.65,
+    when: formatWhen(date, time),
+    price: parseFloat(document.getElementById('inputPrice').value) || 0,
+    going: 1, crossed: 0,
+    host: currentHandle,
+    bundle: 'personal'
+  };
+
+  // PRODUCTION: POST /events to your backend here (spec section 9).
+  // The DB record uses the spec shape (price in cents, ISO starts_at, venue_source, etc.).
+  if (EVENTS_ENDPOINT){
+    try {
+      await fetch(EVENTS_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          title, description: ev.desc, cover_url: draft.cover,
+          venue_name: venue, venue_lat: draft.lat, venue_lng: draft.lng,
+          venue_source: draft.mapsLink ? 'photo' : 'manual', venue_city: draft.city,
+          starts_at: new Date(`${date}T${time}`).toISOString(),
+          ends_at: draft.timeFinish ? new Date(`${date}T${draft.timeFinish}`).toISOString() : null,
+          price_value: Math.round(ev.price*100), price_currency: 'EUR',
+          capacity: document.getElementById('inputCapacity').value ? parseInt(document.getElementById('inputCapacity').value,10) : null
+        })
+      });
+    } catch(_){}
+  }
+
+  EVENTS.unshift(ev);          // in-memory store (prototype)
+  renderBundles();             // show it on the home feed immediately
+
   btn.textContent = '✓ event published';
   setTimeout(() => {
     closeCreate();
+    resetCreateForm();
     btn.textContent = 'publish event';
-  }, 1000);
+    btn.disabled = false;
+    // jump home so the new event is visible
+    document.querySelector('.tab[data-screen="home"]').click();
+  }, 900);
 });
 
 /* ─── ONBOARDING + HANDLE ─── */
