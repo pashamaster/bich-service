@@ -1530,9 +1530,23 @@ function setEventLocation(lat, lng, fromPhoto) {
    EXIF. The browser must never hold a model key. Set API_BASE and the
    demo path below switches off automatically.
    ──────────────────────────────────────────────────────────────── */
-const API_BASE = '';                                       // e.g. 'https://n8n.bich.app/webhook'
+const API_BASE = '';                                       // e.g. 'https://bich-extract-event.you.workers.dev'
 const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
 const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
+
+/* DEV ONLY — direct Gemini from the browser, for one user on localhost.
+   Anything you put here is visible to anyone who opens the page. Google runs
+   leaked-key detection and will block a key it finds in public JS, so this
+   must be '' before this file is ever served from a real domain. */
+const GEMINI_KEY_DEV = '';
+const GEMINI_MODEL   = 'gemini-2.5-flash';
+
+// Photo recognition is alpha-gated to a handful of testers. An invite code is an
+// opaque string, not an identity — it maps to a quota bucket and nothing else,
+// so the zero-PII model holds. In the real app store this in IndexedDB beside
+// the handle; localStorage here keeps the prototype simple.
+function readInvite(){ try { return localStorage.getItem('bich_invite') || ''; } catch(_) { return ''; } }
+function setInvite(c){ try { localStorage.setItem('bich_invite', c); } catch(_){} }
 
 const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read a single uploaded photo and turn it into structured event records for a database. The photo can be an event flyer, a poster, a screenshot of a maps pin, a screenshot of a social post, or a photo of a printed sign. Some photos carry EXIF data with GPS coordinates and a capture timestamp, which may be supplied alongside the image.
 
@@ -1619,16 +1633,102 @@ function compress(file, maxW=1100, q=0.82){
   });
 }
 
+/* The 10-field record, as a Gemini responseSchema. Identical to the Worker's
+   copy — keep them in sync, or better, have the Worker serve it. Never repeat
+   these fields in the prompt: duplicating the schema lowers output quality. */
+const EVENT_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    propertyOrdering: ['event_name','longitude','latitude','date','time_start','time_finish','google_maps_link','city','description','space_name'],
+    required: ['event_name'],
+    properties: {
+      event_name:       { type:'string' },
+      longitude:        { type:'number', nullable:true, description:'Decimal degrees, west negative. Null if unknown.' },
+      latitude:         { type:'number', nullable:true, description:'Decimal degrees, south negative. Null if unknown.' },
+      date:             { type:'string', format:'date', nullable:true, description:'YYYY-MM-DD. A bare month and day means the next upcoming occurrence. A weekday with no date means the next occurrence of that weekday from today.' },
+      time_start:       { type:'string', nullable:true, description:'24 hour HH:MM.' },
+      time_finish:      { type:'string', nullable:true, description:'24 hour HH:MM. Start but no finish and known activity: assume 45 to 90 minutes, yoga or fitness 60. A venue opening hour is a door time: leave null.' },
+      google_maps_link: { type:'string', nullable:true, description:'https://www.google.com/maps/search/?api=1&query=LATITUDE,LONGITUDE, latitude first. Null if no coordinates.' },
+      city:             { type:'string', nullable:true },
+      description:      { type:'string', nullable:true, description:'Two or three short phrases inferred from the activity type. No dashes of any kind.' },
+      space_name:       { type:'string', nullable:true, description:'The venue, studio, host or community name.' }
+    }
+  }
+};
+
+/* Rebuild the maps link ourselves and backfill EXIF — never trust the model's
+   link string, and never let a forgotten fallback cost us the location. */
+function normalizeRows(rows, exif){
+  const clean = v => (v === null || v === undefined || v === '') ? '' : v;
+  const hhmm  = v => { const s = clean(v); return s ? String(s).slice(0,5) : ''; };
+  return rows.map(r => {
+    let lat = r.latitude, lng = r.longitude;
+    if ((lat == null || lng == null) && exif && exif.lat != null && exif.lng != null){ lat = exif.lat; lng = exif.lng; }
+    const has = lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng);
+    return {
+      event_name: clean(r.event_name),
+      longitude: has ? +(+lng).toFixed(6) : '',
+      latitude:  has ? +(+lat).toFixed(6) : '',
+      date: clean(r.date),
+      time_start: hhmm(r.time_start),
+      time_finish: hhmm(r.time_finish),
+      google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
+      city: clean(r.city),
+      description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
+      space_name: clean(r.space_name)
+    };
+  }).filter(r => r.event_name);
+}
+
 async function extractEvent(base64, exif){
-  // PRODUCTION: hand off to your n8n webhook (keeps the model key server-side)
+  // PRODUCTION: hand off to the Worker (keeps the key server-side)
   if (PHOTO_ENDPOINT){
-    const r = await fetch(PHOTO_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ image: base64, exif }) });
-    if (!r.ok) throw new Error('extract failed');
+    const r = await fetch(PHOTO_ENDPOINT, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'X-Bich-Invite': readInvite() },
+      body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif })
+    });
+    if (!r.ok) {
+      const msg = await r.json().catch(() => ({}));
+      const err = new Error(msg.error || 'extract failed');
+      err.soft = (r.status === 403 || r.status === 429);   // show the reason, not a generic failure
+      throw err;
+    }
     const rows = await r.json();
     return Array.isArray(rows) ? rows : [rows];
   }
-  // DEMO: inline model call so the flow runs without a backend
+  // DEV: direct Gemini from the browser. One user, localhost, key not shipped.
+  if (GEMINI_KEY_DEV){
+    const today = new Date().toISOString().slice(0,10);
+    const exifNote = exif && (exif.lat!=null || exif.dt)
+      ? `\n\nEXIF supplied with this photo (location fallback only, never the event date): GPS ${exif.lat ?? 'none'}, ${exif.lng ?? 'none'} · captured ${exif.dt ?? 'unknown'}`
+      : '\n\nNo EXIF was supplied with this photo.';
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_KEY_DEV },
+      body: JSON.stringify({
+        system_instruction: { parts:[{ text: PHOTO_SYSTEM_PROMPT + `\n\nToday's date is ${today}. Use it to resolve relative dates and weekdays.` }] },
+        contents: [{ role:'user', parts:[
+          { inline_data: { mime_type:'image/jpeg', data: base64 } },
+          { text: 'Extract every event in this photo as records.' + exifNote }
+        ]}],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
+      })
+    });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d || d.error){
+      const err = new Error(d?.error?.code === 429 ? 'busy right now. try again in a moment?' : "couldn't read that photo");
+      err.soft = d?.error?.code === 429;
+      throw err;
+    }
+    const text = (d.candidates?.[0]?.content?.parts || []).map(p => p.text).join('') || '[]';
+    let rows = JSON.parse(text);
+    if (!Array.isArray(rows)) rows = [rows];
+    return normalizeRows(rows, exif);
+  }
+
+  // DEMO: inline model call so the flow runs without any key or backend
   const exifLine = exif && (exif.lat!=null || exif.dt)
     ? `\n\nEXIF supplied (location fallback only, not the event date): GPS ${exif.lat ?? '?'}, ${exif.lng ?? '?'} · captured ${exif.dt ?? '?'}` : '';
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1724,7 +1824,9 @@ coverInput.addEventListener('change', async (e) => {
   } catch(err){
     coverBusy.classList.remove('show');
     coverNotice.classList.add('show','err');
-    coverNotice.textContent = "couldn't read that photo. fill it in yourself?";
+    // gate messages ('not on the list yet', 'that is your photos for today') are
+    // already in voice — show them as-is rather than a generic failure
+    coverNotice.textContent = err.soft ? err.message : "couldn't read that photo. fill it in yourself?";
     if (exif && exif.lat!=null) setEventLocation(exif.lat, exif.lng, true);   // location still works
   }
 });
