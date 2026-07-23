@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta name="app-version" content="2026-07-23-01" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#0a0a0a" />
 <title>bich.service — events that find their people</title>
@@ -959,9 +961,228 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 .recovery-prompt__actions { display: flex; gap: 8px; }
 
+
+/* ═══ 2026 THEMES ═══ */
+/* ══════════════════════════════════════════════════════════════════
+   bich.service — themes
+   Three variants of one identity. The gold HUE never changes; only
+   its lightness moves, because hue is what people recognise and
+   lightness is what makes it readable.
+
+     night  (default) — the brand. indoors, evenings, OLED.
+     sun              — same night palette, brightened. glare, shade.
+     paper            — warm printed sheet. direct midday sun.
+
+   Set with  document.documentElement.dataset.theme = 'sun'
+   ══════════════════════════════════════════════════════════════════ */
+
+:root,
+:root[data-theme="night"] {
+  --bg:          #0d0c0a;
+  --bg-elevated: #161410;
+  --surface:     #131210;
+
+  --text:   #e8e2d9;                    /* 15.4:1 */
+  --muted:  rgba(232, 226, 217, 0.55);  /* was 2.7:1, now 5.1:1 */
+  --subtle: rgba(232, 226, 217, 0.38);  /* was 1.6:1, now 3.0:1 */
+
+  --accent:        #c8a96e;             /*  8.8:1 */
+  --accent-dim:    rgba(200, 169, 110, 0.08);
+  --border-accent: rgba(200, 169, 110, 0.22);
+  --border:        rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --red:           #e05252;
+
+  --grain-opacity: 0.028;
+  --img-brightness: 1;
+  color-scheme: dark;
+}
+
+/* ── SUN ───────────────────────────────────────────────────────────
+   Not a different design. The same one with the volume up, for the
+   case where the screen is fighting ambient light but you still want
+   the brand. Text goes near white, the gold lifts, grain drops away
+   because texture becomes noise under glare, and borders thicken so
+   structure survives a washed out screen.                           */
+:root[data-theme="sun"] {
+  --bg:          #0a0908;
+  --bg-elevated: #17150f;
+  --surface:     #121110;
+
+  --text:   #fbf8f3;                    /* 18.5:1 */
+  --muted:  rgba(251, 248, 243, 0.72);  /*  9.7:1 */
+  --subtle: rgba(251, 248, 243, 0.52);  /*  5.5:1 */
+
+  --accent:        #e0c48a;             /* 11.6:1, same hue, lifted */
+  --accent-dim:    rgba(224, 196, 138, 0.12);
+  --border-accent: rgba(224, 196, 138, 0.40);
+  --border:        rgba(255, 255, 255, 0.18);
+  --border-strong: rgba(255, 255, 255, 0.30);
+  --red:           #ff7a6b;
+
+  --grain-opacity: 0.008;
+  --img-brightness: 1.06;
+  color-scheme: dark;
+}
+
+/* ── PAPER ─────────────────────────────────────────────────────────
+   For direct midday sun, where a dark screen stops being an
+   interface and becomes a mirror. This is the honest answer to that
+   problem and it is still on brand: the references were always
+   record sleeves and printed ephemera, so the light variant is a
+   warm sheet of paper rather than a white app. Grain STAYS here,
+   because grain on paper is the point.
+
+   The gold drops from 74% to 42% lightness at the same hue: 2.0:1
+   on paper becomes 5.4:1. Same colour family, legible in daylight. */
+:root[data-theme="paper"] {
+  --bg:          #f4efe6;
+  --bg-elevated: #ebe4d7;
+  --surface:     #eee8dc;
+
+  --text:   #1a1815;                    /* 15.5:1 */
+  --muted:  rgba(26, 24, 21, 0.68);     /*  5.7:1 */
+  --subtle: rgba(26, 24, 21, 0.50);     /*  3.3:1 */
+
+  --accent:        #7a5c22;             /*  5.4:1 */
+  --accent-dim:    rgba(122, 92, 34, 0.09);
+  --border-accent: rgba(122, 92, 34, 0.34);
+  --border:        rgba(26, 24, 21, 0.14);
+  --border-strong: rgba(26, 24, 21, 0.24);
+  --red:           #a3301f;
+
+  --grain-opacity: 0.030;
+  --img-brightness: 0.97;
+  color-scheme: light;
+}
+
+/* grain follows the theme instead of being hard coded */
+.grain::before { opacity: var(--grain-opacity); }
+
+/* covers were shot for a dark ground; on paper they need a touch down */
+.event-card__cover img,
+.detail-hero img,
+.cover-picker__img { filter: brightness(var(--img-brightness)); }
+
+/* on paper the hero gradient must fade to paper, not to black */
+:root[data-theme="paper"] .detail-hero::after,
+:root[data-theme="paper"] .cover-picker__grad,
+:root[data-theme="paper"] .event-card__cover::after {
+  background: linear-gradient(to top, rgba(244, 239, 230, 0.92), transparent 62%);
+}
+
+/* ── type scale ────────────────────────────────────────────────────
+   The old labels sat at ~8.8px, uppercase, tracked to 0.22em, on a
+   dark ground. Dark UI blooms optically, so 2026 guidance is to go
+   up a step, not down. Still quiet. Now legible.                    */
+:root {
+  --text-label:     0.68rem;
+  --text-caption:   0.74rem;
+  --tracking-label: 0.16em;
+
+  --safe-top:    max(env(safe-area-inset-top, 0px), 12px);
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  --tap: 44px;
+}
+
+.text-label, .form-section__label {
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+}
+.text-caption { font-size: var(--text-caption); }
+
+/* stops the orphaned last word that makes a two line title look accidental */
+.text-display, .text-title, .modal-title, .detail-title,
+.event-card__title, .published { text-wrap: balance; }
+.text-body, .detail-desc, p { text-wrap: pretty; }
+
+/* ── theme switch ──────────────────────────────────────────────────
+   A segmented control, not a toggle: three states, and the middle
+   one is the point.                                                 */
+.theme-switch { display: flex; gap: 0; margin-top: var(--space-md); }
+.theme-switch button {
+  flex: 1; min-height: var(--tap);
+  background: none; border: 1px solid var(--border); border-right: none;
+  color: var(--muted); cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.62rem;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.theme-switch button:last-child { border-right: 1px solid var(--border); }
+.theme-switch button[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--border-accent);
+  background: var(--accent-dim);
+}
+
+/* ── accessibility opt outs ────────────────────────────────────────
+   iOS 26 shipped Liquid Glass and took a year of criticism for it.
+   iOS 27 answers with a system wide transparency slider and pushes
+   Reduce Transparency into the setup assistant, so a real population
+   of iPhone users now runs with it on and expects apps to notice.   */
+@media (prefers-reduced-transparency: reduce) {
+  .detail-hero__close, .sheet, .modal, .cropper__shade {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .detail-hero__close { background: var(--bg-elevated); }
+  .grain::before { opacity: 0.010; }
+}
+
+@media (prefers-contrast: more) {
+  :root { --muted: rgba(232,226,217,0.80); --subtle: rgba(232,226,217,0.62);
+          --border: rgba(255,255,255,0.22); }
+  :root[data-theme="paper"] { --muted: rgba(26,24,21,0.84); --subtle: rgba(26,24,21,0.66); }
+  .grain::before { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;
+  }
+}
+
+button, .btn, .btn-icon, .tab { min-height: var(--tap); }
+.btn-icon, .tab { min-width: var(--tap); }
+
 </style>
 </head>
 <body class="grain">
+<script>
+/* ── always the latest release ──────────────────────────────────────
+   GitHub Pages sets its own cache headers and you cannot change them,
+   and an iPhone homescreen icon caches harder than a tab does. The
+   service worker fetches the document network first, so opening the
+   app always shows the newest deploy when there is a connection, and
+   the last good copy when there is not. */
+if ('serviceWorker' in navigator) {
+  addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+      // a new worker took over: the code on screen is stale, so reload once
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloading) return; reloading = true; location.reload();
+      });
+      reg.addEventListener('updatefound', () => {
+        const next = reg.installing;
+        next && next.addEventListener('statechange', () => {
+          if (next.state === 'installed' && navigator.serviceWorker.controller) {
+            next.postMessage('skip-waiting');
+          }
+        });
+      });
+      // check for a new release whenever the app comes back to the front
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update();
+      });
+      setInterval(() => reg.update(), 60 * 60 * 1000);
+    } catch (_) {}
+  });
+}
+</script>
+
 
 <div class="phone-stage">
 
@@ -1661,20 +1882,57 @@ let CURRENT_USER = { id: localGet('bich_uid'), handle: localGet('bich_handle') }
 
 async function ensureUser(handle){
   if (CURRENT_USER.id) return CURRENT_USER;
-  if (!WORKER_URL) return CURRENT_USER;              // offline / not wired yet
+  if (!SB_READY()) return CURRENT_USER;
   let name = handle || currentHandle;
   for (let attempt = 0; attempt < 4; attempt++){
     try {
-      const u = await workerPost('/users', { handle: name });
-      CURRENT_USER = { id: u.id, handle: u.handle };
-      localSet('bich_uid', u.id); localSet('bich_handle', u.handle);
+      const rows = await sbInsert('users', { handle: name });
+      CURRENT_USER = { id: rows[0].id, handle: rows[0].handle };
+      localSet('bich_uid', CURRENT_USER.id); localSet('bich_handle', CURRENT_USER.handle);
       return CURRENT_USER;
     } catch(err){
-      if (String(err.message) !== 'taken') throw err;
-      name = genHandle();                            // collision, re-roll
+      if (err.status !== 409) throw err;    // 409 = handle taken
+      name = genHandle();
     }
   }
   return CURRENT_USER;
+}
+
+/* Insert straight into Supabase with the publishable key. The row
+   policies decide what is allowed, so validation lives in the
+   database rather than in code we could forget to run. */
+async function sbInsert(table, row){
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json', Prefer: 'return=representation'
+    },
+    body: JSON.stringify(row)
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok){
+    const e = new Error((body && body.message) || 'write failed');
+    e.status = r.status;
+    throw e;
+  }
+  return body;
+}
+
+/* Covers go to Cloudflare R2 through the worker. R2 charges nothing
+   for egress at any volume, which is the whole reason images live
+   there and not beside the database. */
+async function uploadCover(dataUrl){
+  if (!WORKER_URL || !dataUrl) return null;
+  const blob = await (await fetch(dataUrl)).blob();
+  const r = await fetch(WORKER_URL + '/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': blob.type, 'X-Bich-Invite': readInvite() },
+    body: blob
+  });
+  if (!r.ok) return null;
+  const out = await r.json().catch(() => null);
+  return out && out.url;
 }
 
 /* ── the feed ──────────────────────────────────────────────────────
@@ -1712,7 +1970,49 @@ async function loadFeed(){
     });
     EVENTS.length = 0;
     rows.forEach(r => EVENTS.push(rowToEvent(r)));
-    renderBundles();
+    
+
+/* ── themes ────────────────────────────────────────────────────────
+   night is the brand. sun brightens it for glare. paper is for direct
+   midday, where a dark screen stops being an interface and becomes a
+   mirror. The gold hue is identical in all three; only its lightness
+   moves, because hue is what people recognise. */
+const THEMES = ['night', 'sun', 'paper'];
+function applyTheme(name){
+  const t = THEMES.includes(name) ? name : 'night';
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('bich_theme', t); } catch(_){}
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = t === 'paper' ? '#f4efe6' : (t === 'sun' ? '#0a0908' : '#0d0c0a');
+  document.querySelectorAll('.theme-switch button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
+}
+function initThemes(){
+  let saved = null;
+  try { saved = localStorage.getItem('bich_theme'); } catch(_){}
+  applyTheme(saved || 'night');
+
+  // offer the switch inside the profile screen if there is room for it
+  const host = document.querySelector('#screen-me .screen-body') ||
+               document.querySelector('#screen-me') ||
+               document.querySelector('.profile-body');
+  if (host && !host.querySelector('.theme-switch')){
+    const wrap = document.createElement('div');
+    wrap.innerHTML = '<span class="text-label" style="display:block;margin-top:24px">light</span>' +
+      '<div class="theme-switch">' +
+      THEMES.map(t => `<button type="button" data-theme="${t}" aria-pressed="false">${t}</button>`).join('') +
+      '</div>';
+    host.appendChild(wrap);
+    wrap.addEventListener('click', e => {
+      const b = e.target.closest('button[data-theme]');
+      if (b) applyTheme(b.dataset.theme);
+    });
+    applyTheme(document.documentElement.dataset.theme);
+  }
+}
+initThemes();
+
+renderBundles();
 wireVenueSearch();
 (async () => {
   if (!SB_READY()) return;                    // sample data until configured
@@ -2479,22 +2779,23 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     } catch(_){}
   }
 
-  // Real save. The worker holds the service role key and does the insert;
-  // the browser never has permission to write to the database at all.
-  if (WORKER_URL){
+  // Real save. The cover goes to Cloudflare R2; the row goes straight
+  // to Supabase. No service key exists anywhere in this system.
+  if (SB_READY()){
     try {
       await ensureUser();
-      const saved = await workerPost('/events', {
-        host_id: CURRENT_USER.id,
+      const coverUrl = await uploadCover(draft.cover);
+      const saved = await sbInsert('events', {
+        host_id: CURRENT_USER.id || null,
         title: ev.title,
-        description: ev.desc,
+        description: ev.desc || null,
         venue_id: draft.venueId || null,
-        venue_name: ev.venue,
+        venue_name: ev.venue || null,
         venue_lat: draft.lat, venue_lng: draft.lng,
         venue_source: draft.mapsLink ? 'printed_coordinates' : 'manual',
         city: draft.city || null,
         community_slug: draft.community || null,
-        photo_lat: draft.photoLat ?? null,   // origin only
+        photo_lat: draft.photoLat ?? null,   // origin only, never the pin
         photo_lng: draft.photoLng ?? null,
         starts_at: new Date(`${date}T${time}`).toISOString(),
         ends_at: draft.timeFinish ? new Date(`${date}T${draft.timeFinish}`).toISOString() : null,
@@ -2502,14 +2803,16 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         price_currency: 'EUR',
         capacity: document.getElementById('inputCapacity').value
                   ? parseInt(document.getElementById('inputCapacity').value, 10) : null,
-        cover_url: draft.cover || null,
+        cover_url: coverUrl,
+        status: 'live',
         source: draft.cover ? 'photo' : 'manual'
       });
-      ev.uuid = saved.id; ev.id = saved.short_id;
+      ev.uuid = saved[0].id; ev.id = saved[0].short_id;
+      if (coverUrl) ev.cover = coverUrl;
     } catch(err){
       btn.disabled = false;
       coverNotice.className = 'cover-notice show err';
-      coverNotice.textContent = err.soft ? err.message : "couldn't publish that. try again?";
+      coverNotice.textContent = "couldn't publish that. try again?";
       return;
     }
   }

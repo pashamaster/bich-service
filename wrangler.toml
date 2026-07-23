@@ -1,0 +1,33 @@
+name = "bich-service"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+# Images live in R2: zero egress cost at any volume, which is the
+# whole reason covers are here and not next to the database.
+[[r2_buckets]]
+binding = "COVERS"
+bucket_name = "bich-covers"
+
+[vars]
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+
+# Lock this to your real origins before anyone else uses it.
+ALLOWED_ORIGINS = "*"
+
+# Empty = open. Comma separated codes to gate the photo feature.
+BICH_INVITE_CODES = ""
+
+DAILY_CAP = "180"
+
+# Optional: serve covers from a custom domain instead of the worker.
+# PUBLIC_IMG_BASE = "https://img.bich.app"
+
+# Secrets, never vars:
+#   wrangler secret put GEMINI_API_KEY
+# There is deliberately NO Supabase key here.
+
+# Optional daily quota counter:
+#   wrangler kv namespace create BICH_KV
+# [[kv_namespaces]]
+# binding = "BICH_KV"
+# id = "paste-id-here"

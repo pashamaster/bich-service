@@ -1,0 +1,182 @@
+/* ══════════════════════════════════════════════════════════════════
+   bich.service — themes
+   Three variants of one identity. The gold HUE never changes; only
+   its lightness moves, because hue is what people recognise and
+   lightness is what makes it readable.
+
+     night  (default) — the brand. indoors, evenings, OLED.
+     sun              — same night palette, brightened. glare, shade.
+     paper            — warm printed sheet. direct midday sun.
+
+   Set with  document.documentElement.dataset.theme = 'sun'
+   ══════════════════════════════════════════════════════════════════ */
+
+:root,
+:root[data-theme="night"] {
+  --bg:          #0d0c0a;
+  --bg-elevated: #161410;
+  --surface:     #131210;
+
+  --text:   #e8e2d9;                    /* 15.4:1 */
+  --muted:  rgba(232, 226, 217, 0.55);  /* was 2.7:1, now 5.1:1 */
+  --subtle: rgba(232, 226, 217, 0.38);  /* was 1.6:1, now 3.0:1 */
+
+  --accent:        #c8a96e;             /*  8.8:1 */
+  --accent-dim:    rgba(200, 169, 110, 0.08);
+  --border-accent: rgba(200, 169, 110, 0.22);
+  --border:        rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --red:           #e05252;
+
+  --grain-opacity: 0.028;
+  --img-brightness: 1;
+  color-scheme: dark;
+}
+
+/* ── SUN ───────────────────────────────────────────────────────────
+   Not a different design. The same one with the volume up, for the
+   case where the screen is fighting ambient light but you still want
+   the brand. Text goes near white, the gold lifts, grain drops away
+   because texture becomes noise under glare, and borders thicken so
+   structure survives a washed out screen.                           */
+:root[data-theme="sun"] {
+  --bg:          #0a0908;
+  --bg-elevated: #17150f;
+  --surface:     #121110;
+
+  --text:   #fbf8f3;                    /* 18.5:1 */
+  --muted:  rgba(251, 248, 243, 0.72);  /*  9.7:1 */
+  --subtle: rgba(251, 248, 243, 0.52);  /*  5.5:1 */
+
+  --accent:        #e0c48a;             /* 11.6:1, same hue, lifted */
+  --accent-dim:    rgba(224, 196, 138, 0.12);
+  --border-accent: rgba(224, 196, 138, 0.40);
+  --border:        rgba(255, 255, 255, 0.18);
+  --border-strong: rgba(255, 255, 255, 0.30);
+  --red:           #ff7a6b;
+
+  --grain-opacity: 0.008;
+  --img-brightness: 1.06;
+  color-scheme: dark;
+}
+
+/* ── PAPER ─────────────────────────────────────────────────────────
+   For direct midday sun, where a dark screen stops being an
+   interface and becomes a mirror. This is the honest answer to that
+   problem and it is still on brand: the references were always
+   record sleeves and printed ephemera, so the light variant is a
+   warm sheet of paper rather than a white app. Grain STAYS here,
+   because grain on paper is the point.
+
+   The gold drops from 74% to 42% lightness at the same hue: 2.0:1
+   on paper becomes 5.4:1. Same colour family, legible in daylight. */
+:root[data-theme="paper"] {
+  --bg:          #f4efe6;
+  --bg-elevated: #ebe4d7;
+  --surface:     #eee8dc;
+
+  --text:   #1a1815;                    /* 15.5:1 */
+  --muted:  rgba(26, 24, 21, 0.68);     /*  5.7:1 */
+  --subtle: rgba(26, 24, 21, 0.50);     /*  3.3:1 */
+
+  --accent:        #7a5c22;             /*  5.4:1 */
+  --accent-dim:    rgba(122, 92, 34, 0.09);
+  --border-accent: rgba(122, 92, 34, 0.34);
+  --border:        rgba(26, 24, 21, 0.14);
+  --border-strong: rgba(26, 24, 21, 0.24);
+  --red:           #a3301f;
+
+  --grain-opacity: 0.030;
+  --img-brightness: 0.97;
+  color-scheme: light;
+}
+
+/* grain follows the theme instead of being hard coded */
+.grain::before { opacity: var(--grain-opacity); }
+
+/* covers were shot for a dark ground; on paper they need a touch down */
+.event-card__cover img,
+.detail-hero img,
+.cover-picker__img { filter: brightness(var(--img-brightness)); }
+
+/* on paper the hero gradient must fade to paper, not to black */
+:root[data-theme="paper"] .detail-hero::after,
+:root[data-theme="paper"] .cover-picker__grad,
+:root[data-theme="paper"] .event-card__cover::after {
+  background: linear-gradient(to top, rgba(244, 239, 230, 0.92), transparent 62%);
+}
+
+/* ── type scale ────────────────────────────────────────────────────
+   The old labels sat at ~8.8px, uppercase, tracked to 0.22em, on a
+   dark ground. Dark UI blooms optically, so 2026 guidance is to go
+   up a step, not down. Still quiet. Now legible.                    */
+:root {
+  --text-label:     0.68rem;
+  --text-caption:   0.74rem;
+  --tracking-label: 0.16em;
+
+  --safe-top:    max(env(safe-area-inset-top, 0px), 12px);
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  --tap: 44px;
+}
+
+.text-label, .form-section__label {
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+}
+.text-caption { font-size: var(--text-caption); }
+
+/* stops the orphaned last word that makes a two line title look accidental */
+.text-display, .text-title, .modal-title, .detail-title,
+.event-card__title, .published { text-wrap: balance; }
+.text-body, .detail-desc, p { text-wrap: pretty; }
+
+/* ── theme switch ──────────────────────────────────────────────────
+   A segmented control, not a toggle: three states, and the middle
+   one is the point.                                                 */
+.theme-switch { display: flex; gap: 0; margin-top: var(--space-md); }
+.theme-switch button {
+  flex: 1; min-height: var(--tap);
+  background: none; border: 1px solid var(--border); border-right: none;
+  color: var(--muted); cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.62rem;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.theme-switch button:last-child { border-right: 1px solid var(--border); }
+.theme-switch button[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--border-accent);
+  background: var(--accent-dim);
+}
+
+/* ── accessibility opt outs ────────────────────────────────────────
+   iOS 26 shipped Liquid Glass and took a year of criticism for it.
+   iOS 27 answers with a system wide transparency slider and pushes
+   Reduce Transparency into the setup assistant, so a real population
+   of iPhone users now runs with it on and expects apps to notice.   */
+@media (prefers-reduced-transparency: reduce) {
+  .detail-hero__close, .sheet, .modal, .cropper__shade {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .detail-hero__close { background: var(--bg-elevated); }
+  .grain::before { opacity: 0.010; }
+}
+
+@media (prefers-contrast: more) {
+  :root { --muted: rgba(232,226,217,0.80); --subtle: rgba(232,226,217,0.62);
+          --border: rgba(255,255,255,0.22); }
+  :root[data-theme="paper"] { --muted: rgba(26,24,21,0.84); --subtle: rgba(26,24,21,0.66); }
+  .grain::before { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;
+  }
+}
+
+button, .btn, .btn-icon, .tab { min-height: var(--tap); }
+.btn-icon, .tab { min-width: var(--tap); }
