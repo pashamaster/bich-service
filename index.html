@@ -594,6 +594,54 @@ body { display: flex; align-items: center; justify-content: center; }
 .cover-notice { font-size: 0.62rem; letter-spacing: 0.04em; color: var(--accent); margin-top: 8px; display: none; }
 .cover-notice.show { display: block; }
 .cover-notice.err { color: var(--red); }
+.cover-recrop {
+  background: none; border: none; padding: 4px 2px; min-height: 32px;
+  color: var(--accent); border-bottom: 1px solid var(--border-accent);
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.06em; cursor: pointer;
+}
+
+/* Cropper — full screen over everything */
+.cropper {
+  position: fixed; inset: 0; z-index: 400; background: var(--bg);
+  display: flex; flex-direction: column;
+  padding-top: max(env(safe-area-inset-top, 0px), 12px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  animation: fadein 0.25s ease both;
+}
+.cropper__bar { display: flex; align-items: center; gap: var(--space-md); padding: var(--space-sm) var(--space-md); flex-shrink: 0; }
+.cropper__hint { font-size: 0.6rem; letter-spacing: 0.1em; color: var(--muted); }
+.cropper__stage { position: relative; flex: 1; margin: var(--space-sm) var(--space-md); overflow: hidden; touch-action: none; }
+.cropper__canvas { position: absolute; display: block; }
+.cropper__shade { position: absolute; inset: 0; background: rgba(10,10,10,0.62); pointer-events: none; }
+.cropper__rect { position: absolute; border: 1px solid var(--accent); cursor: move; touch-action: none; }
+/* handles look small, but the touch target is 44px */
+.cropper__rect i {
+  position: absolute; width: 44px; height: 44px; touch-action: none;
+}
+.cropper__rect i::after {
+  content: ''; position: absolute; width: 16px; height: 16px;
+  border: 2px solid var(--accent); background: rgba(10,10,10,0.5);
+}
+.cropper__rect i[data-h="nw"] { left: -22px; top: -22px; cursor: nwse-resize; }
+.cropper__rect i[data-h="nw"]::after { left: 14px; top: 14px; border-right: none; border-bottom: none; }
+.cropper__rect i[data-h="ne"] { right: -22px; top: -22px; cursor: nesw-resize; }
+.cropper__rect i[data-h="ne"]::after { right: 14px; top: 14px; border-left: none; border-bottom: none; }
+.cropper__rect i[data-h="se"] { right: -22px; bottom: -22px; cursor: nwse-resize; }
+.cropper__rect i[data-h="se"]::after { right: 14px; bottom: 14px; border-left: none; border-top: none; }
+.cropper__rect i[data-h="sw"] { left: -22px; bottom: -22px; cursor: nesw-resize; }
+.cropper__rect i[data-h="sw"]::after { left: 14px; bottom: 14px; border-right: none; border-top: none; }
+.cropper__actions { display: flex; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); flex-shrink: 0; }
+.cropper__btn {
+  flex: 1; min-height: 48px; background: none; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--muted); cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
+  transition: all var(--ease);
+}
+.cropper__bar .cropper__btn { flex: 0 0 auto; padding: 0 18px; }
+.cropper__btn--go { color: var(--accent); border-color: var(--border-accent); background: var(--accent-dim); }
+.cropper__btn:active { transform: scale(0.98); }
 
 /* Mini map for create event */
 .mini-map-picker {
@@ -1539,7 +1587,9 @@ const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
    leaked-key detection and will block a key it finds in public JS, so this
    must be '' before this file is ever served from a real domain. */
 const GEMINI_KEY_DEV = '';
-const GEMINI_MODEL   = 'gemini-2.5-flash';
+const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
+const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
+const COVER_MAX_SIDE = 1400;   // long side stored as the cover
 
 // Photo recognition is alpha-gated to a handful of testers. An invite code is an
 // opaque string, not an identity — it maps to a quota bucket and nothing else,
@@ -1548,39 +1598,49 @@ const GEMINI_MODEL   = 'gemini-2.5-flash';
 function readInvite(){ try { return localStorage.getItem('bich_invite') || ''; } catch(_) { return ''; } }
 function setInvite(c){ try { localStorage.setItem('bich_invite', c); } catch(_){} }
 
-const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read a single uploaded photo and turn it into structured event records for a database. The photo can be an event flyer, a poster, a screenshot of a maps pin, a screenshot of a social post, or a photo of a printed sign. Some photos carry EXIF data with GPS coordinates and a capture timestamp, which may be supplied alongside the image.
+const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read one uploaded photo and turn it into structured event records.
 
-Create one row per distinct event found in the photo. A flyer listing four dates produces four rows. Fill all 10 fields. Leave a value blank when the photo gives nothing and a guess would not help. Never invent coordinates, names or prices not supported by the photo or supplied EXIF.
+The photo is whatever was in someone's camera roll: a printed flyer photographed at an angle, a poster on a wall, a screenshot of a social post or a map pin, a chalkboard, a handwritten sign, or something that is not about an event at all. Judge before you extract.
 
-Fields per row (exact keys): event_name, longitude, latitude, date, time_start, time_finish, google_maps_link, city, description, space_name
+Read everything visible, including text that is rotated, handwritten, or running around an edge. Expect perspective distortion, glare, shadow and surrounding clutter that is not part of the flyer.
 
-Rules:
-- longitude/latitude: decimal degrees, west and south negative. Blank if unknown.
-- date: ISO YYYY-MM-DD. A bare month+day = next upcoming occurrence. A weekday with no date = next occurrence of that weekday from today.
-- time_start/time_finish: 24h HH:MM. Start but no finish and known activity = assume 45-90 min (yoga/fitness 60). "Opens 5pm" on a venue = time_start, leave time_finish blank.
-- google_maps_link: https://www.google.com/maps/search/?api=1&query=LAT,LNG (latitude first). Blank if no coords.
-- city: from coordinates or text in the photo.
-- description: 2-3 short phrases inferred from activity type, folding in host/contact/context. No dashes of any kind.
-- space_name: venue, studio, host or community name.
-- Printed coordinates / a labelled pin beat EXIF. EXIF GPS is location fallback only. EXIF capture time is NOT the event time.
-- Multi-date flyers: one row per date, repeating shared fields.
+Report dates and times EXACTLY as they are printed. Do not convert them, do not work out the year, do not work out which weekday comes next. Put the printed characters in date_literal and weekday_literal and leave the arithmetic to us. If no year is printed, leave year_literal null rather than guessing one.
 
-Output a JSON array of row objects only. No commentary, no markdown fences.`;
+Venue coordinates come only from coordinates or a map pin printed in the image. If none are printed, leave them null. Any EXIF location supplied to you is where the PHOTO was taken, which is not where the event happens: a flyer in a cafe window advertises something elsewhere. Use EXIF only to name the city and the wider community, never as the venue. EXIF capture time is never the event time.
+
+One record per distinct event date. A flyer listing four dates produces four records with the shared fields repeated. A stated weekly repeat produces one record with the recurrence in words.
+
+Never invent coordinates, names, prices or dates the photo does not support. A blank field prompts the user; a wrong field does not.
+
+Judge legibility honestly. If text was cut off, too small, blurred or lost to glare, say so and name what you could not read. We use that to offer a tighter crop. Do not pretend a hard photo was easy.`;
 
 /* read GPS + capture date from a JPEG's raw bytes (must run BEFORE canvas re-encode, which strips EXIF) */
-function readJpegExif(buf){
+function readExif(buf){
   try{
     const dv = new DataView(buf);
-    if (dv.getUint16(0) !== 0xFFD8) return null;
-    let off = 2;
-    while (off < dv.byteLength){
-      if (dv.getUint16(off) !== 0xFFE1){
-        if ((dv.getUint16(off) & 0xFF00) !== 0xFF00) break;
-        off += 2 + dv.getUint16(off+2); continue;
+    let tiff = null;
+    if (dv.getUint16(0) === 0xFFD8){                 // JPEG: walk to APP1
+      let off = 2;
+      while (off < dv.byteLength - 4){
+        const m = dv.getUint16(off);
+        if (m === 0xFFE1){
+          if (dv.getUint32(off + 4) === 0x45786966) tiff = off + 10;
+          break;
+        }
+        if ((m & 0xFF00) !== 0xFF00) break;
+        off += 2 + dv.getUint16(off + 2);
       }
-      const exifStart = off + 4;
-      if (dv.getUint32(exifStart) !== 0x45786966) return null;     // "Exif"
-      const tiff = exifStart + 6;
+    } else {                                          // HEIC: find Exif\0\0
+      const lim = Math.min(dv.byteLength - 8, 5 * 1024 * 1024);
+      for (let i = 0; i < lim; i++){
+        if (dv.getUint32(i) === 0x45786966 && dv.getUint16(i + 4) === 0){
+          const t = i + 6, bo = dv.getUint16(t);
+          if (bo === 0x4949 || bo === 0x4D4D){ tiff = t; break; }
+        }
+      }
+    }
+    if (tiff == null) return null;
+    {
       const little = dv.getUint16(tiff) === 0x4949;
       const u16 = o => dv.getUint16(o, little), u32 = o => dv.getUint32(o, little);
       const ifd0 = tiff + u32(tiff + 4);
@@ -1615,21 +1675,165 @@ function readJpegExif(buf){
   return null;
 }
 
-/* downscale + re-encode to JPEG (shrinks payload AND strips EXIF from the stored cover — privacy) */
-function compress(file, maxW=1100, q=0.82){
+/* ── decode, HEIC included ────────────────────────────────────────
+   Safari decodes HEIC natively, so most iPhone users cost us nothing.
+   Everyone else lazy loads a decoder, and only when they actually hit
+   a HEIC. No payload for the common case. */
+let _heic = null;
+async function decodeImage(file){
+  try { return { bitmap: await createImageBitmap(file), converted: false }; }
+  catch(_){}
+  const looksHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+  if (!looksHeic) throw new Error('unreadable');
+  if (!_heic) _heic = await import('https://cdn.jsdelivr.net/npm/heic-to@1/+esm');
+  const jpeg = await _heic.heicTo({ blob: file, type: 'image/jpeg', quality: 0.92 });
+  return { bitmap: await createImageBitmap(jpeg), converted: true };
+}
+
+/* ── resize ───────────────────────────────────────────────────────
+   The browser's one-shot downscale is fast and slightly mushy, which
+   costs us small print. Halving in steps keeps flyer text crisp, and
+   it is the same free canvas either way. */
+function drawScaled(src, sx, sy, sw, sh, dw, dh){
+  let cw = sw, ch = sh;
+  let cur = document.createElement('canvas');
+  cur.width = cw; cur.height = ch;
+  cur.getContext('2d').drawImage(src, sx, sy, sw, sh, 0, 0, cw, ch);
+  while (cw > dw * 2){
+    const nw = Math.max(dw, Math.round(cw / 2)), nh = Math.max(dh, Math.round(ch / 2));
+    const next = document.createElement('canvas');
+    next.width = nw; next.height = nh;
+    const cx = next.getContext('2d');
+    cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high';
+    cx.drawImage(cur, 0, 0, nw, nh);
+    cur = next; cw = nw; ch = nh;
+  }
+  const out = document.createElement('canvas');
+  out.width = dw; out.height = dh;
+  const ox = out.getContext('2d');
+  ox.imageSmoothingEnabled = true; ox.imageSmoothingQuality = 'high';
+  ox.drawImage(cur, 0, 0, dw, dh);
+  return out;
+}
+
+let _webp = null;
+function supportsWebp(){
+  if (_webp != null) return _webp;
+  const c = document.createElement('canvas'); c.width = c.height = 1;
+  _webp = c.toDataURL('image/webp').startsWith('data:image/webp');
+  return _webp;
+}
+
+/* crop is {x,y,w,h} in source pixels, or null for the whole image */
+function render(bitmap, crop, maxSide, quality){
+  quality = quality || 0.85;
+  const sx = crop ? Math.round(crop.x) : 0;
+  const sy = crop ? Math.round(crop.y) : 0;
+  const sw = crop ? Math.round(crop.w) : bitmap.width;
+  const sh = crop ? Math.round(crop.h) : bitmap.height;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const dw = Math.max(1, Math.round(sw * scale));
+  const dh = Math.max(1, Math.round(sh * scale));
+  const canvas = drawScaled(bitmap, sx, sy, sw, sh, dw, dh);
+  const mime = supportsWebp() ? 'image/webp' : 'image/jpeg';
+  const dataUrl = canvas.toDataURL(mime, quality);
+  return { dataUrl, base64: dataUrl.split(',')[1], mime, width: dw, height: dh,
+           kb: Math.round(dataUrl.length * 0.75 / 1024) };
+}
+
+/* ── crop UI ──────────────────────────────────────────────────────
+   A rectangle over the photo with four corner handles. Drag inside to
+   move, drag a corner to resize. Free form on purpose: a flyer is
+   whatever shape it is, and locking a ratio is how you slice off the
+   bottom line where the venue lives.
+   Resolves {x,y,w,h} in source pixels, null to use the whole photo,
+   or undefined if the user backed out. */
+function openCropper(bitmap, hint){
   return new Promise(resolve => {
-    const url = URL.createObjectURL(file), img = new Image();
-    img.onload = () => {
-      const s = Math.min(1, maxW/img.width);
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width*s); c.height = Math.round(img.height*s);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      const dataUrl = c.toDataURL('image/jpeg', q);
-      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-    img.src = url;
+    const root = document.createElement('div');
+    root.className = 'cropper';
+    root.innerHTML =
+      '<div class="cropper__bar">' +
+        '<button class="cropper__btn" data-act="cancel">back</button>' +
+        '<span class="cropper__hint">' + (hint || 'drag the corners to the flyer') + '</span>' +
+      '</div>' +
+      '<div class="cropper__stage"><canvas class="cropper__canvas"></canvas>' +
+        '<div class="cropper__shade"></div>' +
+        '<div class="cropper__rect"><i data-h="nw"></i><i data-h="ne"></i><i data-h="se"></i><i data-h="sw"></i></div>' +
+      '</div>' +
+      '<div class="cropper__actions">' +
+        '<button class="cropper__btn" data-act="skip">use whole photo</button>' +
+        '<button class="cropper__btn cropper__btn--go" data-act="ok">use this crop</button>' +
+      '</div>';
+    document.body.appendChild(root);
+
+    const stage = root.querySelector('.cropper__stage');
+    const canvas = root.querySelector('.cropper__canvas');
+    const rectEl = root.querySelector('.cropper__rect');
+    const shade = root.querySelector('.cropper__shade');
+    let view = { x:0, y:0, w:0, h:0, scale:1 }, box = null, drag = null;
+    const MIN = 48;
+
+    function layout(){
+      const b = stage.getBoundingClientRect();
+      const s = Math.min(b.width / bitmap.width, b.height / bitmap.height);
+      view.scale = s;
+      view.w = Math.round(bitmap.width * s);  view.h = Math.round(bitmap.height * s);
+      view.x = Math.round((b.width - view.w) / 2); view.y = Math.round((b.height - view.h) / 2);
+      canvas.width = view.w; canvas.height = view.h;
+      canvas.style.left = view.x + 'px'; canvas.style.top = view.y + 'px';
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, view.w, view.h);
+    }
+    function initBox(){
+      const i = 0.08;
+      box = { x: view.x + view.w*i, y: view.y + view.h*i, w: view.w*(1-i*2), h: view.h*(1-i*2) };
+    }
+    function paint(){
+      rectEl.style.left = box.x+'px'; rectEl.style.top = box.y+'px';
+      rectEl.style.width = box.w+'px'; rectEl.style.height = box.h+'px';
+      shade.style.clipPath =
+        'polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ' +
+        box.x+'px '+box.y+'px, ' + box.x+'px '+(box.y+box.h)+'px, ' +
+        (box.x+box.w)+'px '+(box.y+box.h)+'px, ' + (box.x+box.w)+'px '+box.y+'px, ' +
+        box.x+'px '+box.y+'px)';
+    }
+    function pos(e){ const b = stage.getBoundingClientRect(); return { x: e.clientX-b.left, y: e.clientY-b.top }; }
+    rectEl.addEventListener('pointerdown', e => {
+      drag = { handle: e.target.dataset.h, start: pos(e), box: Object.assign({}, box) };
+      stage.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    stage.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const p = pos(e), dx = p.x-drag.start.x, dy = p.y-drag.start.y, b = drag.box;
+      const L = view.x, T = view.y, R = view.x+view.w, B = view.y+view.h;
+      if (!drag.handle){
+        box.x = Math.min(Math.max(b.x+dx, L), R-b.w);
+        box.y = Math.min(Math.max(b.y+dy, T), B-b.h);
+      } else {
+        let x1=b.x, y1=b.y, x2=b.x+b.w, y2=b.y+b.h;
+        if (drag.handle.indexOf('w')>-1) x1 = Math.min(Math.max(b.x+dx, L), x2-MIN);
+        if (drag.handle.indexOf('e')>-1) x2 = Math.max(Math.min(b.x+b.w+dx, R), x1+MIN);
+        if (drag.handle.indexOf('n')>-1) y1 = Math.min(Math.max(b.y+dy, T), y2-MIN);
+        if (drag.handle.indexOf('s')>-1) y2 = Math.max(Math.min(b.y+b.h+dy, B), y1+MIN);
+        box = { x:x1, y:y1, w:x2-x1, h:y2-y1 };
+      }
+      paint();
+    });
+    stage.addEventListener('pointerup', () => { drag = null; });
+    stage.addEventListener('pointercancel', () => { drag = null; });
+
+    function relayout(){ layout(); initBox(); paint(); }
+    function finish(r){ window.removeEventListener('resize', relayout); root.remove(); resolve(r); }
+    root.addEventListener('click', e => {
+      const act = e.target.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return finish(undefined);
+      if (act === 'skip') return finish(null);
+      const s = view.scale;
+      finish({ x:(box.x-view.x)/s, y:(box.y-view.y)/s, w:box.w/s, h:box.h/s });
+    });
+    window.addEventListener('resize', relayout);
+    requestAnimationFrame(relayout);
   });
 }
 
@@ -1637,46 +1841,145 @@ function compress(file, maxW=1100, q=0.82){
    copy — keep them in sync, or better, have the Worker serve it. Never repeat
    these fields in the prompt: duplicating the schema lowers output quality. */
 const EVENT_SCHEMA = {
-  type: 'array',
-  items: {
-    type: 'object',
-    propertyOrdering: ['event_name','longitude','latitude','date','time_start','time_finish','google_maps_link','city','description','space_name'],
-    required: ['event_name'],
-    properties: {
-      event_name:       { type:'string' },
-      longitude:        { type:'number', nullable:true, description:'Decimal degrees, west negative. Null if unknown.' },
-      latitude:         { type:'number', nullable:true, description:'Decimal degrees, south negative. Null if unknown.' },
-      date:             { type:'string', format:'date', nullable:true, description:'YYYY-MM-DD. A bare month and day means the next upcoming occurrence. A weekday with no date means the next occurrence of that weekday from today.' },
-      time_start:       { type:'string', nullable:true, description:'24 hour HH:MM.' },
-      time_finish:      { type:'string', nullable:true, description:'24 hour HH:MM. Start but no finish and known activity: assume 45 to 90 minutes, yoga or fitness 60. A venue opening hour is a door time: leave null.' },
-      google_maps_link: { type:'string', nullable:true, description:'https://www.google.com/maps/search/?api=1&query=LATITUDE,LONGITUDE, latitude first. Null if no coordinates.' },
-      city:             { type:'string', nullable:true },
-      description:      { type:'string', nullable:true, description:'Two or three short phrases inferred from the activity type. No dashes of any kind.' },
-      space_name:       { type:'string', nullable:true, description:'The venue, studio, host or community name.' }
+  type: 'object',
+  propertyOrdering: ['events','read_quality'],
+  required: ['events','read_quality'],
+  properties: {
+    events: {
+      type: 'array',
+      items: {
+        type: 'object',
+        propertyOrdering: ['event_name','space_name','venue_latitude','venue_longitude',
+          'date_literal','weekday_literal','year_literal','time_start','time_finish',
+          'recurrence','city','community','description','price','currency','contact','location_source'],
+        required: ['event_name'],
+        properties: {
+          event_name:      { type:'string' },
+          space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
+          venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
+          venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
+          date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed, e.g. "JULY 16th" or "16.08". Do not convert.' },
+          weekday_literal: { type:'string', nullable:true, description:'weekday as printed if any, e.g. "thursday". Do not convert to a date.' },
+          year_literal:    { type:'string', nullable:true, description:'year ONLY if printed. Null if the flyer omits it.' },
+          time_start:      { type:'string', nullable:true, description:'24 hour HH:MM' },
+          time_finish:     { type:'string', nullable:true, description:'24 hour HH:MM if printed. Null if only a start is shown.' },
+          recurrence:      { type:'string', nullable:true, description:'plain words if stated, e.g. "every sunday". Null for a one off.' },
+          city:            { type:'string', nullable:true, description:'town from flyer text, else from supplied EXIF location' },
+          community:       { type:'string', nullable:true, description:'wider local area, coarse and stable, e.g. "Ericeira" or "Mallorca"' },
+          description:     { type:'string', nullable:true, description:'two or three short phrases from the activity type. No dashes of any kind.' },
+          price:           { type:'number', nullable:true },
+          currency:        { type:'string', nullable:true },
+          contact:         { type:'string', nullable:true, description:'phone, handle or link exactly as printed' },
+          location_source: { type:'string', nullable:true, description:'one of printed_coordinates, printed_address, venue_name_only, none' }
+        }
+      }
+    },
+    read_quality: {
+      type: 'object',
+      propertyOrdering: ['is_event','legibility','unreadable','crop_would_help'],
+      required: ['is_event','legibility'],
+      properties: {
+        is_event:        { type:'boolean', description:'false if the photo carries no event information at all' },
+        legibility:      { type:'string', description:'clear, partial, or poor' },
+        unreadable:      { type:'array', nullable:true, items:{ type:'string' },
+                           description:'short names of what could not be read, e.g. "finish time"' },
+        crop_would_help: { type:'boolean', nullable:true,
+                           description:'true when the flyer fills a small part of the frame, sits at a steep angle, or is lost in clutter' }
+      }
     }
   }
 };
 
-/* Rebuild the maps link ourselves and backfill EXIF — never trust the model's
-   link string, and never let a forgotten fallback cost us the location. */
-function normalizeRows(rows, exif){
+/* ── date resolution, in code ─────────────────────────────────────
+   Reading "JULY 16th" off a poster is perception, which small models do
+   well. Working out which year that means, or which Sunday is next, is
+   arithmetic, which they do badly. So the model returns what is printed
+   and we do the maths here: deterministic, free, and testable. */
+const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const DAYS   = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+function resolveDate(row, today){
+  const now = today ? new Date(today + 'T00:00:00') : new Date();
+  const lit = (row.date_literal || '').toLowerCase().trim();
+
+  if (lit){
+    let d = null, mo = null;
+    // "july 16", "16 july", "16th july"
+    const named = lit.match(/([a-z]+)\.?\s*(\d{1,2})|(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s*)?([a-z]+)/);
+    if (named){
+      const nm = (named[1] || named[4] || '').slice(0,3);
+      const dd = named[2] || named[3];
+      const idx = MONTHS.indexOf(nm);
+      if (idx > -1 && dd){ mo = idx; d = parseInt(dd,10); }
+    }
+    // "16.08", "16/08", "2026-08-16"
+    if (mo == null){
+      const iso = lit.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+      if (iso) return `${iso[1]}-${String(+iso[2]).padStart(2,'0')}-${String(+iso[3]).padStart(2,'0')}`;
+      const num = lit.match(/(\d{1,2})[-./](\d{1,2})/);
+      if (num){ d = +num[1]; mo = +num[2] - 1; }
+    }
+    if (mo != null && d){
+      const yr = row.year_literal ? parseInt(row.year_literal,10) : null;
+      if (yr) return `${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      // no year printed: the next time this date comes round
+      let y = now.getFullYear();
+      const cand = new Date(y, mo, d);
+      if (cand < new Date(now.getFullYear(), now.getMonth(), now.getDate())) y += 1;
+      return `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    }
+  }
+
+  // weekday only: the next one from today
+  const wd = (row.weekday_literal || '').toLowerCase().trim();
+  const wi = DAYS.findIndex(x => wd.startsWith(x.slice(0,3)));
+  if (wi > -1){
+    const delta = ((wi - now.getDay()) + 7) % 7 || 7;
+    const t = new Date(now); t.setDate(now.getDate() + delta);
+    return t.toISOString().slice(0,10);
+  }
+  return '';
+}
+
+/* If a start time exists with no finish, infer a sensible session length. */
+function inferFinish(row){
+  if (row.time_finish) return String(row.time_finish).slice(0,5);
+  const t = row.time_start ? String(row.time_start).slice(0,5) : '';
+  if (!t) return '';
+  const blob = ((row.event_name||'') + ' ' + (row.description||'')).toLowerCase();
+  if (/\bopens?\b|door/.test(blob)) return '';              // door time, not a session
+  const mins = /yoga|pilates|fitness|class|workout/.test(blob) ? 60
+             : /dinner|supper|feast|lunch/.test(blob) ? 150
+             : /sauna|breathwork|meditation/.test(blob) ? 90 : 90;
+  const [h,m] = t.split(':').map(Number);
+  const end = new Date(2000,0,1,h,m + mins);
+  return String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
+}
+
+/* Rebuild the maps link ourselves and never let a forgotten fallback
+   cost us the town. Note EXIF fills city/community, never the pin. */
+function normalizeRows(rows, exif, today){
   const clean = v => (v === null || v === undefined || v === '') ? '' : v;
-  const hhmm  = v => { const s = clean(v); return s ? String(s).slice(0,5) : ''; };
   return rows.map(r => {
-    let lat = r.latitude, lng = r.longitude;
-    if ((lat == null || lng == null) && exif && exif.lat != null && exif.lng != null){ lat = exif.lat; lng = exif.lng; }
+    const lat = r.venue_latitude, lng = r.venue_longitude;
     const has = lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng);
     return {
-      event_name: clean(r.event_name),
-      longitude: has ? +(+lng).toFixed(6) : '',
-      latitude:  has ? +(+lat).toFixed(6) : '',
-      date: clean(r.date),
-      time_start: hhmm(r.time_start),
-      time_finish: hhmm(r.time_finish),
+      event_name:  clean(r.event_name),
+      space_name:  clean(r.space_name),
+      venue_latitude:  has ? +(+lat).toFixed(6) : '',
+      venue_longitude: has ? +(+lng).toFixed(6) : '',
+      date:        resolveDate(r, today),
+      time_start:  r.time_start ? String(r.time_start).slice(0,5) : '',
+      time_finish: inferFinish(r),
+      recurrence:  clean(r.recurrence),
+      city:        clean(r.city),
+      community:   clean(r.community),
+      price:       (r.price == null ? '' : r.price),
+      currency:    clean(r.currency) || 'EUR',
+      contact:     clean(r.contact),
       google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
-      city: clean(r.city),
       description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
-      space_name: clean(r.space_name)
+      location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none')
     };
   }).filter(r => r.event_name);
 }
@@ -1695,8 +1998,9 @@ async function extractEvent(base64, exif){
       err.soft = (r.status === 403 || r.status === 429);   // show the reason, not a generic failure
       throw err;
     }
-    const rows = await r.json();
-    return Array.isArray(rows) ? rows : [rows];
+    const out = await r.json();
+    const rows = Array.isArray(out) ? out : (out.events || []);
+    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
   }
   // DEV: direct Gemini from the browser. One user, localhost, key not shipped.
   if (GEMINI_KEY_DEV){
@@ -1722,10 +2026,10 @@ async function extractEvent(base64, exif){
       err.soft = d?.error?.code === 429;
       throw err;
     }
-    const text = (d.candidates?.[0]?.content?.parts || []).map(p => p.text).join('') || '[]';
-    let rows = JSON.parse(text);
-    if (!Array.isArray(rows)) rows = [rows];
-    return normalizeRows(rows, exif);
+    const text = (d.candidates?.[0]?.content?.parts || []).map(p => p.text).join('') || '{}';
+    const out = JSON.parse(text);
+    const rows = Array.isArray(out) ? out : (out.events || []);
+    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
   }
 
   // DEMO: inline model call so the flow runs without any key or backend
@@ -1749,7 +2053,18 @@ async function extractEvent(base64, exif){
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
 function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElementById(id).value = v; }
+
+/* Photo GPS names the town and centres the map. It NEVER drops the pin:
+   a flyer in a cafe window advertises something happening elsewhere. */
+function setPhotoOrigin(lat, lng){
+  draft.photoLat = lat; draft.photoLng = lng;
+  if (window._miniMap) window._miniMap.setView([lat, lng], 12);
+  const el = document.getElementById('coordsLabel');
+  if (draft.lat == null) el.textContent = 'tap on map to set location';
+}
 
 function fillForm(row){
   setVal('inputTitle', row.event_name);
@@ -1757,11 +2072,15 @@ function fillForm(row){
   setVal('inputVenue', row.space_name);
   setVal('inputDate', row.date);
   if (row.time_start) setVal('inputTime', String(row.time_start).slice(0,5));
+  if (row.price != null && row.price !== '') setVal('inputPrice', row.price);
+  draft.community = row.community || '';
+  if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
   draft.city = row.city || '';
   draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
   draft.mapsLink = row.google_maps_link || '';
-  const lat = (row.latitude!=null && row.latitude!=='') ? Number(row.latitude) : null;
-  const lng = (row.longitude!=null && row.longitude!=='') ? Number(row.longitude) : null;
+  // the pin comes only from coordinates PRINTED on the flyer, never from EXIF
+  const lat = (row.venue_latitude!=null && row.venue_latitude!=='') ? Number(row.venue_latitude) : null;
+  const lng = (row.venue_longitude!=null && row.venue_longitude!=='') ? Number(row.venue_longitude) : null;
   if (lat!=null && lng!=null && !Number.isNaN(lat) && !Number.isNaN(lng)) setEventLocation(lat, lng, true);
   else if (draft.city) document.getElementById('coordsLabel').textContent = `${draft.city} · drop a pin to set the spot`;
 }
@@ -1782,54 +2101,101 @@ coverPicker.addEventListener('keydown', (e) => {
 });
 document.getElementById('coverReplace').addEventListener('click', openPicker);
 
-coverInput.addEventListener('change', async (e) => {
-  const file = e.target.files && e.target.files[0];
-  coverInput.value = '';
-  if (!file) return;
-  coverNotice.className = 'cover-notice';
+/* Holds the decoded photo so a re-crop never re-reads the file. */
+let sourceBitmap = null, sourceExif = null;
 
-  // EXIF from ORIGINAL bytes first (jpeg only)
-  let exif = null;
-  if (/jpe?g$/i.test(file.type) || /jpe?g$/i.test(file.name)){
-    try { exif = readJpegExif(await file.arrayBuffer()); } catch(_){}
-  }
-  const img = await compress(file);
-  if (!img){ coverNotice.classList.add('show','err'); coverNotice.textContent = "couldn't read that image. try a jpg or png?"; return; }
-
-  // preview
-  draft.cover = img.dataUrl;
-  document.getElementById('coverImg').src = img.dataUrl;
-  document.getElementById('coverImg').hidden = false;
+function showCover(dataUrl){
+  draft.cover = dataUrl;
+  const im = document.getElementById('coverImg');
+  im.src = dataUrl; im.hidden = false;
   document.getElementById('coverGrad').hidden = false;
   document.getElementById('coverReplace').hidden = false;
   document.getElementById('coverIcon').style.display = 'none';
   document.getElementById('coverLabel').style.display = 'none';
   document.getElementById('coverHint').style.display = 'none';
   coverPicker.classList.add('has-image');
+}
 
-  // recognize
+/* Runs the model on a crop (or the whole photo) and updates the form. */
+async function readPhoto(crop){
+  const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.85);
+  showCover(render(sourceBitmap, crop, COVER_MAX_SIDE, 0.85).dataUrl);
+
   coverBusy.classList.add('show');
   try {
-    const rows = await extractEvent(img.base64, exif);
+    const out = await extractEvent(send.base64, sourceExif);
     coverBusy.classList.remove('show');
-    if (rows && rows.length){
-      fillForm(rows[0]);
-      coverNotice.classList.add('show');
-      coverNotice.textContent = rows.length > 1
-        ? `filled from your photo — ${rows.length} dates found, showing the first. edit anything.`
-        : 'filled from your photo. edit anything.';
-    } else {
-      coverNotice.classList.add('show'); coverNotice.textContent = 'nothing to read there. fill it in yourself.';
+
+    const rows = out.events || out;
+    const rq   = out.read_quality || {};
+
+    if (rq.is_event === false){
+      coverNotice.className = 'cover-notice show err';
+      coverNotice.textContent = "that doesn't look like an event. try another photo?";
+      return;
     }
+    if (!rows || !rows.length){
+      coverNotice.className = 'cover-notice show';
+      coverNotice.textContent = 'nothing to read there. fill it in yourself.';
+      return;
+    }
+
+    fillForm(rows[0]);
+    coverNotice.className = 'cover-notice show';
+
+    // Only ask for a crop when we can name what we missed. An unexplained
+    // "try cropping" is a chore; a named one is a repair the user chooses.
+    const weak = rq.legibility === 'poor' || rq.legibility === 'partial' || rq.crop_would_help;
+    if (weak && !crop){
+      const missed = (rq.unreadable && rq.unreadable.length)
+        ? "couldn't read " + rq.unreadable.slice(0, 2).join(' or ')
+        : 'some of that was hard to read';
+      coverNotice.innerHTML = missed + '. <button type="button" id="recropBtn" class="cover-recrop">crop closer</button>';
+      document.getElementById('recropBtn').addEventListener('click', async () => {
+        const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
+        if (c !== undefined) readPhoto(c);
+      });
+      return;
+    }
+    coverNotice.textContent = rows.length > 1
+      ? `filled from your photo — ${rows.length} dates found, showing the first. edit anything.`
+      : 'filled from your photo. edit anything.';
+
   } catch(err){
     coverBusy.classList.remove('show');
-    coverNotice.classList.add('show','err');
-    // gate messages ('not on the list yet', 'that is your photos for today') are
-    // already in voice — show them as-is rather than a generic failure
+    coverNotice.className = 'cover-notice show err';
     coverNotice.textContent = err.soft ? err.message : "couldn't read that photo. fill it in yourself?";
-    if (exif && exif.lat!=null) setEventLocation(exif.lat, exif.lng, true);   // location still works
+    if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
   }
+}
+
+coverInput.addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  coverInput.value = '';
+  if (!file) return;
+  coverNotice.className = 'cover-notice';
+
+  // EXIF comes off the untouched bytes, before anything decodes or re-encodes.
+  // Works for HEIC too, which is what an iPhone actually hands over.
+  sourceExif = null;
+  try { sourceExif = readExif(await file.arrayBuffer()); } catch(_){}
+
+  coverBusy.classList.add('show');
+  try {
+    const dec = await decodeImage(file);
+    sourceBitmap = dec.bitmap;
+  } catch(_){
+    coverBusy.classList.remove('show');
+    coverNotice.className = 'cover-notice show err';
+    coverNotice.textContent = "couldn't open that photo. try a jpg or png?";
+    return;
+  }
+  coverBusy.classList.remove('show');
+
+  // Straight through, no crop. The crop is offered afterwards, only if needed.
+  readPhoto(null);
 });
+
 
 /* reset the form after a successful publish */
 function resetCreateForm(){
