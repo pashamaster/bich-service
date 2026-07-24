@@ -132,27 +132,53 @@ export default {
 async function uploadImage(request, env, origin) {
   if (!env.COVERS) return json({ error: 'no bucket bound' }, 500, origin);
 
-  const type = request.headers.get('Content-Type') || 'image/webp';
-  if (!/^image\/(webp|jpeg|png)$/.test(type)) return json({ error: 'images only' }, 415, origin);
+  /* Two derivatives arrive as one multipart form: a small one for feed
+     cards and a large one for the detail hero. The browser has already
+     cropped and resized both, which is why no server side image
+     processing is needed here - and why this stays on the free tier. */
+  let form;
+  try { form = await request.formData(); }
+  catch { return json({ error: 'send a form' }, 400, origin); }
 
-  const buf = await request.arrayBuffer();
-  if (buf.byteLength > 3 * 1024 * 1024) return json({ error: 'image too large' }, 413, origin);
+  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const out = {};
 
-  const ext = type.split('/')[1].replace('jpeg', 'jpg');
-  const key = `c/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  for (const variant of ['full', 'thumb']) {
+    const file = form.get(variant);
+    if (!file || typeof file === 'string') continue;
 
-  await env.COVERS.put(key, buf, {
-    httpMetadata: {
-      contentType: type,
-      /* The key is unique per upload, so this can cache forever.
-         Repeat views are served from the edge and never touch the
-         bucket, which is what keeps R2 effectively free. */
-      cacheControl: 'public, max-age=31536000, immutable'
-    }
-  });
+    const type = file.type || 'image/webp';
+    if (!/^image\/(webp|jpeg|png)$/.test(type)) return json({ error: 'images only' }, 415, origin);
 
+    const buf = await file.arrayBuffer();
+    const cap = variant === 'thumb' ? 400 * 1024 : 3 * 1024 * 1024;
+    if (buf.byteLength > cap) return json({ error: 'image too large' }, 413, origin);
+
+    const ext = type.split('/')[1].replace('jpeg', 'jpg');
+    const key = `c/${stamp}${variant === 'thumb' ? '-t' : ''}.${ext}`;
+
+    await env.COVERS.put(key, buf, {
+      httpMetadata: {
+        contentType: type,
+        /* The key is unique per upload, so this may cache forever.
+           Repeat views come from the edge and never touch the bucket,
+           which is what keeps R2 effectively free. */
+        cacheControl: 'public, max-age=31536000, immutable'
+      }
+    });
+    out[variant] = key;
+  }
+
+  if (!out.full) return json({ error: 'no image' }, 400, origin);
+
+  // Fall back to serving through this worker when no image domain is
+  // configured, so covers work before img.bich.app exists.
   const base = env.PUBLIC_IMG_BASE || (new URL(request.url).origin + '/img');
-  return json({ url: `${base}/${key}`, key }, 200, origin);
+  return json({
+    url:   `${base}/${out.full}`,
+    thumb: out.thumb ? `${base}/${out.thumb}` : `${base}/${out.full}`,
+    key:   out.full
+  }, 200, origin);
 }
 
 async function serveImage(request, env, origin) {

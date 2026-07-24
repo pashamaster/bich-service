@@ -24,7 +24,9 @@ ALLOWED_ORIGINS = "https://bich.app,https://www.bich.app"
 # Serve covers straight from R2's own custom domain rather than
 # through the worker: fewer invocations, and the edge cache does the
 # work. Set img.bich.app as a custom domain on the bucket first.
-PUBLIC_IMG_BASE = "https://img.bich.app"
+# Not set until img.bich.app exists as an R2 custom domain. Until
+# then covers are served by the worker itself at api.bich.app/img/.
+# PUBLIC_IMG_BASE = "https://img.bich.app"
 
 # Empty = open. Add comma separated codes to gate the photo feature.
 BICH_INVITE_CODES = ""

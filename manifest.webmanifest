@@ -11,8 +11,8 @@
     "minimal-ui"
   ],
   "orientation": "portrait",
-  "background_color": "#0a0908",
-  "theme_color": "#0a0908",
+  "background_color": "#f4efe6",
+  "theme_color": "#f4efe6",
   "categories": [
     "events",
     "social",

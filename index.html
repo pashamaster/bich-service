@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="sun">
+<html lang="en" data-theme="paper">
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
@@ -16,7 +16,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://bich.app/" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<meta name="theme-color" content="#0a0908" />
+<meta name="theme-color" content="#f4efe6" />
 <title>bich.service — events that find their people</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -163,11 +163,34 @@ body { display: flex; align-items: center; justify-content: center; }
   body { background: var(--desk); }
   .phone-stage {
     border-radius: 36px;
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
     box-shadow: 0 30px 100px rgba(0,0,0,0.35), 0 0 0 8px var(--desk), 0 0 0 9px var(--border);
     margin: 20px;
   }
 }
+
+
+/* ─── ME ─── */
+.me-body { flex: 1; overflow-y: auto; padding: var(--space-md) var(--space-md) 96px; }
+.me-block { margin-bottom: var(--space-2xl); }
+.me-block > .text-label { display: block; margin-bottom: var(--space-sm); }
+.me-handle {
+  font-family: var(--font-serif); font-style: italic; font-size: 1.9rem;
+  color: var(--accent); line-height: 1.1;
+}
+.me-note { font-size: 0.72rem; line-height: 1.55; color: var(--muted); margin-top: var(--space-sm); }
+.me-stats {
+  display: flex; gap: var(--space-sm); margin-bottom: var(--space-2xl);
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: var(--space-md) 0;
+}
+.me-stats > div { flex: 1; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.me-stats strong {
+  font-family: var(--font-serif); font-style: italic; font-weight: 400;
+  font-size: 1.6rem; color: var(--text); line-height: 1;
+}
+.me-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
+.me-row__label { font-size: 0.72rem; color: var(--muted); }
 
 /* ─── APP CHROME ─── */
 .app-header {
@@ -404,11 +427,11 @@ body { display: flex; align-items: center; justify-content: center; }
   letter-spacing: 0.2em;
   text-transform: uppercase;
   cursor: pointer;
-  box-shadow: 0 8px 32px rgba(200, 169, 110, 0.25);
+  box-shadow: 0 8px 32px var(--accent-dim);
   transition: all var(--ease);
   z-index: 50;
 }
-.fab:hover { transform: translateX(-50%) scale(1.04); box-shadow: 0 12px 40px rgba(200, 169, 110, 0.35); }
+.fab:hover { transform: translateX(-50%) scale(1.04); box-shadow: 0 12px 40px var(--border-accent); }
 .fab:active { transform: translateX(-50%) scale(0.96); }
 .fab svg { width: 14px; height: 14px; }
 
@@ -431,7 +454,7 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-mono);
   font-size: 0.7rem;
   font-weight: 500;
-  box-shadow: 0 4px 12px rgba(200, 169, 110, 0.4);
+  box-shadow: 0 4px 12px var(--border-accent);
 }
 .map-marker--single { width: 14px; height: 14px; }
 
@@ -459,7 +482,7 @@ body { display: flex; align-items: center; justify-content: center; }
   cursor: pointer;
   transition: all var(--ease);
 }
-.map-chip.active { color: var(--accent); border-color: var(--border-accent); background: rgba(200, 169, 110, 0.1); }
+.map-chip.active { color: var(--accent); border-color: var(--border-accent); background: var(--accent-dim); }
 
 .map-footer-sheet {
   position: absolute; bottom: 0; left: 0; right: 0;
@@ -484,7 +507,7 @@ body { display: flex; align-items: center; justify-content: center; }
 /* ─── CREATE EVENT MODAL ─── */
 .modal-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: var(--scrim);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   z-index: 1000;
@@ -591,6 +614,12 @@ body { display: flex; align-items: center; justify-content: center; }
 .cover-picker.has-image { border-style: solid; cursor: default; }
 .cover-picker__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .cover-picker__grad { position: absolute; inset: 0; background: linear-gradient(to top, var(--scrim-soft), transparent 55%); }
+.cover-picker__crop {
+  position: absolute; bottom: 8px; left: 8px; z-index: 3;
+  background: var(--scrim); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 12px; min-height: 36px; cursor: pointer;
+  font-size: 0.55rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text);
+}
 .cover-picker__replace {
   position: absolute; bottom: 8px; right: 8px; z-index: 3;
   background: var(--scrim); border: 1px solid var(--border);
@@ -940,7 +969,7 @@ body { display: flex; align-items: center; justify-content: center; }
   min-height: 48px;
   font-weight: 500;
 }
-.btn--attend:hover { background: #d4b878; }
+.btn--attend:hover { background: var(--accent-bright, var(--accent)); }
 .btn--share {
   background: var(--surface);
   min-height: 48px;
@@ -1011,6 +1040,7 @@ body { display: flex; align-items: center; justify-content: center; }
   --img-brightness: 1;
   --scrim-soft:   rgba(13, 12, 10, 0.55);
   --scrim:        rgba(13, 12, 10, 0.66);
+  --accent-bright: #d4b878;
   --scrim-strong: rgba(13, 12, 10, 0.86);
   --desk: #050505;
   color-scheme: dark;
@@ -1042,6 +1072,7 @@ body { display: flex; align-items: center; justify-content: center; }
   --img-brightness: 1.06;
   --scrim-soft:   rgba(10, 9, 8, 0.62);
   --scrim:        rgba(10, 9, 8, 0.74);
+  --accent-bright: #eed9a8;
   --scrim-strong: rgba(10, 9, 8, 0.90);
   --desk: #030302;
   color-scheme: dark;
@@ -1077,6 +1108,7 @@ body { display: flex; align-items: center; justify-content: center; }
   --img-brightness: 0.97;
   --scrim-soft:   rgba(244, 239, 230, 0.62);
   --scrim:        rgba(244, 239, 230, 0.80);
+  --accent-bright: #5e4718;
   --scrim-strong: rgba(244, 239, 230, 0.93);
   --desk: #ddd5c6;
   color-scheme: light;
@@ -1248,13 +1280,7 @@ if ('serviceWorker' in navigator) {
         </svg>
         <input type="text" placeholder="search events, venues, vibes" />
       </div>
-      <!-- light: reachable in one tap, because the person needing it
-           is standing outside squinting at the screen -->
-      <div class="theme-switch" id="themeSwitch">
-        <button type="button" data-theme="night" aria-pressed="true">night</button>
-        <button type="button" data-theme="sun"   aria-pressed="false">sun</button>
-        <button type="button" data-theme="paper" aria-pressed="false">paper</button>
-      </div>
+
     </div>
 
     <!-- Bundle: For you -->
@@ -1310,6 +1336,51 @@ if ('serviceWorker' in navigator) {
   </button>
 
   <!-- TAB BAR -->
+
+  <!-- ME -->
+  <main class="screen" id="screen-me" style="display:none;">
+    <div class="app-header">
+      <div class="brand">bich<small>· service ·</small></div>
+    </div>
+    <div class="me-body">
+      <div class="me-block">
+        <span class="text-label">you are</span>
+        <div class="me-handle" id="meHandle">slide tem</div>
+        <p class="me-note">no account, no email. this name is how the app knows you on this device.</p>
+      </div>
+
+      <div class="me-stats">
+        <div><strong id="meGoing">0</strong><span class="text-label">going</span></div>
+        <div><strong id="meAttended">0</strong><span class="text-label">attended</span></div>
+        <div><strong id="meHosting">0</strong><span class="text-label">hosting</span></div>
+      </div>
+
+      <div class="me-block">
+        <span class="text-label">light</span>
+        <div class="theme-switch" id="themeSwitch">
+          <button type="button" data-theme="paper" aria-pressed="true">paper</button>
+          <button type="button" data-theme="sun"   aria-pressed="false">sun</button>
+          <button type="button" data-theme="night" aria-pressed="false">night</button>
+        </div>
+        <p class="me-note">paper reads best outside. night is easier on the eyes indoors.</p>
+      </div>
+
+      <div class="me-block">
+        <span class="text-label">recovery</span>
+        <div class="me-row">
+          <span class="me-row__label" id="passkeyState">no passkey saved</span>
+          <button class="btn" id="mePasskey">save a passkey</button>
+        </div>
+        <p class="me-note">your history lives on this device. a passkey lets it follow you to another one.</p>
+      </div>
+
+      <div class="me-block">
+        <span class="text-label">storage</span>
+        <p class="me-note" id="persistState">checking…</p>
+      </div>
+    </div>
+  </main>
+
   <nav class="tabbar">
     <button class="tab active" data-screen="home">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -1358,6 +1429,7 @@ if ('serviceWorker' in navigator) {
         <span class="cover-picker__hint" id="coverHint">optional · tap to upload — we'll read the details</span>
         <img class="cover-picker__img" id="coverImg" alt="" hidden />
         <div class="cover-picker__grad" id="coverGrad" hidden></div>
+        <button type="button" class="cover-picker__crop" id="coverCrop" hidden>crop</button>
         <button type="button" class="cover-picker__replace" id="coverReplace" hidden>replace</button>
         <div class="cover-picker__busy" id="coverBusy"><div class="cover-picker__spinner"></div><span>reading your photo</span></div>
       </div>
@@ -1814,11 +1886,11 @@ async function sbUpsert(table, row){
 }
 
 /* ─── TAB SWITCHING ─── */
-const screens = { home: 'screen-home', map: 'screen-map' };
+const screens = { home: 'screen-home', map: 'screen-map', profile: 'screen-me' };
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const target = tab.dataset.screen;
-    if (target === 'profile') return; // not implemented in prototype
+    if (target === 'profile') { renderMe(); applyTheme(Store.data.theme || 'paper'); }
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     Object.entries(screens).forEach(([k, id]) => {
@@ -2141,17 +2213,28 @@ async function sbInsert(table, row){
 /* Covers go to Cloudflare R2 through the worker. R2 charges nothing
    for egress at any volume, which is the whole reason images live
    there and not beside the database. */
-async function uploadCover(dataUrl){
-  if (!WORKER_URL || !dataUrl) return null;
-  const blob = await (await fetch(dataUrl)).blob();
-  const r = await fetch(WORKER_URL + '/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': blob.type, 'X-Bich-Invite': readInvite() },
-    body: blob
-  });
-  if (!r.ok) return null;
-  const out = await r.json().catch(() => null);
-  return out && out.url;
+async function uploadCover(){
+  if (!WORKER_URL || !sourceBitmap) return null;
+
+  /* Two sizes, both made in the browser from the cropped original:
+     600px for feed cards, 1400px for the detail hero. Storing both
+     costs nothing against a 10GB bucket and stops the feed pulling
+     full size images. No server side resizing needed, which is what
+     keeps this on the free tier. */
+  const full  = render(sourceBitmap, draft.crop, COVER_MAX_SIDE, 0.85);
+  const thumb = render(sourceBitmap, draft.crop, THUMB_MAX_SIDE, 0.78);
+
+  const form = new FormData();
+  form.append('full',  await (await fetch(full.dataUrl)).blob(),  'full.webp');
+  form.append('thumb', await (await fetch(thumb.dataUrl)).blob(), 'thumb.webp');
+
+  try {
+    const r = await fetch(WORKER_URL + '/upload', {
+      method: 'POST', headers: { 'X-Bich-Invite': readInvite() }, body: form
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(_) { return null; }
 }
 
 /* ── the feed ──────────────────────────────────────────────────────
@@ -2207,12 +2290,28 @@ function applyTheme(name){
     b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
 }
 function initThemes(){
-  applyTheme(Store.data.theme || 'sun');
+  applyTheme(Store.data.theme || 'paper');
   const sw = document.getElementById('themeSwitch');
   if (sw) sw.addEventListener('click', e => {
     const b = e.target.closest('button[data-theme]');
     if (b) applyTheme(b.dataset.theme);
   });
+}
+
+/* The me screen is the only place identity and settings live. It is
+   read only by design: no avatar, no bio, no display name separate
+   from the handle (open question Q2's anti-features). */
+async function renderMe(){
+  document.getElementById('meHandle').textContent = currentHandle;
+  document.getElementById('meGoing').textContent    = Object.keys(Store.data.going).length;
+  document.getElementById('meAttended').textContent = Object.keys(Store.data.attended).length;
+  document.getElementById('meHosting').textContent  = Store.data.hosting.length;
+
+  const persisted = (navigator.storage && navigator.storage.persisted)
+    ? await navigator.storage.persisted().catch(() => false) : false;
+  document.getElementById('persistState').textContent = persisted
+    ? 'your history is protected on this device.'
+    : 'safari clears app storage after seven days without a visit. keeping bich on your home screen avoids that.';
 }
 /* ── share links & deep links ──────────────────────────────────────
    404.html turns bich.app/e/xf3k9q2m into /?e=xf3k9q2m, because
@@ -2350,6 +2449,7 @@ const GEMINI_KEY_DEV = '';
 const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
 const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
 const COVER_MAX_SIDE = 1400;   // long side stored as the cover
+const THUMB_MAX_SIDE = 600;    // long side used on feed cards
 
 // Photo recognition is alpha-gated to a handful of testers. An invite code is an
 // opaque string, not an identity — it maps to a quota bucket and nothing else,
@@ -2858,13 +2958,18 @@ const coverNotice = document.getElementById('coverNotice');
 
 function openPicker(){ coverInput.click(); }
 coverPicker.addEventListener('click', (e) => {
-  if (e.target.id === 'coverReplace') return;
+  if (e.target.id === 'coverReplace' || e.target.id === 'coverCrop') return;
   if (!coverPicker.classList.contains('has-image')) openPicker();
 });
 coverPicker.addEventListener('keydown', (e) => {
   if ((e.key==='Enter'||e.key===' ') && !coverPicker.classList.contains('has-image')){ e.preventDefault(); openPicker(); }
 });
 document.getElementById('coverReplace').addEventListener('click', openPicker);
+document.getElementById('coverCrop').addEventListener('click', async () => {
+  if (!sourceBitmap) return;
+  const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
+  if (c !== undefined) readPhoto(c);      // undefined means they backed out
+});
 
 /* Holds the decoded photo so a re-crop never re-reads the file. */
 let sourceBitmap = null, sourceExif = null;
@@ -2875,6 +2980,7 @@ function showCover(dataUrl){
   im.src = dataUrl; im.hidden = false;
   document.getElementById('coverGrad').hidden = false;
   document.getElementById('coverReplace').hidden = false;
+  document.getElementById('coverCrop').hidden = false;
   document.getElementById('coverIcon').style.display = 'none';
   document.getElementById('coverLabel').style.display = 'none';
   document.getElementById('coverHint').style.display = 'none';
@@ -2883,6 +2989,7 @@ function showCover(dataUrl){
 
 /* Runs the model on a crop (or the whole photo) and updates the form. */
 async function readPhoto(crop){
+  draft.crop = crop || null;          // reused when the cover is uploaded
   const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.85);
   showCover(render(sourceBitmap, crop, COVER_MAX_SIDE, 0.85).dataUrl);
 
@@ -2971,6 +3078,7 @@ function resetCreateForm(){
   document.getElementById('coverImg').hidden = true;
   document.getElementById('coverGrad').hidden = true;
   document.getElementById('coverReplace').hidden = true;
+  document.getElementById('coverCrop').hidden = true;
   document.getElementById('coverIcon').style.display = '';
   document.getElementById('coverLabel').style.display = '';
   document.getElementById('coverHint').style.display = '';
@@ -2978,7 +3086,8 @@ function resetCreateForm(){
   coverNotice.className = 'cover-notice';
   document.getElementById('coordsLabel').textContent = 'tap on map to set location';
   if (window._miniMap && miniMarker){ window._miniMap.removeLayer(miniMarker); miniMarker = null; }
-  Object.assign(draft, { cover:null, lat:null, lng:null, city:'', timeFinish:'', mapsLink:'' });
+  Object.assign(draft, { cover:null, crop:null, lat:null, lng:null, city:'', timeFinish:'', mapsLink:'', venueId:null });
+  sourceBitmap = null; sourceExif = null;
   // restore default date/time
   const t = new Date(); t.setDate(t.getDate()+1);
   document.getElementById('inputDate').value = t.toISOString().split('T')[0];
@@ -3046,7 +3155,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   if (SB_READY()){
     try {
       await ensureUser();
-      const coverUrl = await uploadCover(draft.cover);
+      const img = await uploadCover();
       const saved = await sbInsert('events', {
         host_id: CURRENT_USER.id || null,
         title: ev.title,
@@ -3065,13 +3174,19 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         price_currency: 'EUR',
         capacity: document.getElementById('inputCapacity').value
                   ? parseInt(document.getElementById('inputCapacity').value, 10) : null,
-        cover_url: coverUrl,
+        cover_url: img ? img.url : null,
         status: 'live',
         source: draft.cover ? 'photo' : 'manual'
       });
       ev.uuid = saved[0].id; ev.id = saved[0].short_id;
       Store.addHosting(ev.id);
-      if (coverUrl) ev.cover = coverUrl;
+      if (img) { ev.cover = img.thumb; ev.cover_full = img.url; }
+      else if (draft.cover) {
+        // The bucket is not reachable. Say so rather than showing a
+        // picture that will vanish on the next refresh.
+        coverNotice.className = 'cover-notice show err';
+        coverNotice.textContent = 'published, but the cover did not upload';
+      }
     } catch(err){
       btn.disabled = false;
       coverNotice.className = 'cover-notice show err';
