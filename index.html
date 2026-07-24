@@ -2269,13 +2269,17 @@ async function uploadCover(){
   form.append('full',  await (await fetch(full.dataUrl)).blob(),  'full.webp');
   form.append('thumb', await (await fetch(thumb.dataUrl)).blob(), 'thumb.webp');
 
-  try {
-    const r = await fetch(WORKER_URL + '/upload', {
-      method: 'POST', headers: { 'X-Bich-Invite': readInvite() }, body: form
-    });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch(_) { return null; }
+  const r = await fetch(WORKER_URL + '/upload', {
+    method: 'POST', headers: { 'X-Bich-Invite': readInvite() }, body: form
+  });
+  if (!r.ok){
+    const t = await r.text().catch(() => '');
+    // The reason belongs in the console, not swallowed. 403 = invite gate,
+    // 500 = bucket not bound, network error = worker not deployed or CORS.
+    console.error('[bich] cover upload failed', r.status, t);
+    throw new Error(`upload ${r.status}: ${t.slice(0,120) || 'no body'}`);
+  }
+  return await r.json();
 }
 
 /* ── the feed ──────────────────────────────────────────────────────
@@ -2515,6 +2519,61 @@ async function bichCheck(){
   console.log('%cdone', 'font-weight:700');
 }
 window.bichCheck = bichCheck;
+
+/* ── upload probe ──────────────────────────────────────────────────
+   Run bichUpload() in the console. Makes a tiny test image and pushes
+   it through the exact upload path, reporting the first thing wrong. */
+async function bichUpload(){
+  const log=(ok,l,d)=>console.log(`%c${ok?'  ok  ':' FAIL '}%c ${l}${d?'\n         '+d:''}`,
+    `background:${ok?'#1c5':'#c33'};color:#fff;font-weight:600`,'color:inherit');
+  console.log('%cbich upload probe','font-weight:700;font-size:13px');
+
+  if (!WORKER_URL){ log(false,'worker url','empty in config.js'); return; }
+  log(true,'worker url',WORKER_URL);
+
+  // 1. can the browser make a webp at all? (older Safari could not)
+  const c=document.createElement('canvas'); c.width=c.height=64;
+  const cx=c.getContext('2d'); cx.fillStyle='#c8a96e'; cx.fillRect(0,0,64,64);
+  const webp=c.toDataURL('image/webp');
+  const isWebp=webp.startsWith('data:image/webp');
+  log(isWebp,'webp encode', isWebp?'':'this browser fell back to png/jpeg — worker still accepts those');
+  const dataUrl = isWebp ? webp : c.toDataURL('image/jpeg');
+
+  // 2. build the same multipart form the app sends
+  const blob = await (await fetch(dataUrl)).blob();
+  const form = new FormData();
+  form.append('full', blob, 'full.webp');
+  form.append('thumb', blob, 'thumb.webp');
+
+  // 3. push it
+  let r;
+  try {
+    r = await fetch(WORKER_URL+'/upload',{method:'POST',headers:{'X-Bich-Invite':readInvite()},body:form});
+  } catch(e){
+    log(false,'reach worker', e.message+'  ▸ worker not deployed, or ALLOWED_ORIGINS blocks '+location.origin);
+    return;
+  }
+  const text = await r.text();
+  if (!r.ok){
+    log(false,`upload (${r.status})`, text.slice(0,200));
+    if (r.status===403) console.log('%c     ▸ invite gate is on. set BICH_INVITE_CODES="" in wrangler and redeploy, or set invite in config.js','color:#a80');
+    if (r.status===500) console.log('%c     ▸ the R2 bucket is not bound. check [[r2_buckets]] in wrangler.toml, then redeploy','color:#a80');
+    if (r.status===404) console.log('%c     ▸ /upload route not found. the worker is old — redeploy the current worker.js','color:#a80');
+    return;
+  }
+  const out = JSON.parse(text);
+  log(true,'upload ok', out.url);
+
+  // 4. can the returned url actually be fetched back?
+  try {
+    const img = await fetch(out.url, {cache:'no-store'});
+    log(img.ok, 'read back', img.ok ? out.url : `${img.status} — img.bich.app custom domain may be missing`);
+  } catch(e){ log(false,'read back', e.message+'  ▸ img.bich.app is not serving'); }
+
+  console.log('%cdone','font-weight:700');
+}
+window.bichUpload = bichUpload;
+
 
 initThemes();
 
@@ -3158,7 +3217,14 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   if (SB_READY()){
     try {
       await ensureUser();
-      const img = await uploadCover();
+      let img = null;
+      try { img = await uploadCover(); }
+      catch(upErr){
+        // The event is worth saving even if the cover did not upload.
+        // Record it, tell the person plainly, do not lose their event.
+        console.error('[bich] cover did not upload:', upErr.message);
+        window._lastUploadError = upErr.message;
+      }
       const saved = await sbInsert('events', {
         host_id: CURRENT_USER.id || null,
         title: ev.title,
@@ -3184,12 +3250,6 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
       ev.uuid = saved[0].id; ev.id = saved[0].short_id;
       Store.addHosting(ev.id);
       if (img) { ev.cover = img.thumb; ev.cover_full = img.url; }
-      else if (draft.cover) {
-        // The bucket is not reachable. Say so rather than showing a
-        // picture that will vanish on the next refresh.
-        coverNotice.className = 'cover-notice show err';
-        coverNotice.textContent = 'published, but the cover did not upload';
-      }
     } catch(err){
       btn.disabled = false;
       coverNotice.className = 'cover-notice show err';
@@ -3206,6 +3266,11 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   renderBundles();
   if (SB_READY()) loadFeed();   // pull it back with real counts
 
+  if (window._lastUploadError){
+    alert('event published, but the cover image did not upload:\n\n' +
+          window._lastUploadError + '\n\nrun bichUpload() in the console to see why');
+    window._lastUploadError = null;
+  }
   btn.textContent = '✓ event published';
   setTimeout(() => {
     closeCreate();
