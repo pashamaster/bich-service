@@ -146,11 +146,11 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 
 @media (min-width: 480px) {
-  body { background: #050505; }
+  body { background: var(--desk); }
   .phone-stage {
     border-radius: 36px;
     border: 1px solid rgba(255,255,255,0.06);
-    box-shadow: 0 30px 100px rgba(0,0,0,0.8), 0 0 0 8px #050505, 0 0 0 9px rgba(255,255,255,0.04);
+    box-shadow: 0 30px 100px rgba(0,0,0,0.35), 0 0 0 8px var(--desk), 0 0 0 9px var(--border);
     margin: 20px;
   }
 }
@@ -297,7 +297,7 @@ body { display: flex; align-items: center; justify-content: center; }
 .event-card__media::after {
   content: '';
   position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 30%, rgba(0,0,0,0) 60%, rgba(10,10,10,0.85) 100%);
+  background: linear-gradient(180deg, var(--scrim-soft) 0%, transparent 30%, transparent 60%, var(--scrim-strong) 100%);
 }
 
 .event-card__overlay {
@@ -311,7 +311,7 @@ body { display: flex; align-items: center; justify-content: center; }
 
 .crossed-paths {
   display: flex; align-items: center; gap: 6px;
-  background: rgba(10,10,10,0.6);
+  background: var(--scrim);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-accent);
@@ -331,7 +331,7 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 
 .attendee-count {
-  background: rgba(10,10,10,0.6);
+  background: var(--scrim);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
@@ -403,7 +403,7 @@ body { display: flex; align-items: center; justify-content: center; }
 #map { width: 100%; height: 100%; background: var(--bg-elevated); }
 
 .leaflet-container { background: var(--bg-elevated) !important; font-family: var(--font-mono) !important; }
-.leaflet-control-attribution { background: rgba(10,10,10,0.7) !important; color: var(--muted) !important; font-size: 9px !important; }
+.leaflet-control-attribution { background: var(--scrim) !important; color: var(--muted) !important; font-size: 9px !important; }
 .leaflet-control-attribution a { color: var(--accent) !important; }
 .leaflet-control-zoom a { background: var(--surface) !important; color: var(--text) !important; border-color: var(--border) !important; }
 
@@ -432,7 +432,7 @@ body { display: flex; align-items: center; justify-content: center; }
 .map-chip {
   flex-shrink: 0;
   padding: 8px 14px;
-  background: rgba(10,10,10,0.85);
+  background: var(--scrim-strong);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
@@ -576,10 +576,10 @@ body { display: flex; align-items: center; justify-content: center; }
 /* Cover — image chosen */
 .cover-picker.has-image { border-style: solid; cursor: default; }
 .cover-picker__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.cover-picker__grad { position: absolute; inset: 0; background: linear-gradient(to top, rgba(10,10,10,0.55), transparent 55%); }
+.cover-picker__grad { position: absolute; inset: 0; background: linear-gradient(to top, var(--scrim-soft), transparent 55%); }
 .cover-picker__replace {
   position: absolute; bottom: 8px; right: 8px; z-index: 3;
-  background: rgba(10,10,10,0.65); border: 1px solid var(--border);
+  background: var(--scrim); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer;
   font-size: 0.55rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text);
 }
@@ -587,7 +587,7 @@ body { display: flex; align-items: center; justify-content: center; }
 .cover-picker__busy {
   position: absolute; inset: 0; z-index: 4; display: none;
   flex-direction: column; align-items: center; justify-content: center; gap: 12px;
-  background: rgba(10,10,10,0.78); color: var(--muted);
+  background: var(--scrim-strong); color: var(--muted);
 }
 .cover-picker__busy.show { display: flex; }
 .cover-picker__spinner {
@@ -632,7 +632,7 @@ body { display: flex; align-items: center; justify-content: center; }
 .cropper__hint { font-size: 0.6rem; letter-spacing: 0.1em; color: var(--muted); }
 .cropper__stage { position: relative; flex: 1; margin: var(--space-sm) var(--space-md); overflow: hidden; touch-action: none; }
 .cropper__canvas { position: absolute; display: block; }
-.cropper__shade { position: absolute; inset: 0; background: rgba(10,10,10,0.62); pointer-events: none; }
+.cropper__shade { position: absolute; inset: 0; background: var(--scrim); pointer-events: none; }
 .cropper__rect { position: absolute; border: 1px solid var(--accent); cursor: move; touch-action: none; }
 /* handles look small, but the touch target is 44px */
 .cropper__rect i {
@@ -640,7 +640,7 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 .cropper__rect i::after {
   content: ''; position: absolute; width: 16px; height: 16px;
-  border: 2px solid var(--accent); background: rgba(10,10,10,0.5);
+  border: 2px solid var(--accent); background: var(--scrim-soft);
 }
 .cropper__rect i[data-h="nw"] { left: -22px; top: -22px; cursor: nwse-resize; }
 .cropper__rect i[data-h="nw"]::after { left: 14px; top: 14px; border-right: none; border-bottom: none; }
@@ -675,7 +675,7 @@ body { display: flex; align-items: center; justify-content: center; }
 .mini-map-overlay {
   position: absolute;
   bottom: 8px; left: 8px; right: 8px;
-  background: rgba(10,10,10,0.85);
+  background: var(--scrim-strong);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   padding: 8px 12px;
@@ -821,7 +821,7 @@ body { display: flex; align-items: center; justify-content: center; }
   right: calc(max(env(safe-area-inset-right, 0px), 0px) + 14px);
   width: 44px; height: 44px;
   border-radius: 50%;
-  background: rgba(10,10,10,0.6);
+  background: var(--scrim);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
@@ -995,6 +995,10 @@ body { display: flex; align-items: center; justify-content: center; }
 
   --grain-opacity: 0.028;
   --img-brightness: 1;
+  --scrim-soft:   rgba(13, 12, 10, 0.55);
+  --scrim:        rgba(13, 12, 10, 0.66);
+  --scrim-strong: rgba(13, 12, 10, 0.86);
+  --desk: #050505;
   color-scheme: dark;
 }
 
@@ -1022,6 +1026,10 @@ body { display: flex; align-items: center; justify-content: center; }
 
   --grain-opacity: 0.008;
   --img-brightness: 1.06;
+  --scrim-soft:   rgba(10, 9, 8, 0.62);
+  --scrim:        rgba(10, 9, 8, 0.74);
+  --scrim-strong: rgba(10, 9, 8, 0.90);
+  --desk: #030302;
   color-scheme: dark;
 }
 
@@ -1053,6 +1061,10 @@ body { display: flex; align-items: center; justify-content: center; }
 
   --grain-opacity: 0.030;
   --img-brightness: 0.97;
+  --scrim-soft:   rgba(244, 239, 230, 0.62);
+  --scrim:        rgba(244, 239, 230, 0.80);
+  --scrim-strong: rgba(244, 239, 230, 0.93);
+  --desk: #ddd5c6;
   color-scheme: light;
 }
 
@@ -1206,6 +1218,13 @@ if ('serviceWorker' in navigator) {
           <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
         </svg>
         <input type="text" placeholder="search events, venues, vibes" />
+      </div>
+      <!-- light: reachable in one tap, because the person needing it
+           is standing outside squinting at the screen -->
+      <div class="theme-switch" id="themeSwitch">
+        <button type="button" data-theme="night" aria-pressed="true">night</button>
+        <button type="button" data-theme="sun"   aria-pressed="false">sun</button>
+        <button type="button" data-theme="paper" aria-pressed="false">paper</button>
       </div>
     </div>
 
@@ -1991,24 +2010,11 @@ function initThemes(){
   let saved = null;
   try { saved = localStorage.getItem('bich_theme'); } catch(_){}
   applyTheme(saved || 'night');
-
-  // offer the switch inside the profile screen if there is room for it
-  const host = document.querySelector('#screen-me .screen-body') ||
-               document.querySelector('#screen-me') ||
-               document.querySelector('.profile-body');
-  if (host && !host.querySelector('.theme-switch')){
-    const wrap = document.createElement('div');
-    wrap.innerHTML = '<span class="text-label" style="display:block;margin-top:24px">light</span>' +
-      '<div class="theme-switch">' +
-      THEMES.map(t => `<button type="button" data-theme="${t}" aria-pressed="false">${t}</button>`).join('') +
-      '</div>';
-    host.appendChild(wrap);
-    wrap.addEventListener('click', e => {
-      const b = e.target.closest('button[data-theme]');
-      if (b) applyTheme(b.dataset.theme);
-    });
-    applyTheme(document.documentElement.dataset.theme);
-  }
+  const sw = document.getElementById('themeSwitch');
+  if (sw) sw.addEventListener('click', e => {
+    const b = e.target.closest('button[data-theme]');
+    if (b) applyTheme(b.dataset.theme);
+  });
 }
 initThemes();
 
