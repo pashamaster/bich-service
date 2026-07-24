@@ -16,7 +16,7 @@
    Bump CACHE_VERSION on every release. That is the whole ritual.
    ══════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = '2026-07-23-01';
+const CACHE_VERSION = '2026-07-24-01';
 const CACHE = `bich-${CACHE_VERSION}`;
 
 self.addEventListener('install', (e) => {
@@ -42,7 +42,11 @@ self.addEventListener('fetch', (e) => {
   const isDoc = req.mode === 'navigate' ||
                 (req.headers.get('accept') || '').includes('text/html');
 
-  if (isDoc) {
+  // config.js carries the addresses and keys the app runs on, so it
+  // must never be served from a stale cache. Same rule as the document.
+  const isConfig = url.pathname.endsWith('/config.js');
+
+  if (isDoc || isConfig) {
     // NETWORK FIRST: the document is the thing that goes stale.
     e.respondWith((async () => {
       try {

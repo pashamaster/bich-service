@@ -5,6 +5,8 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="app-version" content="2026-07-23-01" />
   <link rel="manifest" href="/manifest.webmanifest" />
+  <!-- config first: the app reads its addresses from here -->
+  <script src="/config.js"></script>
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
@@ -2127,22 +2129,22 @@ Store.load();
 
    NEVER put the service_role key here. It bypasses every policy.
    ══════════════════════════════════════════════════════════════════ */
-const SUPABASE_URL      = 'https://ibdqherxuolymstcqmsw.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliZHFoZXJ4dW9seW1zdGNxbXN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MjE3OTEsImV4cCI6MjEwMDM5Nzc5MX0.iKR24FW26CsZdbJ6s4y-s9UPztYfujwIiitpX4btAvU';
-const WORKER_URL        = 'https://api.bich.app';
+const _CFG = (window.BICH_CONFIG || {});
+const SUPABASE_URL      = (_CFG.supabase && _CFG.supabase.url)     || '';
+const SUPABASE_ANON_KEY = (_CFG.supabase && _CFG.supabase.anonKey) || '';
+const WORKER_URL        = (_CFG.worker   && _CFG.worker.url)       || '';
+const SHARE_BASE        = (_CFG.share    && _CFG.share.base)       || 'https://bich.app/e/';
+const RP_ID             = (_CFG.passkey  && _CFG.passkey.rpId)     || location.hostname;
+const RP_NAME           = (_CFG.passkey  && _CFG.passkey.rpName)   || 'bich.service';
+const APP_VERSION       = _CFG.version || 'dev';
 
-/* Share links, per spec: bich.app/e/xxxx with a short opaque id, so a
-   URL never hints at how many events exist. GitHub Pages cannot route
-   /e/ itself, so 404.html hands the id back as ?e= and we pick it up
-   on load. */
-const SHARE_BASE = 'https://bich.app/e/';
-
-/* Passkeys bind permanently to this domain. It must be the apex, not
-   a github.io address and not a subdomain, or every credential
-   enrolled today is orphaned the day you move. Registering on the
-   apex also lets api.bich.app share the same identity later. */
-const RP_ID   = 'bich.app';
-const RP_NAME = 'bich.service';
+/* DEV ONLY, and only on localhost. A key in public JS is a credit
+   card in a shop window and Google's scanners will disable it. */
+const GEMINI_KEY_DEV = '';
+const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
+const SEND_MAX_SIDE  = 1000;   // long side sent to gemini
+const COVER_MAX_SIDE = 1400;   // long side stored as the cover
+const THUMB_MAX_SIDE = 600;    // long side used on feed cards
 
 const SB_READY = () => Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
@@ -2205,6 +2207,29 @@ async function ensureUser(handle){
 /* Insert straight into Supabase with the publishable key. The row
    policies decide what is allowed, so validation lives in the
    database rather than in code we could forget to run. */
+/* community_slug is a FOREIGN KEY into a small curated table. The
+   model returns free text like "Amsterdam", and anything not already
+   a row there makes the whole insert fail with a foreign key error,
+   which is why events were silently not saving. Map what we can,
+   send null for the rest: a null community is fine, a wrong one is
+   not, and a rejected insert is worst of all. */
+let KNOWN_COMMUNITIES = null;
+async function loadCommunities(){
+  if (KNOWN_COMMUNITIES || !SB_READY()) return KNOWN_COMMUNITIES;
+  try {
+    const rows = await sbGet('communities?select=slug,name');
+    KNOWN_COMMUNITIES = rows;
+  } catch(_) { KNOWN_COMMUNITIES = []; }
+  return KNOWN_COMMUNITIES;
+}
+function resolveCommunity(text){
+  if (!text || !KNOWN_COMMUNITIES) return null;
+  const t = String(text).trim().toLowerCase();
+  const hit = KNOWN_COMMUNITIES.find(c =>
+    c.slug === t || c.name.toLowerCase() === t || t.includes(c.slug));
+  return hit ? hit.slug : null;
+}
+
 async function sbInsert(table, row){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
@@ -2216,8 +2241,11 @@ async function sbInsert(table, row){
   });
   const body = await r.json().catch(() => null);
   if (!r.ok){
-    const e = new Error((body && body.message) || 'write failed');
+    const e = new Error((body && (body.message || body.hint || body.details)) || `write failed (${r.status})`);
     e.status = r.status;
+    e.detail = body;
+    // The real cause belongs in the console; the person gets plain words.
+    console.error(`[bich] ${table} insert failed`, r.status, body);
     throw e;
   }
   return body;
@@ -2379,12 +2407,122 @@ async function openDeepLink(){
   else toast('that event is gone');
 }
 
+/* ── connection check ──────────────────────────────────────────────
+   Run bichCheck() in the browser console. It walks the whole write
+   path and reports the first thing that is actually wrong, with the
+   real message from Postgres rather than a friendly one.
+
+   It cleans up after itself: the test event is deleted, or if the
+   delete policy is missing, it is left as a draft you can spot.      */
+async function bichCheck(){
+  const line = (ok, label, detail) =>
+    console.log(`%c${ok ? '  ok  ' : ' FAIL '}%c ${label}${detail ? '\n         ' + detail : ''}`,
+      `background:${ok ? '#1c5' : '#c33'};color:#fff;font-weight:600`, 'color:inherit');
+
+  console.log('%cbich.service connection check', 'font-weight:700;font-size:13px');
+
+  // 1. config present
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY){
+    line(false, 'config', `SUPABASE_URL=${SUPABASE_URL ? 'set' : 'EMPTY'}  SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY ? 'set' : 'EMPTY'}`);
+    console.log('     Fill both at the top of index.html, then hard refresh.');
+    return;
+  }
+  line(true, 'config', SUPABASE_URL);
+
+  const hdr = { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+                'Content-Type': 'application/json' };
+
+  // 2. can we read?
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/events_public?select=id&limit=1`, { headers: hdr });
+    const t = await r.text();
+    if (!r.ok) { line(false, 'read events_public', `${r.status} ${t.slice(0,200)}`); }
+    else line(true, 'read events_public', `${JSON.parse(t).length} row(s) visible`);
+  } catch(e){ line(false, 'read events_public', e.message); }
+
+  // 3. do the communities exist? (the foreign key everything hangs off)
+  let slugs = [];
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/communities?select=slug`, { headers: hdr });
+    slugs = r.ok ? (await r.json()).map(c => c.slug) : [];
+    line(r.ok, 'communities', slugs.length ? slugs.join(', ') : 'NONE — schema part 1 may not have run');
+  } catch(e){ line(false, 'communities', e.message); }
+
+  // 4. can we create a user? (tests schema part 4's insert policy)
+  let uid = null;
+  const testHandle = 'zzz ' + Math.random().toString(36).slice(2,6);
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/users`, {
+      method:'POST', headers: { ...hdr, Prefer:'return=representation' },
+      body: JSON.stringify({ handle: testHandle })
+    });
+    const t = await r.text();
+    if (!r.ok){
+      line(false, 'insert users', `${r.status} ${t.slice(0,300)}`);
+      if (r.status === 401 || r.status === 403 || /row-level security/i.test(t))
+        console.log('%c     ▸ schema part 4 has not been run. That file adds the insert policies.\n       Without it row level security blocks every write and the table stays empty.',
+          'color:#c33;font-weight:600');
+    } else { uid = JSON.parse(t)[0].id; line(true, 'insert users', uid); }
+  } catch(e){ line(false, 'insert users', e.message); }
+
+  // 5. can we create an event?
+  if (uid){
+    const starts = new Date(Date.now() + 864e5).toISOString();
+    const body = { host_id: uid, title: 'connection check', starts_at: starts,
+                   price_value: 0, price_currency: 'EUR', status: 'live', source: 'manual' };
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/events`, {
+        method:'POST', headers: { ...hdr, Prefer:'return=representation' }, body: JSON.stringify(body) });
+      const t = await r.text();
+      if (!r.ok) line(false, 'insert events', `${r.status} ${t.slice(0,300)}`);
+      else {
+        const row = JSON.parse(t)[0];
+        line(true, 'insert events', row.short_id);
+        await fetch(`${SUPABASE_URL}/rest/v1/events?id=eq.${row.id}`, { method:'DELETE', headers: hdr });
+      }
+    } catch(e){ line(false, 'insert events', e.message); }
+
+    // 6. the community foreign key, the likeliest silent killer
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/events`, {
+        method:'POST', headers: { ...hdr, Prefer:'return=representation' },
+        body: JSON.stringify({ host_id: uid, title: 'fk check', starts_at: new Date(Date.now()+864e5).toISOString(),
+                               community_slug: 'amsterdam', status:'live', source:'manual', price_value:0 }) });
+      const t = await r.text();
+      if (!r.ok && /foreign key|violates/i.test(t)){
+        line(false, 'unknown community', 'a community not in the table is rejected (expected)');
+        console.log('%c     ▸ the app must map free text to a known slug, or send null.',
+          'color:#a80;font-weight:600');
+      } else if (r.ok){
+        const row = JSON.parse(t)[0];
+        line(true, 'unknown community', 'accepted');
+        await fetch(`${SUPABASE_URL}/rest/v1/events?id=eq.${row.id}`, { method:'DELETE', headers: hdr });
+      }
+    } catch(_){}
+
+    await fetch(`${SUPABASE_URL}/rest/v1/users?id=eq.${uid}`, { method:'DELETE', headers: hdr });
+  }
+
+  // 7. the worker
+  if (WORKER_URL){
+    try {
+      const r = await fetch(WORKER_URL + '/upload', { method:'POST', body: new FormData() });
+      line(r.status !== 0, 'worker reachable', `${WORKER_URL} responded ${r.status}` +
+        (r.status === 403 ? ' (invite gate on)' : r.status === 400 ? ' (expected: empty form)' : ''));
+    } catch(e){ line(false, 'worker reachable', e.message + ' — check ALLOWED_ORIGINS in wrangler.toml'); }
+  }
+
+  console.log('%cdone', 'font-weight:700');
+}
+window.bichCheck = bichCheck;
+
 initThemes();
 
 renderBundles();
 wireVenueSearch();
 (async () => {
   if (!SB_READY()) { openDeepLink(); return; }   // sample data until configured
+  await loadCommunities();
   await ensureUser().catch(() => {});
   await loadFeed();
   await syncAttendance();     // push anything we marked while offline
@@ -2453,22 +2591,11 @@ const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
 
 /* DEV ONLY — direct Gemini from the browser, for one user on localhost.
    Anything you put here is visible to anyone who opens the page. Google runs
-   leaked-key detection and will block a key it finds in public JS, so this
-   must be '' before this file is ever served from a real domain. */
-/* Must stay empty on bich.app. A key in public JS is a credit card
-   in a shop window, and Google's scanners will disable it. Use it
-   only on localhost. */
-const GEMINI_KEY_DEV = '';
-const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
-const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
-const COVER_MAX_SIDE = 1400;   // long side stored as the cover
-const THUMB_MAX_SIDE = 600;    // long side used on feed cards
-
 // Photo recognition is alpha-gated to a handful of testers. An invite code is an
 // opaque string, not an identity — it maps to a quota bucket and nothing else,
 // so the zero-PII model holds. In the real app store this in IndexedDB beside
 // the handle; localStorage here keeps the prototype simple.
-function readInvite(){ return Store.data.invite || ''; }
+function readInvite(){ return Store.data.invite || _CFG.invite || ''; }
 function setInvite(c){ Store.set({ invite: c }); }
 
 const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read one uploaded photo and turn it into structured event records.
@@ -3041,7 +3168,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         venue_lat: draft.lat, venue_lng: draft.lng,
         venue_source: draft.mapsLink ? 'printed_coordinates' : 'manual',
         city: draft.city || null,
-        community_slug: draft.community || null,
+        community_slug: resolveCommunity(draft.community),
         photo_lat: draft.photoLat ?? null,   // origin only, never the pin
         photo_lng: draft.photoLng ?? null,
         starts_at: new Date(`${date}T${time}`).toISOString(),
@@ -3066,7 +3193,11 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     } catch(err){
       btn.disabled = false;
       coverNotice.className = 'cover-notice show err';
-      coverNotice.textContent = "couldn't publish that. try again?";
+      coverNotice.textContent = /row-level security/i.test(err.message || '')
+        ? 'the database is refusing writes. run schema part 4.'
+        : "couldn't publish that. try again?";
+      console.error('[bich] publish failed:', err.message, err.detail || '');
+      alert('could not publish\n\n' + (err.message || 'unknown') + '\n\nrun bichCheck() in the console for detail');
       return;
     }
   }
