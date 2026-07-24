@@ -23,8 +23,8 @@ window.BICH_CONFIG = {
   /* Supabase → Project Settings → Data API
      url: no trailing slash. anonKey: the publishable one, starts eyJ */
   supabase: {
-    url:     '',
-    anonKey: ''
+    url:     'https://ibdqherxuolymstcqmsw.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliZHFoZXJ4dW9seW1zdGNxbXN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MjE3OTEsImV4cCI6MjEwMDM5Nzc5MX0.iKR24FW26CsZdbJ6s4y-s9UPztYfujwIiitpX4btAvU'
   },
 
   /* The Cloudflare worker. Holds the Gemini key and writes to R2.
