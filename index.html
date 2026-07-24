@@ -1,11 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="sun">
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="app-version" content="2026-07-23-01" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="bich" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -14,7 +16,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://bich.app/" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<meta name="theme-color" content="#0a0a0a" />
+<meta name="theme-color" content="#0a0908" />
 <title>bich.service — events that find their people</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -154,6 +156,9 @@ body { display: flex; align-items: center; justify-content: center; }
   display: flex; flex-direction: column;
 }
 
+@media (display-mode: standalone) {
+  .phone-stage { max-width: none; max-height: none; height: 100dvh; border-radius: 0; }
+}
 @media (min-width: 480px) {
   body { background: var(--desk); }
   .phone-stage {
@@ -167,7 +172,7 @@ body { display: flex; align-items: center; justify-content: center; }
 /* ─── APP CHROME ─── */
 .app-header {
   flex-shrink: 0;
-  padding: 20px var(--space-md) var(--space-md);
+  padding: calc(var(--safe-top) + 6px) var(--space-md) var(--space-md);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1080,6 +1085,20 @@ body { display: flex; align-items: center; justify-content: center; }
 /* grain follows the theme instead of being hard coded */
 .grain::before { opacity: var(--grain-opacity); }
 
+/* Installed to the home screen, the page runs full bleed under the
+   status bar and the home indicator. Safari's chrome used to do this
+   job; now we do. The floor of 47px covers notch and Dynamic Island
+   devices where the reported inset is sometimes 0. */
+@media (display-mode: standalone) {
+  :root {
+    --safe-top:    max(env(safe-area-inset-top, 0px), 47px);
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  }
+}
+@media (display-mode: standalone) and (orientation: landscape) {
+  :root { --safe-top: max(env(safe-area-inset-top, 0px), 12px); }
+}
+
 /* covers were shot for a dark ground; on paper they need a touch down */
 .event-card__cover img,
 .detail-hero img,
@@ -1102,6 +1121,7 @@ body { display: flex; align-items: center; justify-content: center; }
   --tracking-label: 0.16em;
 
   --safe-top:    max(env(safe-area-inset-top, 0px), 12px);
+  --safe-bottom-floor: 12px;
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   --tap: 44px;
 }
@@ -2187,7 +2207,7 @@ function applyTheme(name){
     b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
 }
 function initThemes(){
-  applyTheme(Store.data.theme || 'night');
+  applyTheme(Store.data.theme || 'sun');
   const sw = document.getElementById('themeSwitch');
   if (sw) sw.addEventListener('click', e => {
     const b = e.target.closest('button[data-theme]');
