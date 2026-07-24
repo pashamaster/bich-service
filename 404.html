@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d0c0a" />
+<title>bich.service</title>
+<style>
+  html,body{height:100%;margin:0;background:#0d0c0a;color:#e8e2d9;
+    font-family:'Geist Mono',ui-monospace,monospace;
+    display:flex;align-items:center;justify-content:center}
+  p{font-family:'Playfair Display',Georgia,serif;font-style:italic;
+    font-size:1.1rem;opacity:.55;letter-spacing:.02em}
+</style>
+</head>
+<body>
+  <p>one moment</p>
+<script>
+/* GitHub Pages has no server side routing, so a share link like
+   bich.app/e/xf3k9q2m lands here instead of on the app. Pages serves
+   this file for any unknown path, so we hand the path back to the app
+   as a query string and let it open the right event.
+
+   replace() rather than assign() keeps this page out of the back
+   button history: tapping back from an event should leave the app,
+   not bounce through a redirect. */
+(function () {
+  var p = location.pathname.replace(/^\/+/, '');
+  var m = p.match(/^e\/([A-Za-z0-9_-]{4,32})$/);
+  var target = m ? ('/?e=' + encodeURIComponent(m[1])) : '/';
+  location.replace(target + location.hash);
+})();
+</script>
+</body>
+</html>

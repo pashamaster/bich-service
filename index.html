@@ -4,6 +4,15 @@
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="app-version" content="2026-07-23-01" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="bich" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="canonical" href="https://bich.app/" />
+  <meta property="og:site_name" content="bich.service" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://bich.app/" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#0a0a0a" />
 <title>bich.service — events that find their people</title>
@@ -1171,7 +1180,7 @@ button, .btn, .btn-icon, .tab { min-height: var(--tap); }
 if ('serviceWorker' in navigator) {
   addEventListener('load', async () => {
     try {
-      const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+      const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
       // a new worker took over: the code on screen is stale, so reload once
       let reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -1466,7 +1475,7 @@ if ('serviceWorker' in navigator) {
   </div>
   <div class="detail-actions">
     <button class="btn btn--attend" id="attendBtn">i'm going</button>
-    <button class="btn btn--share">
+    <button class="btn btn--share" id="shareBtn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
         <circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/>
         <path d="m8.5 10.5 7-3M8.5 13.5l7 3"/>
@@ -1694,16 +1703,20 @@ function openDetail(id) {
   } else {
     document.getElementById('detailCircle').style.display = 'none';
   }
+  // remember what is open so the attend button knows what it acts on
+  window._openEventId = e.id;
+  paintAttendButton(Store.isGoing(e.id));
   document.getElementById('detailScreen').classList.add('visible');
 }
-document.getElementById('closeDetail').addEventListener('click', () => {
-  document.getElementById('detailScreen').classList.remove('visible');
-});
 
-document.getElementById('attendBtn').addEventListener('click', (e) => {
-  const btn = e.currentTarget;
-  if (btn.textContent.trim() === "i'm going") {
-    btn.textContent = "✓ you're going";
+/* The going state lives in the local store, so it survives a refresh,
+   an offline moment, and a closed tab. The database is told when it
+   can be reached; the button never waits for it. */
+function paintAttendButton(going){
+  const btn = document.getElementById('attendBtn');
+  if (!btn) return;
+  if (going) {
+    btn.textContent = "\u2713 you're going";
     btn.style.background = 'var(--accent-dim)';
     btn.style.color = 'var(--accent)';
     btn.style.borderColor = 'var(--border-accent)';
@@ -1713,7 +1726,72 @@ document.getElementById('attendBtn').addEventListener('click', (e) => {
     btn.style.color = 'var(--bg)';
     btn.style.borderColor = 'var(--accent)';
   }
+}
+
+document.getElementById('closeDetail').addEventListener('click', () => {
+  document.getElementById('detailScreen').classList.remove('visible');
 });
+
+document.getElementById('attendBtn').addEventListener('click', async () => {
+  const id = window._openEventId;
+  if (!id) return;
+  const nowGoing = !Store.isGoing(id);
+
+  // optimistic: the local store is the truth the person sees
+  Store.setGoing(id, nowGoing);
+  paintAttendButton(nowGoing);
+  Store.requestPersistence();
+
+  const ev = EVENTS.find(x => x.id === id);
+  if (ev) {
+    ev.going = Math.max(0, (ev.going || 0) + (nowGoing ? 1 : -1));
+    document.getElementById('detailGoing').textContent = `${ev.going} people`;
+    renderBundles();
+  }
+
+  // tell the database if it is reachable. If not, the local state
+  // stands and syncAttendance() will catch up on the next launch.
+  if (SB_READY() && ev && ev.uuid) {
+    try {
+      await ensureUser();
+      if (CURRENT_USER.id) {
+        await sbUpsert('attendances', {
+          event_id: ev.uuid, user_id: CURRENT_USER.id,
+          status: nowGoing ? 'going' : 'cancelled'
+        });
+      }
+    } catch (_) { /* stays queued in the local store */ }
+  }
+});
+
+/* Push anything the local store knows that the database might not.
+   Runs on launch, costs nothing when everything already agrees. */
+async function syncAttendance(){
+  if (!SB_READY() || !CURRENT_USER.id) return;
+  const ids = Object.keys(Store.data.going);
+  for (const shortId of ids) {
+    const ev = EVENTS.find(x => x.id === shortId);
+    if (!ev || !ev.uuid) continue;
+    try {
+      await sbUpsert('attendances', {
+        event_id: ev.uuid, user_id: CURRENT_USER.id, status: 'going'
+      });
+    } catch (_) {}
+  }
+}
+
+async function sbUpsert(table, row){
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal'
+    },
+    body: JSON.stringify(row)
+  });
+  if (!r.ok) throw new Error('sync failed');
+}
 
 /* ─── TAB SWITCHING ─── */
 const screens = { home: 'screen-home', map: 'screen-map' };
@@ -1839,6 +1917,98 @@ function setEventLocation(lat, lng, fromPhoto) {
    demo path below switches off automatically.
    ──────────────────────────────────────────────────────────────── */
 /* ══════════════════════════════════════════════════════════════════
+   LOCAL STORE
+   Everything the app knows about this person, in one place.
+
+   Shaped as a single blob on purpose. Spec 7.2 has a `history` table
+   holding a jsonb blob per user for passkey recovery, and this IS
+   that blob: when passkeys land, recovery is one upload and one
+   download, not a migration.
+
+   A hard truth to design around: Safari deletes localStorage,
+   IndexedDB and service worker registrations after SEVEN DAYS with no
+   interaction with the site. For an app whose entire identity lives
+   locally, that means a user who skips a week comes back as a
+   stranger. Two things push back:
+     · apps opened from the home screen are exempt, they keep their
+       own counter of days used
+     · navigator.storage.persist() protects storage where supported,
+       and must be asked for on every launch
+   Neither is a guarantee, which is exactly why spec 5.2 makes the
+   passkey the recovery mechanism. Until then, be honest: this is
+   memory, not a vault.
+   ══════════════════════════════════════════════════════════════════ */
+const STORE_KEY = 'bich.local.v1';
+
+const Store = {
+  data: {
+    v: 1,
+    uid: null,          // supabase users.id, once created
+    handle: null,       // "slide tem" — generated once, then permanent
+    onboarded: false,
+    going: {},          // { shortId: isoTimestamp }
+    attended: {},       // { shortId: isoTimestamp } — feeds the graph
+    hosting: [],        // shortIds this device published
+    theme: null,
+    invite: ''
+  },
+
+  load() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) Object.assign(this.data, JSON.parse(raw));
+    } catch (_) { /* private mode, or storage disabled: run in memory */ }
+
+    // migrate the older loose keys so nobody loses their handle
+    try {
+      const oldH = localStorage.getItem('bich_handle');
+      const oldU = localStorage.getItem('bich_uid');
+      const oldT = localStorage.getItem('bich_theme');
+      const oldI = localStorage.getItem('bich_invite');
+      if (oldH && !this.data.handle) this.data.handle = oldH;
+      if (oldU && !this.data.uid)    this.data.uid    = oldU;
+      if (oldT && !this.data.theme)  this.data.theme  = oldT;
+      if (oldI && !this.data.invite) this.data.invite = oldI;
+      ['bich_handle','bich_uid','bich_theme','bich_invite'].forEach(k => localStorage.removeItem(k));
+    } catch (_) {}
+
+    return this.data;
+  },
+
+  save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(this.data)); }
+    catch (_) { /* quota or private mode: the session still works */ }
+  },
+
+  set(patch) { Object.assign(this.data, patch); this.save(); return this.data; },
+
+  isGoing(id)  { return Boolean(this.data.going[id]); },
+  setGoing(id, on) {
+    if (on) this.data.going[id] = new Date().toISOString();
+    else    delete this.data.going[id];
+    this.save();
+  },
+  markAttended(id) { this.data.attended[id] = new Date().toISOString(); this.save(); },
+  addHosting(id)   {
+    if (!this.data.hosting.includes(id)) { this.data.hosting.push(id); this.save(); }
+  },
+
+  /* Ask the browser to treat this storage as worth keeping. Spec 8.2
+     says request it after a meaningful interaction rather than on
+     load, because a prompt on arrival gets refused. */
+  async requestPersistence() {
+    if (!navigator.storage || !navigator.storage.persist) return false;
+    try {
+      if (await navigator.storage.persisted()) return true;
+      return await navigator.storage.persist();
+    } catch (_) { return false; }
+  }
+};
+
+Store.load();
+
+
+/* ══════════════════════════════════════════════════════════════════
    SUPABASE  —  fill these three in, nothing else changes
    ──────────────────────────────────────────────────────────────────
    SUPABASE_URL       Supabase dashboard -> Project Settings -> Data API
@@ -1854,7 +2024,20 @@ function setEventLocation(lat, lng, fromPhoto) {
    ══════════════════════════════════════════════════════════════════ */
 const SUPABASE_URL      = '';
 const SUPABASE_ANON_KEY = '';
-const WORKER_URL        = '';
+const WORKER_URL        = 'https://api.bich.app';
+
+/* Share links, per spec: bich.app/e/xxxx with a short opaque id, so a
+   URL never hints at how many events exist. GitHub Pages cannot route
+   /e/ itself, so 404.html hands the id back as ?e= and we pick it up
+   on load. */
+const SHARE_BASE = 'https://bich.app/e/';
+
+/* Passkeys bind permanently to this domain. It must be the apex, not
+   a github.io address and not a subdomain, or every credential
+   enrolled today is orphaned the day you move. Registering on the
+   apex also lets api.bich.app share the same identity later. */
+const RP_ID   = 'bich.app';
+const RP_NAME = 'bich.service';
 
 const SB_READY = () => Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
@@ -1894,10 +2077,7 @@ async function workerPost(path, body){
    just that label plus a uuid: no email, no phone, nothing to leak.
    The uuid is what links a person to what they host and attend, and it
    lives locally until a passkey exists to recover it. */
-function localGet(k){ try { return localStorage.getItem(k); } catch(_){ return null; } }
-function localSet(k,v){ try { localStorage.setItem(k,v); } catch(_){} }
-
-let CURRENT_USER = { id: localGet('bich_uid'), handle: localGet('bich_handle') };
+let CURRENT_USER = { id: Store.data.uid, handle: Store.data.handle };
 
 async function ensureUser(handle){
   if (CURRENT_USER.id) return CURRENT_USER;
@@ -1907,7 +2087,7 @@ async function ensureUser(handle){
     try {
       const rows = await sbInsert('users', { handle: name });
       CURRENT_USER = { id: rows[0].id, handle: rows[0].handle };
-      localSet('bich_uid', CURRENT_USER.id); localSet('bich_handle', CURRENT_USER.handle);
+      Store.set({ uid: CURRENT_USER.id, handle: CURRENT_USER.handle });
       return CURRENT_USER;
     } catch(err){
       if (err.status !== 409) throw err;    // 409 = handle taken
@@ -2000,30 +2180,83 @@ const THEMES = ['night', 'sun', 'paper'];
 function applyTheme(name){
   const t = THEMES.includes(name) ? name : 'night';
   document.documentElement.dataset.theme = t;
-  try { localStorage.setItem('bich_theme', t); } catch(_){}
+  Store.set({ theme: t });
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = t === 'paper' ? '#f4efe6' : (t === 'sun' ? '#0a0908' : '#0d0c0a');
   document.querySelectorAll('.theme-switch button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
 }
 function initThemes(){
-  let saved = null;
-  try { saved = localStorage.getItem('bich_theme'); } catch(_){}
-  applyTheme(saved || 'night');
+  applyTheme(Store.data.theme || 'night');
   const sw = document.getElementById('themeSwitch');
   if (sw) sw.addEventListener('click', e => {
     const b = e.target.closest('button[data-theme]');
     if (b) applyTheme(b.dataset.theme);
   });
 }
+/* ── share links & deep links ──────────────────────────────────────
+   404.html turns bich.app/e/xf3k9q2m into /?e=xf3k9q2m, because
+   GitHub Pages cannot route that path itself. We read it here, tidy
+   the address bar back to the pretty form, and open the event. */
+function shareUrl(ev){ return SHARE_BASE + (ev.id || ev.short_id || ''); }
+
+async function shareEvent(ev){
+  const url = shareUrl(ev);
+  const text = `${ev.title.toLowerCase()} · ${ev.when}`;
+  if (navigator.share){
+    try { await navigator.share({ title: ev.title, text, url }); return; } catch(_){ return; }
+  }
+  try { await navigator.clipboard.writeText(url); toast('link copied'); }
+  catch(_){ prompt('copy this link', url); }
+}
+
+function toast(msg){
+  let el = document.getElementById('toast');
+  if (!el){
+    el = document.createElement('div'); el.id = 'toast';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);' +
+      'bottom:calc(var(--safe-bottom) + 72px);z-index:500;padding:10px 18px;' +
+      'background:var(--bg-elevated);border:1px solid var(--border-accent);' +
+      'border-radius:2px;color:var(--accent);font-size:.62rem;letter-spacing:.16em;' +
+      'text-transform:uppercase;opacity:0;transition:opacity .25s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+}
+
+async function openDeepLink(){
+  const params = new URLSearchParams(location.search);
+  const short = params.get('e');
+  if (params.get('new') === '1') { const b = document.getElementById('fab'); b && b.click(); }
+  if (!short) return;
+
+  // put the pretty URL back so sharing from here shares the right thing
+  history.replaceState({}, '', SHARE_BASE.replace('https://bich.app', '') + short);
+
+  let ev = EVENTS.find(e => e.id === short);
+  if (!ev && SB_READY()){
+    try {
+      const rows = await sbGet(`events_public?short_id=eq.${encodeURIComponent(short)}&limit=1`);
+      if (rows && rows.length){ ev = rowToEvent(rows[0]); EVENTS.unshift(ev); renderBundles(); }
+    } catch(_){}
+  }
+  if (ev && typeof openDetail === 'function') openDetail(ev);
+  else toast('that event is gone');
+}
+
 initThemes();
 
 renderBundles();
 wireVenueSearch();
 (async () => {
-  if (!SB_READY()) return;                    // sample data until configured
+  if (!SB_READY()) { openDeepLink(); return; }   // sample data until configured
   await ensureUser().catch(() => {});
   await loadFeed();
+  await syncAttendance();     // push anything we marked while offline
+  await openDeepLink();
 })();
     return true;
   } catch(err){
@@ -2082,7 +2315,7 @@ function wireVenueSearch(){
 }
 
 
-const API_BASE = '';                                       // e.g. 'https://bich-extract-event.you.workers.dev'
+const API_BASE = WORKER_URL;
 const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
 const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
 
@@ -2090,6 +2323,9 @@ const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
    Anything you put here is visible to anyone who opens the page. Google runs
    leaked-key detection and will block a key it finds in public JS, so this
    must be '' before this file is ever served from a real domain. */
+/* Must stay empty on bich.app. A key in public JS is a credit card
+   in a shop window, and Google's scanners will disable it. Use it
+   only on localhost. */
 const GEMINI_KEY_DEV = '';
 const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
 const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
@@ -2099,8 +2335,8 @@ const COVER_MAX_SIDE = 1400;   // long side stored as the cover
 // opaque string, not an identity — it maps to a quota bucket and nothing else,
 // so the zero-PII model holds. In the real app store this in IndexedDB beside
 // the handle; localStorage here keeps the prototype simple.
-function readInvite(){ try { return localStorage.getItem('bich_invite') || ''; } catch(_) { return ''; } }
-function setInvite(c){ try { localStorage.setItem('bich_invite', c); } catch(_){} }
+function readInvite(){ return Store.data.invite || ''; }
+function setInvite(c){ Store.set({ invite: c }); }
 
 const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read one uploaded photo and turn it into structured event records.
 
@@ -2814,6 +3050,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         source: draft.cover ? 'photo' : 'manual'
       });
       ev.uuid = saved[0].id; ev.id = saved[0].short_id;
+      Store.addHosting(ev.id);
       if (coverUrl) ev.cover = coverUrl;
     } catch(err){
       btn.disabled = false;
@@ -2843,20 +3080,27 @@ const onboard = document.getElementById('onboard');
 const handleText = document.getElementById('handleText');
 const onboardHandle = document.getElementById('onboardHandle');
 
-let currentHandle = genHandle();
+/* The handle is generated ONCE and then it is who you are. It was
+   being regenerated on every load, which is why the name kept
+   changing on refresh. Re-rolling is only offered before onboarding
+   finishes; after that the handle is the identity the co-attendance
+   graph hangs off, so it stops moving. */
+let currentHandle = Store.data.handle || genHandle();
 
 function showHandle() {
   handleText.textContent = currentHandle;
   onboardHandle.textContent = currentHandle;
 }
 
-// Show onboarding on first load (no localStorage per artifact constraints — simulated)
-if (!window._onboarded) {
+if (!Store.data.onboarded) {
   onboard.classList.add('visible');
+  showHandle();
+} else {
   showHandle();
 }
 
 document.getElementById('rerollBtn').addEventListener('click', () => {
+  if (Store.data.onboarded) return;      // locked once you are known
   currentHandle = genHandle();
   onboardHandle.style.opacity = '0';
   setTimeout(() => {
@@ -2865,10 +3109,14 @@ document.getElementById('rerollBtn').addEventListener('click', () => {
   }, 200);
 });
 
-document.getElementById('onboardContinue').addEventListener('click', () => {
+document.getElementById('onboardContinue').addEventListener('click', async () => {
   onboard.classList.remove('visible');
-  window._onboarded = true;
+  Store.set({ onboarded: true, handle: currentHandle });
   showHandle();
+  // A meaningful interaction has happened, so now is the moment to ask
+  // the browser to keep our storage rather than on arrival (spec 8.2).
+  Store.requestPersistence();
+  if (SB_READY()) ensureUser(currentHandle).catch(() => {});
 });
 
 document.getElementById('handleChip').addEventListener('click', () => {

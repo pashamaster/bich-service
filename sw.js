@@ -52,7 +52,7 @@ self.addEventListener('fetch', (e) => {
         return fresh;
       } catch (_) {
         const hit = await caches.match(req);
-        return hit || caches.match('./index.html') ||
+        return hit || caches.match('/index.html') ||
                new Response('offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
       }
     })());

@@ -1,0 +1,30 @@
+{
+  "name": "bich.service",
+  "short_name": "bich",
+  "description": "small gatherings near you",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0d0c0a",
+  "theme_color": "#0d0c0a",
+  "categories": ["events", "social", "lifestyle"],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    { "src": "/icons/icon-192.png",  "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png",  "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "new event",
+      "short_name": "new",
+      "url": "/?new=1",
+      "description": "publish something"
+    }
+  ]
+}

@@ -2,8 +2,14 @@ name = "bich-service"
 main = "worker.js"
 compatibility_date = "2026-07-01"
 
-# Images live in R2: zero egress cost at any volume, which is the
-# whole reason covers are here and not next to the database.
+# Custom domain. Cloudflare provisions the certificate and the DNS
+# record for this automatically on deploy - do NOT add an api record
+# by hand in the DNS tab, it will conflict.
+[[routes]]
+pattern = "api.bich.app"
+custom_domain = true
+
+# Covers live in R2: zero egress cost at any volume.
 [[r2_buckets]]
 binding = "COVERS"
 bucket_name = "bich-covers"
@@ -11,16 +17,19 @@ bucket_name = "bich-covers"
 [vars]
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
-# Lock this to your real origins before anyone else uses it.
-ALLOWED_ORIGINS = "*"
+# Only the real app may call this worker. A stolen invite code is
+# useless from anywhere else.
+ALLOWED_ORIGINS = "https://bich.app,https://www.bich.app"
 
-# Empty = open. Comma separated codes to gate the photo feature.
+# Serve covers straight from R2's own custom domain rather than
+# through the worker: fewer invocations, and the edge cache does the
+# work. Set img.bich.app as a custom domain on the bucket first.
+PUBLIC_IMG_BASE = "https://img.bich.app"
+
+# Empty = open. Add comma separated codes to gate the photo feature.
 BICH_INVITE_CODES = ""
 
 DAILY_CAP = "180"
-
-# Optional: serve covers from a custom domain instead of the worker.
-# PUBLIC_IMG_BASE = "https://img.bich.app"
 
 # Secrets, never vars:
 #   wrangler secret put GEMINI_API_KEY
