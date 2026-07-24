@@ -663,7 +663,8 @@ body { display: flex; align-items: center; justify-content: center; }
 
 /* Cropper — full screen over everything */
 .cropper {
-  position: fixed; inset: 0; z-index: 400; background: var(--bg);
+  position: fixed; inset: 0; z-index: 400; background: #0a0908;
+  color: #e8e2d9;
   display: flex; flex-direction: column;
   padding-top: max(env(safe-area-inset-top, 0px), 12px);
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
@@ -675,24 +676,34 @@ body { display: flex; align-items: center; justify-content: center; }
 .cropper__hint { font-size: 0.6rem; letter-spacing: 0.1em; color: var(--muted); }
 .cropper__stage { position: relative; flex: 1; margin: var(--space-sm) var(--space-md); overflow: hidden; touch-action: none; }
 .cropper__canvas { position: absolute; display: block; }
-.cropper__shade { position: absolute; inset: 0; background: var(--scrim); pointer-events: none; }
-.cropper__rect { position: absolute; border: 1px solid var(--accent); cursor: move; touch-action: none; }
+.cropper__shade { position: absolute; inset: 0; background: rgba(0,0,0,0.66); pointer-events: none; }
+.cropper__rect {
+  position: absolute; cursor: move; touch-action: none;
+  border: 1px solid rgba(255,255,255,0.55);
+  box-shadow: 0 0 0 9999px transparent;
+}
+/* rule of thirds: appears while framing, the way a camera does */
+.cropper__third { position: absolute; background: rgba(255,255,255,0.22); pointer-events: none; }
+.cropper__third--v1 { left: 33.333%; top: 0; bottom: 0; width: 1px; }
+.cropper__third--v2 { left: 66.666%; top: 0; bottom: 0; width: 1px; }
+.cropper__third--h1 { top: 33.333%; left: 0; right: 0; height: 1px; }
+.cropper__third--h2 { top: 66.666%; left: 0; right: 0; height: 1px; }
 /* handles look small, but the touch target is 44px */
 .cropper__rect i {
   position: absolute; width: 44px; height: 44px; touch-action: none;
 }
 .cropper__rect i::after {
-  content: ''; position: absolute; width: 16px; height: 16px;
-  border: 2px solid var(--accent); background: var(--scrim-soft);
+  content: ''; position: absolute; width: 22px; height: 22px;
+  border: 3px solid #fff; background: none;
 }
 .cropper__rect i[data-h="nw"] { left: -22px; top: -22px; cursor: nwse-resize; }
-.cropper__rect i[data-h="nw"]::after { left: 14px; top: 14px; border-right: none; border-bottom: none; }
+.cropper__rect i[data-h="nw"]::after { left: 11px; top: 11px; border-right: none; border-bottom: none; }
 .cropper__rect i[data-h="ne"] { right: -22px; top: -22px; cursor: nesw-resize; }
-.cropper__rect i[data-h="ne"]::after { right: 14px; top: 14px; border-left: none; border-bottom: none; }
+.cropper__rect i[data-h="ne"]::after { right: 11px; top: 11px; border-left: none; border-bottom: none; }
 .cropper__rect i[data-h="se"] { right: -22px; bottom: -22px; cursor: nwse-resize; }
-.cropper__rect i[data-h="se"]::after { right: 14px; bottom: 14px; border-left: none; border-top: none; }
+.cropper__rect i[data-h="se"]::after { right: 11px; bottom: 11px; border-left: none; border-top: none; }
 .cropper__rect i[data-h="sw"] { left: -22px; bottom: -22px; cursor: nesw-resize; }
-.cropper__rect i[data-h="sw"]::after { left: 14px; bottom: 14px; border-right: none; border-top: none; }
+.cropper__rect i[data-h="sw"]::after { left: 11px; bottom: 11px; border-right: none; border-top: none; }
 .cropper__actions { display: flex; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); flex-shrink: 0; }
 .cropper__btn {
   flex: 1; min-height: 48px; background: none; border: 1px solid var(--border);
@@ -700,7 +711,9 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
   transition: all var(--ease);
 }
-.cropper__bar .cropper__btn { flex: 0 0 auto; padding: 0 18px; }
+.cropper__bar { justify-content: space-between; }
+.cropper__bar .cropper__btn { flex: 0 0 auto; padding: 0 14px; min-height: 40px; }
+.cropper__hint { flex: 1; text-align: center; }
 .cropper__btn--go { color: var(--accent); border-color: var(--border-accent); background: var(--accent-dim); }
 .cropper__btn:active { transform: scale(0.98); }
 
@@ -2601,375 +2614,211 @@ function render(bitmap, crop, maxSide, quality){
            kb: Math.round(dataUrl.length * 0.75 / 1024) };
 }
 
-/* ── crop UI ──────────────────────────────────────────────────────
-   A rectangle over the photo with four corner handles. Drag inside to
-   move, drag a corner to resize. Free form on purpose: a flyer is
-   whatever shape it is, and locking a ratio is how you slice off the
-   bottom line where the venue lives.
-   Resolves {x,y,w,h} in source pixels, null to use the whole photo,
-   or undefined if the user backed out. */
-function openCropper(bitmap, hint){
+/* ── crop ──────────────────────────────────────────────────────────
+   A frame over the photo: drag inside to move it, drag a corner to
+   resize, pinch to zoom the photo underneath. Free form on purpose,
+   because a flyer is whatever shape it is and locking a ratio is how
+   you slice off the bottom line where the venue lives.
+
+   Two things the previous version got wrong:
+     · it rebuilt the frame on every window resize, and iOS fires
+       resize whenever the URL bar slides, so the crop reset itself
+       mid gesture
+     · it always reopened on the whole photo, so a second visit threw
+       away the crop you already made
+   Both are fixed here: resize rescales the existing frame, and the
+   previous crop is passed back in.
+
+   Resolves {x,y,w,h} in source pixels, null for the whole photo, or
+   undefined if the person backed out. */
+function openCropper(bitmap, hint, initialCrop){
   return new Promise(resolve => {
     const root = document.createElement('div');
     root.className = 'cropper';
     root.innerHTML =
       '<div class="cropper__bar">' +
         '<button class="cropper__btn" data-act="cancel">back</button>' +
-        '<span class="cropper__hint">' + (hint || 'drag the corners to the flyer') + '</span>' +
+        '<span class="cropper__hint">' + (hint || 'frame the flyer') + '</span>' +
+        '<button class="cropper__btn" data-act="reset">reset</button>' +
       '</div>' +
-      '<div class="cropper__stage"><canvas class="cropper__canvas"></canvas>' +
+      '<div class="cropper__stage">' +
+        '<canvas class="cropper__canvas"></canvas>' +
         '<div class="cropper__shade"></div>' +
-        '<div class="cropper__rect"><i data-h="nw"></i><i data-h="ne"></i><i data-h="se"></i><i data-h="sw"></i></div>' +
+        '<div class="cropper__rect">' +
+          '<span class="cropper__third cropper__third--v1"></span>' +
+          '<span class="cropper__third cropper__third--v2"></span>' +
+          '<span class="cropper__third cropper__third--h1"></span>' +
+          '<span class="cropper__third cropper__third--h2"></span>' +
+          '<i data-h="nw"></i><i data-h="ne"></i><i data-h="se"></i><i data-h="sw"></i>' +
+        '</div>' +
       '</div>' +
       '<div class="cropper__actions">' +
-        '<button class="cropper__btn" data-act="skip">use whole photo</button>' +
+        '<button class="cropper__btn" data-act="skip">whole photo</button>' +
         '<button class="cropper__btn cropper__btn--go" data-act="ok">use this crop</button>' +
       '</div>';
     document.body.appendChild(root);
 
-    const stage = root.querySelector('.cropper__stage');
+    const stage  = root.querySelector('.cropper__stage');
     const canvas = root.querySelector('.cropper__canvas');
     const rectEl = root.querySelector('.cropper__rect');
-    const shade = root.querySelector('.cropper__shade');
-    let view = { x:0, y:0, w:0, h:0, scale:1 }, box = null, drag = null;
-    const MIN = 48;
+    const shade  = root.querySelector('.cropper__shade');
+    const ctx    = canvas.getContext('2d');
 
+    let view = { x:0, y:0, w:0, h:0, scale:1, zoom:1 };
+    let box  = null;              // in display pixels
+    let drag = null;
+    let pinch = null;
+    const MIN = 56;
+
+    /* fit the photo to the stage at the current zoom */
     function layout(){
       const b = stage.getBoundingClientRect();
-      const s = Math.min(b.width / bitmap.width, b.height / bitmap.height);
+      const base = Math.min(b.width / bitmap.width, b.height / bitmap.height);
+      const s = base * view.zoom;
       view.scale = s;
-      view.w = Math.round(bitmap.width * s);  view.h = Math.round(bitmap.height * s);
-      view.x = Math.round((b.width - view.w) / 2); view.y = Math.round((b.height - view.h) / 2);
+      view.w = Math.round(bitmap.width * s);
+      view.h = Math.round(bitmap.height * s);
+      view.x = Math.round((b.width  - view.w) / 2);
+      view.y = Math.round((b.height - view.h) / 2);
       canvas.width = view.w; canvas.height = view.h;
-      canvas.style.left = view.x + 'px'; canvas.style.top = view.y + 'px';
-      canvas.getContext('2d').drawImage(bitmap, 0, 0, view.w, view.h);
+      canvas.style.left = view.x + 'px';
+      canvas.style.top  = view.y + 'px';
+      ctx.drawImage(bitmap, 0, 0, view.w, view.h);
     }
-    function initBox(){
-      const i = 0.08;
-      box = { x: view.x + view.w*i, y: view.y + view.h*i, w: view.w*(1-i*2), h: view.h*(1-i*2) };
+
+    /* box from a crop in SOURCE pixels, or the default inset */
+    function setBoxFromSource(crop){
+      if (crop){
+        box = {
+          x: view.x + crop.x * view.scale,
+          y: view.y + crop.y * view.scale,
+          w: crop.w * view.scale,
+          h: crop.h * view.scale
+        };
+      } else {
+        const i = 0.06;
+        box = { x: view.x + view.w*i, y: view.y + view.h*i,
+                w: view.w*(1-i*2),    h: view.h*(1-i*2) };
+      }
+      clampBox();
     }
+    function boxToSource(){
+      return {
+        x: Math.max(0, (box.x - view.x) / view.scale),
+        y: Math.max(0, (box.y - view.y) / view.scale),
+        w: Math.min(bitmap.width,  box.w / view.scale),
+        h: Math.min(bitmap.height, box.h / view.scale)
+      };
+    }
+    function clampBox(){
+      const L = view.x, T = view.y, R = view.x + view.w, B = view.y + view.h;
+      box.w = Math.min(box.w, view.w); box.h = Math.min(box.h, view.h);
+      box.x = Math.min(Math.max(box.x, L), R - box.w);
+      box.y = Math.min(Math.max(box.y, T), B - box.h);
+    }
+
     function paint(){
-      rectEl.style.left = box.x+'px'; rectEl.style.top = box.y+'px';
-      rectEl.style.width = box.w+'px'; rectEl.style.height = box.h+'px';
+      rectEl.style.left = box.x+'px';   rectEl.style.top = box.y+'px';
+      rectEl.style.width = box.w+'px';  rectEl.style.height = box.h+'px';
       shade.style.clipPath =
         'polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ' +
         box.x+'px '+box.y+'px, ' + box.x+'px '+(box.y+box.h)+'px, ' +
         (box.x+box.w)+'px '+(box.y+box.h)+'px, ' + (box.x+box.w)+'px '+box.y+'px, ' +
         box.x+'px '+box.y+'px)';
     }
-    function pos(e){ const b = stage.getBoundingClientRect(); return { x: e.clientX-b.left, y: e.clientY-b.top }; }
-    rectEl.addEventListener('pointerdown', e => {
-      drag = { handle: e.target.dataset.h, start: pos(e), box: Object.assign({}, box) };
-      stage.setPointerCapture(e.pointerId); e.preventDefault();
+
+    function pos(e){
+      const b = stage.getBoundingClientRect();
+      return { x: e.clientX - b.left, y: e.clientY - b.top };
+    }
+
+    /* ── gestures ── */
+    const active = new Map();
+    stage.addEventListener('pointerdown', e => {
+      active.set(e.pointerId, pos(e));
+      if (active.size === 2){                       // pinch to zoom the photo
+        const [a,b] = [...active.values()];
+        pinch = { dist: Math.hypot(a.x-b.x, a.y-b.y), zoom: view.zoom, crop: boxToSource() };
+        drag = null;
+        return;
+      }
+      const handle = e.target.dataset ? e.target.dataset.h : null;
+      const inside = e.target === rectEl || handle ||
+                     rectEl.contains(e.target);
+      if (!inside) return;
+      drag = { handle, start: pos(e), box: { ...box } };
+      stage.setPointerCapture(e.pointerId);
+      e.preventDefault();
     });
+
     stage.addEventListener('pointermove', e => {
+      if (active.has(e.pointerId)) active.set(e.pointerId, pos(e));
+
+      if (pinch && active.size === 2){
+        const [a,b] = [...active.values()];
+        const d = Math.hypot(a.x-b.x, a.y-b.y);
+        view.zoom = Math.min(4, Math.max(1, pinch.zoom * (d / pinch.dist)));
+        layout(); setBoxFromSource(pinch.crop); paint();
+        return;
+      }
       if (!drag) return;
-      const p = pos(e), dx = p.x-drag.start.x, dy = p.y-drag.start.y, b = drag.box;
-      const L = view.x, T = view.y, R = view.x+view.w, B = view.y+view.h;
+
+      const p = pos(e);
+      const dx = p.x - drag.start.x, dy = p.y - drag.start.y, b0 = drag.box;
+      const L = view.x, T = view.y, R = view.x + view.w, B = view.y + view.h;
+
       if (!drag.handle){
-        box.x = Math.min(Math.max(b.x+dx, L), R-b.w);
-        box.y = Math.min(Math.max(b.y+dy, T), B-b.h);
+        box.x = Math.min(Math.max(b0.x + dx, L), R - b0.w);
+        box.y = Math.min(Math.max(b0.y + dy, T), B - b0.h);
       } else {
-        let x1=b.x, y1=b.y, x2=b.x+b.w, y2=b.y+b.h;
-        if (drag.handle.indexOf('w')>-1) x1 = Math.min(Math.max(b.x+dx, L), x2-MIN);
-        if (drag.handle.indexOf('e')>-1) x2 = Math.max(Math.min(b.x+b.w+dx, R), x1+MIN);
-        if (drag.handle.indexOf('n')>-1) y1 = Math.min(Math.max(b.y+dy, T), y2-MIN);
-        if (drag.handle.indexOf('s')>-1) y2 = Math.max(Math.min(b.y+b.h+dy, B), y1+MIN);
+        let x1 = b0.x, y1 = b0.y, x2 = b0.x + b0.w, y2 = b0.y + b0.h;
+        if (drag.handle.indexOf('w') > -1) x1 = Math.min(Math.max(b0.x + dx, L), x2 - MIN);
+        if (drag.handle.indexOf('e') > -1) x2 = Math.max(Math.min(b0.x + b0.w + dx, R), x1 + MIN);
+        if (drag.handle.indexOf('n') > -1) y1 = Math.min(Math.max(b0.y + dy, T), y2 - MIN);
+        if (drag.handle.indexOf('s') > -1) y2 = Math.max(Math.min(b0.y + b0.h + dy, B), y1 + MIN);
         box = { x:x1, y:y1, w:x2-x1, h:y2-y1 };
       }
       paint();
     });
-    stage.addEventListener('pointerup', () => { drag = null; });
-    stage.addEventListener('pointercancel', () => { drag = null; });
 
-    function relayout(){ layout(); initBox(); paint(); }
-    function finish(r){ window.removeEventListener('resize', relayout); root.remove(); resolve(r); }
+    function endPointer(e){
+      active.delete(e.pointerId);
+      if (active.size < 2) pinch = null;
+      if (active.size === 0) drag = null;
+    }
+    stage.addEventListener('pointerup', endPointer);
+    stage.addEventListener('pointercancel', endPointer);
+
+    /* Resize must PRESERVE the crop. iOS fires this whenever the URL
+       bar slides, which is why the old version reset itself mid drag. */
+    function onResize(){
+      const keep = boxToSource();
+      layout(); setBoxFromSource(keep); paint();
+    }
+    window.addEventListener('resize', onResize);
+
+    function finish(result){
+      window.removeEventListener('resize', onResize);
+      root.remove();
+      resolve(result);
+    }
+
     root.addEventListener('click', e => {
-      const act = e.target.dataset.act;
+      const act = e.target.dataset ? e.target.dataset.act : null;
       if (!act) return;
       if (act === 'cancel') return finish(undefined);
-      if (act === 'skip') return finish(null);
-      const s = view.scale;
-      finish({ x:(box.x-view.x)/s, y:(box.y-view.y)/s, w:box.w/s, h:box.h/s });
+      if (act === 'skip')   return finish(null);
+      if (act === 'reset'){ view.zoom = 1; layout(); setBoxFromSource(null); paint(); return; }
+      finish(boxToSource());
     });
-    window.addEventListener('resize', relayout);
-    requestAnimationFrame(relayout);
+
+    requestAnimationFrame(() => {
+      layout();
+      setBoxFromSource(initialCrop || null);
+      paint();
+    });
   });
 }
-
-/* The 10-field record, as a Gemini responseSchema. Identical to the Worker's
-   copy — keep them in sync, or better, have the Worker serve it. Never repeat
-   these fields in the prompt: duplicating the schema lowers output quality. */
-const EVENT_SCHEMA = {
-  type: 'object',
-  propertyOrdering: ['events','read_quality'],
-  required: ['events','read_quality'],
-  properties: {
-    events: {
-      type: 'array',
-      items: {
-        type: 'object',
-        propertyOrdering: ['event_name','space_name','venue_latitude','venue_longitude',
-          'date_literal','weekday_literal','year_literal','time_start','time_finish',
-          'recurrence','city','community','description','price','currency','contact','location_source'],
-        required: ['event_name'],
-        properties: {
-          event_name:      { type:'string' },
-          space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
-          venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
-          venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
-          date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed, e.g. "JULY 16th" or "16.08". Do not convert.' },
-          weekday_literal: { type:'string', nullable:true, description:'weekday as printed if any, e.g. "thursday". Do not convert to a date.' },
-          year_literal:    { type:'string', nullable:true, description:'year ONLY if printed. Null if the flyer omits it.' },
-          time_start:      { type:'string', nullable:true, description:'24 hour HH:MM' },
-          time_finish:     { type:'string', nullable:true, description:'24 hour HH:MM if printed. Null if only a start is shown.' },
-          recurrence:      { type:'string', nullable:true, description:'plain words if stated, e.g. "every sunday". Null for a one off.' },
-          city:            { type:'string', nullable:true, description:'town from flyer text, else from supplied EXIF location' },
-          community:       { type:'string', nullable:true, description:'wider local area, coarse and stable, e.g. "Ericeira" or "Mallorca"' },
-          description:     { type:'string', nullable:true, description:'two or three short phrases from the activity type. No dashes of any kind.' },
-          price:           { type:'number', nullable:true },
-          currency:        { type:'string', nullable:true },
-          contact:         { type:'string', nullable:true, description:'phone, handle or link exactly as printed' },
-          location_source: { type:'string', nullable:true, description:'one of printed_coordinates, printed_address, venue_name_only, none' }
-        }
-      }
-    },
-    read_quality: {
-      type: 'object',
-      propertyOrdering: ['is_event','legibility','unreadable','crop_would_help'],
-      required: ['is_event','legibility'],
-      properties: {
-        is_event:        { type:'boolean', description:'false if the photo carries no event information at all' },
-        legibility:      { type:'string', description:'clear, partial, or poor' },
-        unreadable:      { type:'array', nullable:true, items:{ type:'string' },
-                           description:'short names of what could not be read, e.g. "finish time"' },
-        crop_would_help: { type:'boolean', nullable:true,
-                           description:'true when the flyer fills a small part of the frame, sits at a steep angle, or is lost in clutter' }
-      }
-    }
-  }
-};
-
-/* ── date resolution, in code ─────────────────────────────────────
-   Reading "JULY 16th" off a poster is perception, which small models do
-   well. Working out which year that means, or which Sunday is next, is
-   arithmetic, which they do badly. So the model returns what is printed
-   and we do the maths here: deterministic, free, and testable. */
-const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-const DAYS   = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-
-function resolveDate(row, today){
-  const now = today ? new Date(today + 'T00:00:00') : new Date();
-  const lit = (row.date_literal || '').toLowerCase().trim();
-
-  if (lit){
-    let d = null, mo = null;
-    // "july 16", "16 july", "16th july"
-    const named = lit.match(/([a-z]+)\.?\s*(\d{1,2})|(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s*)?([a-z]+)/);
-    if (named){
-      const nm = (named[1] || named[4] || '').slice(0,3);
-      const dd = named[2] || named[3];
-      const idx = MONTHS.indexOf(nm);
-      if (idx > -1 && dd){ mo = idx; d = parseInt(dd,10); }
-    }
-    // "16.08", "16/08", "2026-08-16"
-    if (mo == null){
-      const iso = lit.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
-      if (iso) return `${iso[1]}-${String(+iso[2]).padStart(2,'0')}-${String(+iso[3]).padStart(2,'0')}`;
-      const num = lit.match(/(\d{1,2})[-./](\d{1,2})/);
-      if (num){ d = +num[1]; mo = +num[2] - 1; }
-    }
-    if (mo != null && d){
-      const yr = row.year_literal ? parseInt(row.year_literal,10) : null;
-      if (yr) return `${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      // No year printed: pick the year that puts this date CLOSEST to today,
-      // past or future. A flyer on a wall in July saying "JULY 16" is this
-      // year's, a week ago. Pushing it to next year would be absurd.
-      const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      let best = null;
-      for (const y of [now.getFullYear()-1, now.getFullYear(), now.getFullYear()+1]){
-        const diff = Math.abs(new Date(y, mo, d) - ref);
-        if (!best || diff < best.diff) best = { y, diff };
-      }
-      return `${best.y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    }
-  }
-
-  // weekday only: the next one from today
-  const wd = (row.weekday_literal || '').toLowerCase().trim();
-  const wi = DAYS.findIndex(x => wd.startsWith(x.slice(0,3)));
-  if (wi > -1){
-    const delta = ((wi - now.getDay()) + 7) % 7 || 7;
-    const t = new Date(now); t.setDate(now.getDate() + delta);
-    return t.toISOString().slice(0,10);
-  }
-  return '';
-}
-
-/* If a start time exists with no finish, infer a sensible session length. */
-function inferFinish(row){
-  if (row.time_finish) return String(row.time_finish).slice(0,5);
-  const t = row.time_start ? String(row.time_start).slice(0,5) : '';
-  if (!t) return '';
-  const blob = ((row.event_name||'') + ' ' + (row.description||'')).toLowerCase();
-  if (/\bopens?\b|door/.test(blob)) return '';              // door time, not a session
-  const mins = /yoga|pilates|fitness|class|workout/.test(blob) ? 60
-             : /dinner|supper|feast|lunch/.test(blob) ? 150
-             : /sauna|breathwork|meditation/.test(blob) ? 90 : 90;
-  const [h,m] = t.split(':').map(Number);
-  const end = new Date(2000,0,1,h,m + mins);
-  return String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
-}
-
-/* Rebuild the maps link ourselves and never let a forgotten fallback
-   cost us the town. Note EXIF fills city/community, never the pin. */
-function normalizeRows(rows, exif, today){
-  const clean = v => (v === null || v === undefined || v === '') ? '' : v;
-  return rows.map(r => {
-    const lat = r.venue_latitude, lng = r.venue_longitude;
-    const has = lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng);
-    return {
-      event_name:  clean(r.event_name),
-      space_name:  clean(r.space_name),
-      venue_latitude:  has ? +(+lat).toFixed(6) : '',
-      venue_longitude: has ? +(+lng).toFixed(6) : '',
-      date:        resolveDate(r, today),
-      time_start:  r.time_start ? String(r.time_start).slice(0,5) : '',
-      time_finish: inferFinish(r),
-      recurrence:  clean(r.recurrence),
-      city:        clean(r.city),
-      community:   clean(r.community),
-      price:       (r.price == null ? '' : r.price),
-      currency:    clean(r.currency) || 'EUR',
-      contact:     clean(r.contact),
-      google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
-      description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
-      location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none')
-    };
-  }).filter(r => r.event_name);
-}
-
-async function extractEvent(base64, exif){
-  // PRODUCTION: hand off to the Worker (keeps the key server-side)
-  if (PHOTO_ENDPOINT){
-    const r = await fetch(PHOTO_ENDPOINT, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'X-Bich-Invite': readInvite() },
-      body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif })
-    });
-    if (!r.ok) {
-      const msg = await r.json().catch(() => ({}));
-      const err = new Error(msg.error || 'extract failed');
-      err.soft = (r.status === 403 || r.status === 429);   // show the reason, not a generic failure
-      throw err;
-    }
-    const out = await r.json();
-    const rows = Array.isArray(out) ? out : (out.events || []);
-    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
-  }
-  // DEV: direct Gemini from the browser. One user, localhost, key not shipped.
-  if (GEMINI_KEY_DEV){
-    const today = new Date().toISOString().slice(0,10);
-    const exifNote = exif && (exif.lat!=null || exif.dt)
-      ? `\n\nEXIF supplied with this photo (location fallback only, never the event date): GPS ${exif.lat ?? 'none'}, ${exif.lng ?? 'none'} · captured ${exif.dt ?? 'unknown'}`
-      : '\n\nNo EXIF was supplied with this photo.';
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_KEY_DEV },
-      body: JSON.stringify({
-        system_instruction: { parts:[{ text: PHOTO_SYSTEM_PROMPT + `\n\nToday's date is ${today}. Use it to resolve relative dates and weekdays.` }] },
-        contents: [{ role:'user', parts:[
-          { inline_data: { mime_type:'image/jpeg', data: base64 } },
-          { text: 'Extract every event in this photo as records.' + exifNote }
-        ]}],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
-      })
-    });
-    const d = await r.json().catch(() => null);
-    if (!r.ok || !d || d.error){
-      const err = new Error(d?.error?.code === 429 ? 'busy right now. try again in a moment?' : "couldn't read that photo");
-      err.soft = d?.error?.code === 429;
-      throw err;
-    }
-    const text = (d.candidates?.[0]?.content?.parts || []).map(p => p.text).join('') || '{}';
-    const out = JSON.parse(text);
-    const rows = Array.isArray(out) ? out : (out.events || []);
-    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
-  }
-
-  // DEMO: inline model call so the flow runs without any key or backend
-  const exifLine = exif && (exif.lat!=null || exif.dt)
-    ? `\n\nEXIF supplied (location fallback only, not the event date): GPS ${exif.lat ?? '?'}, ${exif.lng ?? '?'} · captured ${exif.dt ?? '?'}` : '';
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      model:'claude-sonnet-4-6', max_tokens:1000, system: PHOTO_SYSTEM_PROMPT,
-      messages:[{ role:'user', content:[
-        { type:'image', source:{ type:'base64', media_type:'image/jpeg', data: base64 } },
-        { type:'text', text:'Extract the event(s) from this photo as a JSON array of row objects.' + exifLine }
-      ]}]
-    })
-  });
-  if (!res.ok) throw new Error('model ' + res.status);
-  const data = await res.json();
-  const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n')
-    .replace(/```json/gi,'').replace(/```/g,'').trim();
-  const parsed = JSON.parse(text);
-  return Array.isArray(parsed) ? parsed : [parsed];
-}
-
-function todayISO(){ return new Date().toISOString().slice(0,10); }
-
-function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElementById(id).value = v; }
-
-/* Photo GPS names the town and centres the map. It NEVER drops the pin:
-   a flyer in a cafe window advertises something happening elsewhere. */
-function setPhotoOrigin(lat, lng){
-  draft.photoLat = lat; draft.photoLng = lng;
-  if (window._miniMap) window._miniMap.setView([lat, lng], 12);
-  const el = document.getElementById('coordsLabel');
-  if (draft.lat == null) el.textContent = 'tap on map to set location';
-}
-
-function fillForm(row){
-  setVal('inputTitle', row.event_name);
-  setVal('inputDesc', row.description);
-  setVal('inputVenue', row.space_name);
-  setVal('inputDate', row.date);
-  if (row.time_start) setVal('inputTime', String(row.time_start).slice(0,5));
-  if (row.price != null && row.price !== '') setVal('inputPrice', row.price);
-  draft.community = row.community || '';
-  if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
-  draft.city = row.city || '';
-  draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
-  draft.mapsLink = row.google_maps_link || '';
-  // the pin comes only from coordinates PRINTED on the flyer, never from EXIF
-  const lat = (row.venue_latitude!=null && row.venue_latitude!=='') ? Number(row.venue_latitude) : null;
-  const lng = (row.venue_longitude!=null && row.venue_longitude!=='') ? Number(row.venue_longitude) : null;
-  if (lat!=null && lng!=null && !Number.isNaN(lat) && !Number.isNaN(lng)) setEventLocation(lat, lng, true);
-  else if (draft.city) document.getElementById('coordsLabel').textContent = `${draft.city} · drop a pin to set the spot`;
-}
-
-/* ── cover upload wiring ── */
-const coverPicker = document.getElementById('coverPicker');
-const coverInput  = document.getElementById('coverInput');
-const coverBusy   = document.getElementById('coverBusy');
-const coverNotice = document.getElementById('coverNotice');
-
-function openPicker(){ coverInput.click(); }
-coverPicker.addEventListener('click', (e) => {
-  if (e.target.id === 'coverReplace' || e.target.id === 'coverCrop') return;
-  if (!coverPicker.classList.contains('has-image')) openPicker();
-});
-coverPicker.addEventListener('keydown', (e) => {
-  if ((e.key==='Enter'||e.key===' ') && !coverPicker.classList.contains('has-image')){ e.preventDefault(); openPicker(); }
-});
-document.getElementById('coverReplace').addEventListener('click', openPicker);
-document.getElementById('coverCrop').addEventListener('click', async () => {
-  if (!sourceBitmap) return;
-  const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
-  if (c !== undefined) readPhoto(c);      // undefined means they backed out
-});
 
 /* Holds the decoded photo so a re-crop never re-reads the file. */
 let sourceBitmap = null, sourceExif = null;
@@ -2990,7 +2839,17 @@ function showCover(dataUrl){
 /* Runs the model on a crop (or the whole photo) and updates the form. */
 async function readPhoto(crop){
   draft.crop = crop || null;          // reused when the cover is uploaded
-  const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.85);
+
+  /* Gemini bills images in 768px blocks. A crop whose SHORT side lands
+     just above 768 costs twice as many blocks for no extra legibility,
+     so nudge it back under the line when it is close. */
+  const cw = crop ? crop.w : sourceBitmap.width;
+  const ch = crop ? crop.h : sourceBitmap.height;
+  let sendMax = SEND_MAX_SIDE;
+  const shortAt = Math.min(cw, ch) * (SEND_MAX_SIDE / Math.max(cw, ch));
+  if (shortAt > 768 && shortAt < 980) sendMax = Math.floor(SEND_MAX_SIDE * (768 / shortAt));
+
+  const send = render(sourceBitmap, crop, sendMax, 0.85);
   showCover(render(sourceBitmap, crop, COVER_MAX_SIDE, 0.85).dataUrl);
 
   coverBusy.classList.add('show');
@@ -3024,7 +2883,7 @@ async function readPhoto(crop){
         : 'photo added. some of it was hard to read';
       coverNotice.innerHTML = missed + '. <button type="button" id="recropBtn" class="cover-recrop">crop closer</button>';
       document.getElementById('recropBtn').addEventListener('click', async () => {
-        const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
+        const c = await openCropper(sourceBitmap, 'frame the flyer', draft.crop);
         if (c !== undefined) readPhoto(c);
       });
       return;
@@ -3067,8 +2926,25 @@ coverInput.addEventListener('change', async (e) => {
   }
   coverBusy.classList.remove('show');
 
-  // Straight through, no crop. The crop is offered afterwards, only if needed.
-  readPhoto(null);
+  /* Crop before reading, not after. Two reasons: the person is already
+     looking at the photo so it costs no extra step, and cropping to
+     the flyer means the whole 1000px budget goes to the flyer's text
+     instead of the wall around it, which measurably improves what
+     comes back. Skipping is one tap. */
+  const crop = await openCropper(sourceBitmap, 'frame the flyer', null);
+  if (crop === undefined) {           // backed out: forget the photo
+    coverPicker.classList.remove('has-image');
+    document.getElementById('coverImg').hidden = true;
+    document.getElementById('coverGrad').hidden = true;
+    document.getElementById('coverReplace').hidden = true;
+    document.getElementById('coverCrop').hidden = true;
+    document.getElementById('coverIcon').style.display = '';
+    document.getElementById('coverLabel').style.display = '';
+    document.getElementById('coverHint').style.display = '';
+    sourceBitmap = null;
+    return;
+  }
+  readPhoto(crop);
 });
 
 
