@@ -21,8 +21,7 @@ of this repository.
 ├── apple-touch-icon.png    Safari looks here by default
 ├── icons/                  app icons, referenced as /icons/… by the manifest
 ├── worker/                 Cloudflare Worker — Gemini + R2
-├── docs/                   schema spec and the code review
-└── archive/                dead code, kept for reference. Not loaded.
+└── docs/                   schema spec and the code review
 ```
 
 Everything the browser loads has to stay at the repository root: GitHub Pages
@@ -30,18 +29,13 @@ serves from `/` (or `/docs`, nothing else), the service worker needs root scope
 to control the whole origin, and `manifest.webmanifest` declares `"scope": "/"`.
 Moving `index.html` into a subfolder would take the site offline.
 
-`worker/`, `docs/` and `archive/` are never fetched by the browser, so they can
-live wherever is tidiest.
+`worker/` and `docs/` are never fetched by the browser, so they can live
+wherever is tidiest.
 
-### About `archive/`
-
-`store.js`, `photo-pipeline.js` and `themes.css` are **not loaded by anything**.
-Each is duplicated inline inside `index.html`, and the copies have drifted —
-`photo-pipeline.js` in particular is an older version of the photo pipeline with
-bugs the inline copy has already fixed.
-
-They are parked in `archive/` so nobody edits them expecting the app to change.
-See `docs/BUGS.md` §1. Either delete them or wire them up; do not leave both.
+`store.js`, `photo-pipeline.js` and `themes.css` were deleted, not moved. Each
+was a stale duplicate of code that already lives inline in `index.html`, and
+none of them was ever loaded. Verified redundant line by line — see
+`docs/BUGS.md` §1.
 
 ---
 
@@ -96,8 +90,13 @@ The service worker is network-first for HTML and `config.js`, so a bumped
 
 ## Known issues
 
-`docs/BUGS.md` — 40 findings from a full review, ordered by impact. The three at
-the top break things today.
+`docs/BUGS.md` — 46 findings from a full review, ordered by impact.
+
+**Start with §0.** `loadFeed()` in `index.html` is missing its closing braces and
+swallows 285 lines, including the app's entire boot sequence. The feed never
+loads from the database, share links never open, the profile tab throws, and
+publishing starts an infinite request loop. Everything else is hard to observe
+until that is fixed.
 
 ## Not in this repo, and should be
 
