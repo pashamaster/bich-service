@@ -90,6 +90,7 @@ Today's date is ${today}.`;
 
 const cors = (o) => ({
   'Access-Control-Allow-Origin': o,
+  'Vary': 'Origin',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Bich-Invite',
   'Access-Control-Max-Age': '86400'
@@ -128,6 +129,21 @@ export default {
   }
 };
 
+/* Magic bytes. JPEG starts FF D8 FF, PNG 89 50 4E 47, WebP is RIFF
+   then WEBP at offset 8. */
+function sniff(buf, declared) {
+  const b = new Uint8Array(buf.slice(0, 16));
+  if (b.length < 12) return false;
+  const isJpeg = b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
+  const isPng  = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47;
+  const isWebp = b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+                 b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50;
+  if (declared === 'image/jpeg') return isJpeg;
+  if (declared === 'image/png')  return isPng;
+  if (declared === 'image/webp') return isWebp;
+  return false;
+}
+
 /* ── images: R2, zero egress cost at any volume ─────────────────── */
 async function uploadImage(request, env, origin) {
   if (!env.COVERS) return json({ error: 'no bucket bound' }, 500, origin);
@@ -141,35 +157,60 @@ async function uploadImage(request, env, origin) {
   catch { return json({ error: 'send a form' }, 400, origin); }
 
   const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const out = {};
 
+  /* Validate everything BEFORE writing anything. The old loop wrote
+     `full` to R2 and only then checked `thumb`, so a rejected thumb
+     left an orphaned object in the bucket that no row referenced and
+     nothing would ever clean up. */
+  const staged = [];
   for (const variant of ['full', 'thumb']) {
     const file = form.get(variant);
     if (!file || typeof file === 'string') continue;
 
     const type = file.type || 'image/webp';
-    if (!/^image\/(webp|jpeg|png)$/.test(type)) return json({ error: 'images only' }, 415, origin);
+    if (!/^image\/(webp|jpeg|png)$/.test(type)) {
+      return json({ error: `${variant}: only webp, jpeg or png` }, 415, origin);
+    }
+
+    /* size before arrayBuffer(). Reading first meant a deliberately
+       huge POST could exhaust the isolate's 128 MB before the check
+       it was supposed to fail. */
+    const cap = variant === 'thumb' ? 400 * 1024 : 3 * 1024 * 1024;
+    if (typeof file.size === 'number' && file.size > cap) {
+      return json({ error: `${variant}: ${Math.round(file.size / 1024)}kb exceeds the ${Math.round(cap / 1024)}kb limit` }, 413, origin);
+    }
 
     const buf = await file.arrayBuffer();
-    const cap = variant === 'thumb' ? 400 * 1024 : 3 * 1024 * 1024;
-    if (buf.byteLength > cap) return json({ error: 'image too large' }, 413, origin);
+    if (buf.byteLength > cap) {
+      return json({ error: `${variant}: too large` }, 413, origin);
+    }
+
+    /* file.type is whatever the client's multipart header claimed.
+       Check the actual bytes, or this is anonymous file hosting for
+       anything at all. */
+    if (!sniff(buf, type)) {
+      return json({ error: `${variant}: contents are not a ${type}` }, 415, origin);
+    }
 
     const ext = type.split('/')[1].replace('jpeg', 'jpg');
-    const key = `c/${stamp}${variant === 'thumb' ? '-t' : ''}.${ext}`;
+    staged.push({ variant, buf, type, key: `c/${stamp}${variant === 'thumb' ? '-t' : ''}.${ext}` });
+  }
 
-    await env.COVERS.put(key, buf, {
+  if (!staged.some(v => v.variant === 'full')) return json({ error: 'no image' }, 400, origin);
+
+  const out = {};
+  for (const v of staged) {
+    await env.COVERS.put(v.key, v.buf, {
       httpMetadata: {
-        contentType: type,
+        contentType: v.type,
         /* The key is unique per upload, so this may cache forever.
            Repeat views come from the edge and never touch the bucket,
            which is what keeps R2 effectively free. */
         cacheControl: 'public, max-age=31536000, immutable'
       }
     });
-    out[variant] = key;
+    out[v.variant] = v.key;
   }
-
-  if (!out.full) return json({ error: 'no image' }, 400, origin);
 
   // Fall back to serving through this worker when no image domain is
   // configured, so covers work before img.bich.app exists.
@@ -193,7 +234,8 @@ async function serveImage(request, env, origin) {
     headers: {
       'Content-Type': obj.httpMetadata?.contentType || 'image/webp',
       'Cache-Control': 'public, max-age=31536000, immutable',
-      'Access-Control-Allow-Origin': origin
+      'Access-Control-Allow-Origin': origin,
+      'Vary': 'Origin'
     }
   });
 }
