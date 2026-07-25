@@ -162,26 +162,74 @@ async function health(request, env, origin) {
   };
 
   if (deep && env.GEMINI_API_KEY) {
-    try {
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${out.gemini_model}`,
-        { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
-      const b = await r.json().catch(() => null);
-      out.gemini = r.ok
-        ? { key_works: true, model_reachable: true, name: b?.name,
-            methods: b?.supportedGenerationMethods }
-        : { key_works: r.status !== 401 && r.status !== 403,
-            model_reachable: false, status: r.status,
-            error: b?.error?.message || 'unknown',
-            hint: r.status === 404
-              ? `this key cannot reach "${out.gemini_model}". List what it can: ` +
-                `curl -s -H "x-goog-api-key: $KEY" ` +
-                `"https://generativelanguage.googleapis.com/v1beta/models" | grep '"name"'`
-              : r.status === 403 ? 'key rejected: wrong key, or the Generative Language API is not enabled on that project'
-              : undefined };
-    } catch { out.gemini = { key_works: null, error: 'could not reach googleapis.com' }; }
+    /* Shape of the secret, never the secret. Every Google AI Studio key
+       is "AIza" + 35 characters, so the prefix carries no information
+       and the length tells you immediately whether a whole key landed.
+       A 401 saying "expected OAuth 2 access token" almost always means
+       Google saw no usable key at all - blank, whitespace, or a
+       placeholder - rather than a key it rejected. */
+    const k = env.GEMINI_API_KEY;
+    const trimmed = k.trim();
+    out.gemini_key_shape = {
+      length: k.length,
+      prefix: trimmed.slice(0, 4),
+      looks_like_ai_studio_key: /^AIza[\w-]{35}$/.test(trimmed),
+      has_surrounding_whitespace: k !== trimmed,
+      has_quotes: /^['"]|['"]$/.test(trimmed)
+    };
+
+    /* Try both accepted forms. If the header fails and the query
+       param works, the key is fine and the transport was the problem;
+       if both fail the same way, the key itself is wrong. */
+    const base = `https://generativelanguage.googleapis.com/v1beta/models/${out.gemini_model}`;
+    const attempt = async (label, url, headers) => {
+      try {
+        const r = await fetch(url, { headers });
+        const b = await r.json().catch(() => null);
+        return { via: label, ok: r.ok, status: r.status,
+                 name: b?.name, methods: b?.supportedGenerationMethods,
+                 error: b?.error?.message, reason: b?.error?.status };
+      } catch (e) { return { via: label, ok: false, error: 'network: ' + String(e).slice(0, 80) }; }
+    };
+
+    const viaHeader = await attempt('x-goog-api-key header', base, { 'x-goog-api-key': trimmed });
+    const viaQuery  = viaHeader.ok ? null
+      : await attempt('?key= query param', `${base}?key=${encodeURIComponent(trimmed)}`, {});
+    const win = viaHeader.ok ? viaHeader : (viaQuery && viaQuery.ok ? viaQuery : viaHeader);
+
+    out.gemini = {
+      key_works: Boolean(win.ok),
+      model_reachable: Boolean(win.ok),
+      via: win.via,
+      status: win.status,
+      name: win.name,
+      methods: win.methods,
+      error: win.ok ? undefined : win.error,
+      also_tried: viaQuery ? { via: viaQuery.via, status: viaQuery.status, error: viaQuery.error } : undefined
+    };
+
+    if (!win.ok) {
+      /* whitespace and quotes first: those also fail the shape test,
+         but the fix is different and more specific. */
+      out.gemini.hint =
+        out.gemini_key_shape.has_surrounding_whitespace || out.gemini_key_shape.has_quotes
+          ? 'the stored key has stray whitespace or quotes around it, usually a trailing newline from a paste. ' +
+            'Re-enter it with no quotes: wrangler secret put GEMINI_API_KEY --name bich-app' :
+        !out.gemini_key_shape.looks_like_ai_studio_key
+          ? 'the stored value is not shaped like a Google AI Studio key (AIza followed by 35 characters, 39 total). ' +
+            'Most likely the secret is blank, a placeholder, or an OAuth client id rather than an API key. ' +
+            'Get one at https://aistudio.google.com/apikey then: wrangler secret put GEMINI_API_KEY --name bich-app' :
+        win.status === 404
+          ? `the key is valid but cannot reach "${out.gemini_model}". List what it can reach: ` +
+            `curl -s -H "x-goog-api-key: $KEY" "https://generativelanguage.googleapis.com/v1beta/models" | grep '"name"'` :
+        win.status === 403
+          ? 'key rejected: the Generative Language API may not be enabled on that project, or the key has referrer/IP restrictions that block a Worker.' :
+        win.status === 401
+          ? 'Google saw no usable credential. The secret exists but its contents are not a working API key.'
+          : undefined;
+    }
   } else if (deep) {
-    out.gemini = { key_works: false, error: 'GEMINI_API_KEY secret is not set. Run: wrangler secret put GEMINI_API_KEY' };
+    out.gemini = { key_works: false, error: 'GEMINI_API_KEY secret is not set. Run: wrangler secret put GEMINI_API_KEY --name bich-app' };
   }
 
   if (deep && env.COVERS) {
