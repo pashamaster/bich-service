@@ -605,6 +605,24 @@ body { display: flex; align-items: center; justify-content: center; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+/* The detail map is the answer to "where actually is this". The feed
+   card cannot show it and the create form already had one; the screen
+   people open before deciding to go had nothing. */
+.detail-map-block { margin-top: 24px; }
+.detail-map {
+  width: 100%; height: 180px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.detail-map__link {
+  display: inline-block; margin-top: 8px;
+  font-family: var(--font-mono); font-size: 0.62rem;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid var(--border-accent); padding-bottom: 2px;
+}
 .feed-status {
   font-size: 0.62rem; letter-spacing: 0.04em; color: var(--muted);
   text-align: center; padding: var(--space-md);
@@ -1028,51 +1046,21 @@ body { display: flex; align-items: center; justify-content: center; }
 /* ═══ 2026 THEMES ═══ */
 /* ══════════════════════════════════════════════════════════════════
    bich.service — themes
-   Three variants of one identity. The gold HUE never changes; only
-   its lightness moves, because hue is what people recognise and
-   lightness is what makes it readable.
+   Two variants of one identity. The gold HUE never changes; only its
+   lightness moves, because hue is what people recognise and lightness
+   is what makes it readable.
 
-     night  (default) — the brand. indoors, evenings, OLED.
-     sun              — same night palette, brightened. glare, shade.
-     paper            — warm printed sheet. direct midday sun.
+     night   — the brand. high contrast, holds up under glare.
+     paper   — warm printed sheet. direct midday sun.
 
-   Set with  document.documentElement.dataset.theme = 'sun'
+   The map basemap follows the same switch: dark CARTO tiles under
+   night, light ones under paper. See MAP_TILES.
+
+   Set with  document.documentElement.dataset.theme = 'paper'
    ══════════════════════════════════════════════════════════════════ */
 
 :root,
 :root[data-theme="night"] {
-  --bg:          #0d0c0a;
-  --bg-elevated: #161410;
-  --surface:     #131210;
-
-  --text:   #e8e2d9;                    /* 15.4:1 */
-  --muted:  rgba(232, 226, 217, 0.55);  /* was 2.7:1, now 5.1:1 */
-  --subtle: rgba(232, 226, 217, 0.38);  /* was 1.6:1, now 3.0:1 */
-
-  --accent:        #c8a96e;             /*  8.8:1 */
-  --accent-dim:    rgba(200, 169, 110, 0.08);
-  --border-accent: rgba(200, 169, 110, 0.22);
-  --border:        rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --red:           #e05252;
-
-  --grain-opacity: 0.028;
-  --img-brightness: 1;
-  --scrim-soft:   rgba(13, 12, 10, 0.55);
-  --scrim:        rgba(13, 12, 10, 0.66);
-  --accent-bright: #d4b878;
-  --scrim-strong: rgba(13, 12, 10, 0.86);
-  --desk: #050505;
-  color-scheme: dark;
-}
-
-/* ── SUN ───────────────────────────────────────────────────────────
-   Not a different design. The same one with the volume up, for the
-   case where the screen is fighting ambient light but you still want
-   the brand. Text goes near white, the gold lifts, grain drops away
-   because texture becomes noise under glare, and borders thicken so
-   structure survives a washed out screen.                           */
-:root[data-theme="sun"] {
   --bg:          #0a0908;
   --bg-elevated: #17150f;
   --surface:     #121110;
@@ -1097,6 +1085,7 @@ body { display: flex; align-items: center; justify-content: center; }
   --desk: #030302;
   color-scheme: dark;
 }
+
 
 /* ── PAPER ─────────────────────────────────────────────────────────
    For direct midday sun, where a dark screen stops being an
@@ -1380,7 +1369,6 @@ if ('serviceWorker' in navigator) {
         <span class="text-label">light</span>
         <div class="theme-switch" id="themeSwitch">
           <button type="button" data-theme="paper" aria-pressed="true">paper</button>
-          <button type="button" data-theme="sun"   aria-pressed="false">sun</button>
           <button type="button" data-theme="night" aria-pressed="false">night</button>
         </div>
         <p class="me-note">paper reads best outside. night is easier on the eyes indoors.</p>
@@ -1579,6 +1567,28 @@ if ('serviceWorker' in navigator) {
         <div class="detail-meta-grid__label">going</div>
         <div class="detail-meta-grid__value" id="detailGoing"></div>
       </div>
+      <div class="detail-meta-grid__item" id="detailEndsItem" hidden>
+        <div class="detail-meta-grid__label">until</div>
+        <div class="detail-meta-grid__value" id="detailEnds"></div>
+      </div>
+      <div class="detail-meta-grid__item" id="detailCapItem" hidden>
+        <div class="detail-meta-grid__label">capacity</div>
+        <div class="detail-meta-grid__value" id="detailCap"></div>
+      </div>
+      <div class="detail-meta-grid__item" id="detailRepeatItem" hidden>
+        <div class="detail-meta-grid__label">repeats</div>
+        <div class="detail-meta-grid__value" id="detailRepeat"></div>
+      </div>
+      <div class="detail-meta-grid__item" id="detailContactItem" hidden>
+        <div class="detail-meta-grid__label">contact</div>
+        <div class="detail-meta-grid__value" id="detailContact"></div>
+      </div>
+    </div>
+
+    <div class="detail-map-block" id="detailMapBlock" hidden>
+      <div class="text-label" style="margin-bottom: 8px;">getting there</div>
+      <div class="detail-map" id="detailMap"></div>
+      <a class="detail-map__link" id="detailMapLink" target="_blank" rel="noopener">open in maps</a>
     </div>
 
     <div style="margin-top: 24px;">
@@ -1807,6 +1817,79 @@ function renderBundles() {
 }
 
 /* ─── EVENT DETAIL ─── */
+const MONEY = { EUR: '€', USD: '$', GBP: '£' };
+function money(v, cur){
+  if (!v) return 'free';
+  const sym = MONEY[cur] || '';
+  return sym ? sym + v : v + ' ' + (cur || '');
+}
+
+/* feed() returns a lean row - it has no ends_at, capacity, recurrence
+   or contact. events_public has all of them. Rather than widening the
+   RPC (which would mean dropping and recreating the function, since
+   you cannot change a RETURNS TABLE in place), fetch the full row on
+   open. One request, only when someone actually taps a card. */
+async function enrichEvent(e){
+  if (!SB_READY() || e._full) return e;
+  try {
+    const rows = await sbGet(
+      `events_public?select=*&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
+    if (rows && rows[0]) Object.assign(e, rowToEvent(rows[0]), { _full: true, bundle: e.bundle });
+  } catch(err){ console.warn('[bich] detail fetch failed', err.message); }
+  return e;
+}
+
+function paintDetail(e){
+  const set = (id, val, itemId) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val == null ? '' : val;
+    if (itemId){
+      const item = document.getElementById(itemId);
+      if (item) item.hidden = !val;
+    }
+  };
+  set('detailPrice', money(e.price, e.currency));
+  set('detailGoing', `${e.going} ${e.going === 1 ? 'person' : 'people'}`);
+  set('detailCap', e.capacity ? `${e.capacity} places` : '', 'detailCapItem');
+  set('detailRepeat', e.recurrence || '', 'detailRepeatItem');
+  set('detailContact', e.contact || '', 'detailContactItem');
+  set('detailEnds', e.ends_at
+      ? new Date(e.ends_at).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })
+      : '', 'detailEndsItem');
+
+  const block = document.getElementById('detailMapBlock');
+  const hasPin = e.lat != null && e.lng != null;
+  block.hidden = !hasPin;
+  if (!hasPin) return;
+
+  const link = document.getElementById('detailMapLink');
+  link.href = `https://www.google.com/maps/search/?api=1&query=${e.lat},${e.lng}`;
+
+  /* Leaflet measures its container on creation, and the detail screen
+     slides in - so build it after the transition or every tile lands
+     in the wrong place. */
+  setTimeout(() => {
+    if (!window._detailMap){
+      window._detailMap = L.map('detailMap', {
+        zoomControl: false, attributionControl: false,
+        scrollWheelZoom: false, dragging: true
+      });
+      window._detailBase = L.tileLayer(TILE_URL(currentTiles().base), {
+        subdomains: 'abcd', maxZoom: 19
+      }).addTo(window._detailMap);
+    }
+    const m = window._detailMap;
+    if (window._detailMarker) m.removeLayer(window._detailMarker);
+    window._detailMarker = L.marker([e.lat, e.lng], {
+      icon: L.divIcon({ className: '',
+        html: '<div class="map-marker map-marker--single" style="width:18px;height:18px;"></div>',
+        iconSize: [18, 18] })
+    }).addTo(m);
+    m.setView([e.lat, e.lng], 16);
+    m.invalidateSize();
+  }, 120);
+}
+
 function openDetail(id) {
   const e = EVENTS.find(x => x.id === id);
   if (!e) return;
@@ -1815,9 +1898,8 @@ function openDetail(id) {
   document.getElementById('detailDesc').textContent = e.desc;
   document.getElementById('detailWhen').textContent = e.when;
   document.getElementById('detailWhere').textContent = e.venue + ' · ' + e.address;
-  document.getElementById('detailPrice').textContent = e.price > 0 ? `€${e.price}` : 'free';
-  document.getElementById('detailGoing').textContent = `${e.going} people`;
   document.getElementById('detailHost').textContent = e.host;
+  paintDetail(e);
   if (e.crossed >= 3) {
     document.getElementById('detailCircle').style.display = '';
     document.getElementById('detailCircleNum').textContent = e.crossed;
@@ -1828,6 +1910,11 @@ function openDetail(id) {
   window._openEventId = e.id;
   paintAttendButton(Store.isGoing(e.id));
   document.getElementById('detailScreen').classList.add('visible');
+
+  // then fill in what the lean feed row did not carry
+  enrichEvent(e).then(full => {
+    if (window._openEventId === full.id) paintDetail(full);
+  });
 }
 
 /* The going state lives in the local store, so it survives a refresh,
@@ -1937,7 +2024,29 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-/* ─── MAP (using OSM tiles for prototype only) ─── */
+/* ─── MAP ──────────────────────────────────────────────────────────
+   The basemap used to be hard coded to CARTO's dark tiles, so the map
+   stayed black in paper mode while every panel around it was cream.
+   Labels ride in a separate layer so they stay legible over the base;
+   setUrl() swaps both in place rather than tearing layers down. */
+const MAP_TILES = {
+  night: { base: 'dark_nolabels',  labels: 'dark_only_labels'  },
+  paper: { base: 'light_nolabels', labels: 'light_only_labels' }
+};
+const TILE_URL = name => `https://{s}.basemaps.cartocdn.com/${name}/{z}/{x}/{y}{r}.png`;
+
+function currentTiles(){
+  return MAP_TILES[document.documentElement.dataset.theme] || MAP_TILES.night;
+}
+
+/* Called by applyTheme. Safe before either map exists. */
+function applyMapTheme(){
+  const t = currentTiles();
+  [window._mapBase, window._miniBase, window._detailBase]
+    .forEach(l => l && l.setUrl(TILE_URL(t.base)));
+  if (window._mapLabels) window._mapLabels.setUrl(TILE_URL(t.labels));
+}
+
 function initMap() {
   const map = L.map('map', {
     center: [39.62, 2.65],
@@ -1948,14 +2057,15 @@ function initMap() {
 
   // NOTE: For production, swap to Protomaps self-hosted or Stadia per spec.
   // This is dev-only use of OSM public tiles for the prototype.
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+  const tiles = currentTiles();
+  window._mapBase = L.tileLayer(TILE_URL(tiles.base), {
     attribution: '© OSM · © CARTO',
     subdomains: 'abcd',
     maxZoom: 19
   }).addTo(map);
 
   // Add labels layer for readability
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+  window._mapLabels = L.tileLayer(TILE_URL(tiles.labels), {
     subdomains: 'abcd',
     maxZoom: 19,
     pane: 'shadowPane'
@@ -2013,7 +2123,7 @@ function initMiniMap() {
     center: [39.62, 2.65], zoom: 10,
     zoomControl: false, attributionControl: false
   });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+  window._miniBase = L.tileLayer(TILE_URL(currentTiles().base), {
     subdomains: 'abcd', maxZoom: 19
   }).addTo(m);
   m.on('click', (e) => setEventLocation(e.latlng.lat, e.latlng.lng, false));
@@ -2024,16 +2134,33 @@ function initMiniMap() {
 /* single source of truth for the pin — used by map taps AND photo extraction */
 function setEventLocation(lat, lng, fromPhoto) {
   draft.lat = +lat; draft.lng = +lng;
+
+  /* Coordinates are the better source of truth for which community an
+     event belongs to. Text from a flyer says "Ericeira coast"; a pin
+     says 38.96, -9.41, and that resolves to one slug every time. */
+  const slug = communityForCoords(draft.lat, draft.lng);
+  if (slug) draft.community = slug;
+
   const m = window._miniMap;
   if (m) {
     if (miniMarker) m.removeLayer(miniMarker);
     miniMarker = L.marker([lat, lng], {
       icon: L.divIcon({ className: '', html: '<div class="map-marker map-marker--single" style="width:18px;height:18px;"></div>', iconSize: [18, 18] })
     }).addTo(m);
-    m.setView([lat, lng], 14);
+    /* A photo's GPS is where the flyer was standing, so the venue is
+       usually within a street or two. Open close enough to recognise
+       the block; a town-level view makes the user pan before they can
+       even start. */
+    m.setView([lat, lng], fromPhoto ? 17 : 14);
+    setTimeout(() => m.invalidateSize(), 0);
   }
+
+  const name = slug ? (KNOWN_COMMUNITIES.find(c => c.slug === slug) || {}).name : null;
   document.getElementById('coordsLabel').textContent =
-    `${draft.lat.toFixed(4)}, ${draft.lng.toFixed(4)}${fromPhoto ? ' · from photo' : ''} · ready to publish`;
+    `${draft.lat.toFixed(4)}, ${draft.lng.toFixed(4)}`
+    + (fromPhoto ? ' · from photo' : '')
+    + (name ? ' · ' + name.toLowerCase() : '')
+    + ' · drag the pin to the door';
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -2405,6 +2532,12 @@ function rowToEvent(r){
           + ' · ' + when.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }),
     starts_at: r.starts_at,
     price: (r.price_value || 0) / 100,
+    currency: r.price_currency || 'EUR',
+    ends_at: r.ends_at || null,
+    capacity: r.capacity ?? null,
+    recurrence: r.recurrence || '',
+    contact: r.contact || '',
+    coverFull: r.cover_url || null,
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
     host: '',
@@ -2433,16 +2566,89 @@ function bundleFor(when){
 let KNOWN_COMMUNITIES = null;
 async function loadCommunities(){
   if (KNOWN_COMMUNITIES || !SB_READY()) return KNOWN_COMMUNITIES;
-  try { KNOWN_COMMUNITIES = await sbGet('communities?select=slug,name'); }
-  catch(_){ KNOWN_COMMUNITIES = []; }
+  try {
+    KNOWN_COMMUNITIES = await sbGet(
+      'communities?select=slug,name,country,centre_lat,centre_lng,radius_km&is_active=is.true');
+  } catch(_){ KNOWN_COMMUNITIES = []; }
   return KNOWN_COMMUNITIES;
 }
+
 function resolveCommunity(text){
   if (!text || !KNOWN_COMMUNITIES) return null;
   const t = String(text).trim().toLowerCase();
   const hit = KNOWN_COMMUNITIES.find(c =>
     c.slug === t || c.name.toLowerCase() === t || t.indexOf(c.slug) > -1);
   return hit ? hit.slug : null;
+}
+
+/* Great-circle distance. Six lines, no dependency, accurate to well
+   under a metre at these scales. */
+function haversineKm(lat1, lng1, lat2, lng2){
+  const R = 6371, rad = d => d * Math.PI / 180;
+  const dLat = rad(lat2 - lat1), dLng = rad(lng2 - lng1);
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/* Which community does a coordinate belong to?
+
+   No gazetteer needed, and deliberately so. The question is not "what
+   town is this?" - that would need a global place database, four
+   million rows, and is not something to hand write. The question is
+   "which of MY communities is this inside?", and the answer is already
+   in the communities table: a centre and a radius. Nearest centre that
+   still contains the point wins.
+
+   Outside every radius returns null, which is correct. An event in a
+   town you do not run yet has no community, and inventing one is the
+   exact failure the schema comment warns about. */
+function communityForCoords(lat, lng){
+  if (lat == null || lng == null || !KNOWN_COMMUNITIES) return null;
+  let best = null, bestKm = Infinity;
+  for (const c of KNOWN_COMMUNITIES){
+    if (c.centre_lat == null || c.centre_lng == null) continue;
+    const km = haversineKm(lat, lng, c.centre_lat, c.centre_lng);
+    if (km <= (c.radius_km || 25) && km < bestKm){ best = c; bestKm = km; }
+  }
+  if (best) console.info(`[bich] ${lat.toFixed(3)},${lng.toFixed(3)} -> ${best.slug} (${bestKm.toFixed(1)}km from centre)`);
+  return best ? best.slug : null;
+}
+
+/* Venue names already known near a point, best first. Handed to the
+   model so it can match "organic way" on a flyer to the exact string
+   in your venue book instead of inventing a near miss. */
+/* Turn an exact venue name the model echoed back into a venue id. */
+async function linkKnownVenue(name){
+  if (!SB_READY() || !name) return;
+  try {
+    const rows = await sbGet(
+      `venues?select=id,name,lat,lng&name=eq.${encodeURIComponent(name)}&limit=1`);
+    if (rows && rows[0]){
+      draft.venueId = rows[0].id;
+      if (draft.lat == null && rows[0].lat != null){
+        setEventLocation(rows[0].lat, rows[0].lng, false);
+      }
+      console.info('[bich] matched known venue:', rows[0].name);
+    }
+  } catch(err){ console.warn('[bich] venue link failed', err.message); }
+}
+
+async function venuesNear(lat, lng, slug){
+  if (!SB_READY()) return [];
+  try {
+    const q = slug
+      ? `venues?select=name,city&community_slug=eq.${encodeURIComponent(slug)}&order=use_count.desc&limit=30`
+      : (lat == null ? null :
+         `venues?select=name,city&lat=gte.${lat-0.25}&lat=lte.${lat+0.25}` +
+         `&lng=gte.${lng-0.25}&lng=lte.${lng+0.25}&order=use_count.desc&limit=30`);
+    if (!q) return [];
+    const rows = await sbGet(q);
+    return (rows || []).map(v => v.name).filter(Boolean);
+  } catch(err){
+    console.warn('[bich] venue shortlist unavailable', err.message);
+    return [];
+  }
 }
 
 function setFeedStatus(text, isError){
@@ -2462,6 +2668,72 @@ function setFeedStatus(text, isError){
    grant beyond select. If the RPC is misconfigured the events still
    show, just without the social number - which is far better than
    silently falling back to seven fake events that look real. */
+/* ── bichCheck() ───────────────────────────────────────────────────
+   One command that proves, or disproves, every link in the chain:
+   config file, Supabase reachability, each table's policies, the
+   worker, its R2 binding and its Gemini key. Prints a table and
+   returns the raw object.                                           */
+async function bichCheck(){
+  const rows = [];
+  const add = (step, ok, detail) => rows.push({ step, ok: ok === null ? '?' : (ok ? 'yes' : 'NO'), detail: detail || '' });
+
+  add('config.js loaded', Boolean(window.BICH_CONFIG),
+      window.BICH_CONFIG ? 'version ' + (window.BICH_CONFIG.version || '?') : 'missing - check /config.js is deployed');
+  add('supabase configured', SB_READY(), SUPABASE_URL || 'SUPABASE_URL is empty');
+  add('worker configured', Boolean(WORKER_URL), WORKER_URL || 'no worker url');
+
+  if (SB_READY()){
+    for (const [label, path] of [
+      ['read communities', 'communities?select=slug&limit=1'],
+      ['read venues',      'venues?select=id&limit=1'],
+      ['read events_public','events_public?select=short_id&limit=1'],
+      ['read users',       'users?select=id&limit=1']
+    ]){
+      try { await sbGet(path); add(label, true); }
+      catch(e){ add(label, false, `${e.status || ''} ${e.message}`.trim()); }
+    }
+    try {
+      const f = await sbRpc('feed', { viewer: null, community: null, max_results: 1 });
+      add('feed() rpc', true, `${f.length} row(s)`);
+    } catch(e){
+      add('feed() rpc', false, `${e.status || ''} ${e.message}`.trim() +
+          ' - schema part 3 grants execute on feed() to anon');
+    }
+    add('identity', Boolean(CURRENT_USER.id), CURRENT_USER.id ? currentHandle : 'no user row yet');
+  }
+
+  let health = null;
+  if (WORKER_URL){
+    try {
+      const r = await fetch(WORKER_URL + '/health?deep=1', { signal: AbortSignal.timeout(20000) });
+      health = await r.json();
+      add('worker reachable', r.ok, WORKER_URL);
+      add('r2 bucket bound', health.r2_bucket_bound, health.r2_bucket_bound ? '' : 'add [[r2_buckets]] to wrangler.toml and redeploy');
+      add('r2 writable', health.r2 ? health.r2.writable : null, health.r2 && health.r2.error || '');
+      add('gemini key set', health.gemini_key_present, health.gemini_key_present ? '' : 'wrangler secret put GEMINI_API_KEY');
+      add('gemini key works', health.gemini ? health.gemini.key_works : null,
+          (health.gemini && (health.gemini.error || health.gemini.hint)) || health.gemini_model);
+      add('model reachable', health.gemini ? health.gemini.model_reachable : null, health.gemini_model);
+      add('cors origin allowed', health.origin_allowed,
+          health.origin_allowed === false
+            ? `add ${location.origin} to ALLOWED_ORIGINS in wrangler.toml`
+            : health.allowed_origins.join(', '));
+      add('invite gate', !health.invite_gate_on || Boolean(readInvite()),
+          health.invite_gate_on ? (readInvite() ? 'code held' : 'worker requires a code, this device has none') : 'open');
+    } catch(e){
+      add('worker reachable', false,
+          `${WORKER_URL} did not answer. Not deployed, or ALLOWED_ORIGINS excludes ${location.origin}`);
+    }
+  }
+
+  console.table(rows);
+  const bad = rows.filter(r => r.ok === 'NO');
+  console.log(bad.length ? `${bad.length} problem(s): ` + bad.map(r => r.step).join(', ')
+                         : 'everything checks out');
+  return { rows, health };
+}
+window.bichCheck = bichCheck;
+
 async function loadFeed(){
   if (!SB_READY()) return false;
 
@@ -2506,21 +2778,29 @@ async function loadFeed(){
 }
 
 /* ── themes ────────────────────────────────────────────────────────
-   night is the brand. sun brightens it for glare. paper is for direct
-   midday, where a dark screen stops being an interface and becomes a
-   mirror. The gold hue is identical in all three; only its lightness
-   moves, because hue is what people recognise. */
-const THEMES = ['night', 'sun', 'paper'];
+   night is the brand. paper is for direct midday, where a dark screen
+   stops being an interface and becomes a mirror. The gold hue is
+   identical in both; only its lightness moves, because hue is what
+   people recognise.
+
+   applyTheme also retiles both maps, so the basemap never sits black
+   inside a cream interface. */
+const THEMES = ['night', 'paper'];
 function applyTheme(name){
   const t = THEMES.includes(name) ? name : 'night';
   document.documentElement.dataset.theme = t;
   Store.set({ theme: t });
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = t === 'paper' ? '#f4efe6' : (t === 'sun' ? '#0a0908' : '#0d0c0a');
+  if (meta) meta.content = t === 'paper' ? '#f4efe6' : '#0a0908';
+  applyMapTheme(t);
   document.querySelectorAll('.theme-switch button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
 }
 function initThemes(){
+  /* 'sun' was a third theme, now removed. Rewrite it once rather than
+     leaving a value in storage that no longer resolves. */
+  // 'sun' was folded into 'night'; its palette is what night now uses.
+  if (Store.data.theme === 'sun') Store.set({ theme: 'night' });
   applyTheme(Store.data.theme || 'paper');
   const sw = document.getElementById('themeSwitch');
   if (sw) sw.addEventListener('click', e => {
@@ -3062,13 +3342,14 @@ function normalizeRows(rows, exif, today){
   }).filter(r => r.event_name);
 }
 
-async function extractEvent(base64, exif){
+async function extractEvent(base64, exif, knownVenues){
   // PRODUCTION: hand off to the Worker (keeps the key server-side)
   if (PHOTO_ENDPOINT){
     const r = await fetch(PHOTO_ENDPOINT, {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'X-Bich-Invite': readInvite() },
-      body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif })
+      body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif,
+                             known_venues: knownVenues || [] })
     });
     if (!r.ok) {
       const msg = await r.json().catch(() => ({}));
@@ -3155,6 +3436,10 @@ function fillForm(row){
   /* Both columns exist in events and the model already extracts them;
      they were being parsed and then dropped on the floor. */
   draft.recurrence = row.recurrence || '';
+  /* The model was given the real venue strings and told to echo one
+     back. If it did, we already know which row that is - no fuzzy
+     search, no duplicate. */
+  if (row.venue_match) linkKnownVenue(row.venue_match);
   draft.contact = row.contact || '';
   if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
   draft.city = row.city || '';
@@ -3212,7 +3497,17 @@ async function readPhoto(crop){
 
   coverBusy.classList.add('show');
   try {
-    const out = await extractEvent(send.base64, sourceExif);
+    /* Resolve the area from the photo's own GPS first, then ask the
+       database which venues we already know there. The model gets a
+       candidate list instead of guessing at a name it half read. */
+    let known = [];
+    if (sourceExif && sourceExif.lat != null){
+      await loadCommunities();
+      const slug = communityForCoords(sourceExif.lat, sourceExif.lng);
+      known = await venuesNear(sourceExif.lat, sourceExif.lng, slug);
+      if (known.length) console.info(`[bich] ${known.length} known venues sent as candidates`);
+    }
+    const out = await extractEvent(send.base64, sourceExif, known);
     coverBusy.classList.remove('show');
 
     const rows = out.events || out;
@@ -3358,7 +3653,10 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     try {
       await ensureUser();
       const img = await uploadCover();
-      const slug = resolveCommunity(draft.community);
+      /* Pin first, flyer text second. A coordinate resolves to one
+         slug; "Ericeira coast" resolves to three over a month. */
+      const slug = communityForCoords(draft.lat, draft.lng)
+                || resolveCommunity(draft.community);
       const venueId = await ensureVenue(ev.venue, draft.lat, draft.lng, draft.city, slug, Boolean(draft.cover));
       const saved = await sbInsert('events', {
         host_id: CURRENT_USER.id || null,
