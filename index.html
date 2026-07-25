@@ -5,8 +5,6 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="app-version" content="2026-07-23-01" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <!-- config first: the app reads its addresses from here -->
-  <script src="/config.js"></script>
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
@@ -592,6 +590,17 @@ body { display: flex; align-items: center; justify-content: center; }
   display: flex; gap: var(--space-sm);
 }
 
+/* iOS Safari refuses to open a file picker for an input that is display:none
+   (which is what the `hidden` attribute does). The input has to stay rendered.
+   This keeps it in the layout at zero size instead of removing it. */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .cover-picker {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -665,8 +674,7 @@ body { display: flex; align-items: center; justify-content: center; }
 
 /* Cropper — full screen over everything */
 .cropper {
-  position: fixed; inset: 0; z-index: 400; background: #0a0908;
-  color: #e8e2d9;
+  position: fixed; inset: 0; z-index: 400; background: var(--bg);
   display: flex; flex-direction: column;
   padding-top: max(env(safe-area-inset-top, 0px), 12px);
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
@@ -678,34 +686,24 @@ body { display: flex; align-items: center; justify-content: center; }
 .cropper__hint { font-size: 0.6rem; letter-spacing: 0.1em; color: var(--muted); }
 .cropper__stage { position: relative; flex: 1; margin: var(--space-sm) var(--space-md); overflow: hidden; touch-action: none; }
 .cropper__canvas { position: absolute; display: block; }
-.cropper__shade { position: absolute; inset: 0; background: rgba(0,0,0,0.66); pointer-events: none; }
-.cropper__rect {
-  position: absolute; cursor: move; touch-action: none;
-  border: 1px solid rgba(255,255,255,0.55);
-  box-shadow: 0 0 0 9999px transparent;
-}
-/* rule of thirds: appears while framing, the way a camera does */
-.cropper__third { position: absolute; background: rgba(255,255,255,0.22); pointer-events: none; }
-.cropper__third--v1 { left: 33.333%; top: 0; bottom: 0; width: 1px; }
-.cropper__third--v2 { left: 66.666%; top: 0; bottom: 0; width: 1px; }
-.cropper__third--h1 { top: 33.333%; left: 0; right: 0; height: 1px; }
-.cropper__third--h2 { top: 66.666%; left: 0; right: 0; height: 1px; }
+.cropper__shade { position: absolute; inset: 0; background: var(--scrim); pointer-events: none; }
+.cropper__rect { position: absolute; border: 1px solid var(--accent); cursor: move; touch-action: none; }
 /* handles look small, but the touch target is 44px */
 .cropper__rect i {
   position: absolute; width: 44px; height: 44px; touch-action: none;
 }
 .cropper__rect i::after {
-  content: ''; position: absolute; width: 22px; height: 22px;
-  border: 3px solid #fff; background: none;
+  content: ''; position: absolute; width: 16px; height: 16px;
+  border: 2px solid var(--accent); background: var(--scrim-soft);
 }
 .cropper__rect i[data-h="nw"] { left: -22px; top: -22px; cursor: nwse-resize; }
-.cropper__rect i[data-h="nw"]::after { left: 11px; top: 11px; border-right: none; border-bottom: none; }
+.cropper__rect i[data-h="nw"]::after { left: 14px; top: 14px; border-right: none; border-bottom: none; }
 .cropper__rect i[data-h="ne"] { right: -22px; top: -22px; cursor: nesw-resize; }
-.cropper__rect i[data-h="ne"]::after { right: 11px; top: 11px; border-left: none; border-bottom: none; }
+.cropper__rect i[data-h="ne"]::after { right: 14px; top: 14px; border-left: none; border-bottom: none; }
 .cropper__rect i[data-h="se"] { right: -22px; bottom: -22px; cursor: nwse-resize; }
-.cropper__rect i[data-h="se"]::after { right: 11px; bottom: 11px; border-left: none; border-top: none; }
+.cropper__rect i[data-h="se"]::after { right: 14px; bottom: 14px; border-left: none; border-top: none; }
 .cropper__rect i[data-h="sw"] { left: -22px; bottom: -22px; cursor: nesw-resize; }
-.cropper__rect i[data-h="sw"]::after { left: 11px; bottom: 11px; border-right: none; border-top: none; }
+.cropper__rect i[data-h="sw"]::after { left: 14px; bottom: 14px; border-right: none; border-top: none; }
 .cropper__actions { display: flex; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); flex-shrink: 0; }
 .cropper__btn {
   flex: 1; min-height: 48px; background: none; border: 1px solid var(--border);
@@ -713,9 +711,7 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
   transition: all var(--ease);
 }
-.cropper__bar { justify-content: space-between; }
-.cropper__bar .cropper__btn { flex: 0 0 auto; padding: 0 14px; min-height: 40px; }
-.cropper__hint { flex: 1; text-align: center; }
+.cropper__bar .cropper__btn { flex: 0 0 auto; padding: 0 18px; }
 .cropper__btn--go { color: var(--accent); border-color: var(--border-accent); background: var(--accent-dim); }
 .cropper__btn:active { transform: scale(0.98); }
 
@@ -1448,7 +1444,7 @@ if ('serviceWorker' in navigator) {
         <button type="button" class="cover-picker__replace" id="coverReplace" hidden>replace</button>
         <div class="cover-picker__busy" id="coverBusy"><div class="cover-picker__spinner"></div><span>reading your photo</span></div>
       </div>
-      <input type="file" id="coverInput" accept="image/jpeg,image/png,image/webp" hidden />
+      <input type="file" id="coverInput" accept="image/*" class="visually-hidden" />
       <p class="cover-notice" id="coverNotice"></p>
     </div>
 
@@ -2129,22 +2125,22 @@ Store.load();
 
    NEVER put the service_role key here. It bypasses every policy.
    ══════════════════════════════════════════════════════════════════ */
-const _CFG = (window.BICH_CONFIG || {});
-const SUPABASE_URL      = (_CFG.supabase && _CFG.supabase.url)     || '';
-const SUPABASE_ANON_KEY = (_CFG.supabase && _CFG.supabase.anonKey) || '';
-const WORKER_URL        = (_CFG.worker   && _CFG.worker.url)       || '';
-const SHARE_BASE        = (_CFG.share    && _CFG.share.base)       || 'https://bich.app/e/';
-const RP_ID             = (_CFG.passkey  && _CFG.passkey.rpId)     || location.hostname;
-const RP_NAME           = (_CFG.passkey  && _CFG.passkey.rpName)   || 'bich.service';
-const APP_VERSION       = _CFG.version || 'dev';
+const SUPABASE_URL      = '';
+const SUPABASE_ANON_KEY = '';
+const WORKER_URL        = 'https://api.bich.app';
 
-/* DEV ONLY, and only on localhost. A key in public JS is a credit
-   card in a shop window and Google's scanners will disable it. */
-const GEMINI_KEY_DEV = '';
-const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
-const SEND_MAX_SIDE  = 1000;   // long side sent to gemini
-const COVER_MAX_SIDE = 1400;   // long side stored as the cover
-const THUMB_MAX_SIDE = 600;    // long side used on feed cards
+/* Share links, per spec: bich.app/e/xxxx with a short opaque id, so a
+   URL never hints at how many events exist. GitHub Pages cannot route
+   /e/ itself, so 404.html hands the id back as ?e= and we pick it up
+   on load. */
+const SHARE_BASE = 'https://bich.app/e/';
+
+/* Passkeys bind permanently to this domain. It must be the apex, not
+   a github.io address and not a subdomain, or every credential
+   enrolled today is orphaned the day you move. Registering on the
+   apex also lets api.bich.app share the same identity later. */
+const RP_ID   = 'bich.app';
+const RP_NAME = 'bich.service';
 
 const SB_READY = () => Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
@@ -2207,29 +2203,6 @@ async function ensureUser(handle){
 /* Insert straight into Supabase with the publishable key. The row
    policies decide what is allowed, so validation lives in the
    database rather than in code we could forget to run. */
-/* community_slug is a FOREIGN KEY into a small curated table. The
-   model returns free text like "Amsterdam", and anything not already
-   a row there makes the whole insert fail with a foreign key error,
-   which is why events were silently not saving. Map what we can,
-   send null for the rest: a null community is fine, a wrong one is
-   not, and a rejected insert is worst of all. */
-let KNOWN_COMMUNITIES = null;
-async function loadCommunities(){
-  if (KNOWN_COMMUNITIES || !SB_READY()) return KNOWN_COMMUNITIES;
-  try {
-    const rows = await sbGet('communities?select=slug,name');
-    KNOWN_COMMUNITIES = rows;
-  } catch(_) { KNOWN_COMMUNITIES = []; }
-  return KNOWN_COMMUNITIES;
-}
-function resolveCommunity(text){
-  if (!text || !KNOWN_COMMUNITIES) return null;
-  const t = String(text).trim().toLowerCase();
-  const hit = KNOWN_COMMUNITIES.find(c =>
-    c.slug === t || c.name.toLowerCase() === t || t.includes(c.slug));
-  return hit ? hit.slug : null;
-}
-
 async function sbInsert(table, row){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
@@ -2241,11 +2214,8 @@ async function sbInsert(table, row){
   });
   const body = await r.json().catch(() => null);
   if (!r.ok){
-    const e = new Error((body && (body.message || body.hint || body.details)) || `write failed (${r.status})`);
+    const e = new Error((body && body.message) || 'write failed');
     e.status = r.status;
-    e.detail = body;
-    // The real cause belongs in the console; the person gets plain words.
-    console.error(`[bich] ${table} insert failed`, r.status, body);
     throw e;
   }
   return body;
@@ -2269,17 +2239,13 @@ async function uploadCover(){
   form.append('full',  await (await fetch(full.dataUrl)).blob(),  'full.webp');
   form.append('thumb', await (await fetch(thumb.dataUrl)).blob(), 'thumb.webp');
 
-  const r = await fetch(WORKER_URL + '/upload', {
-    method: 'POST', headers: { 'X-Bich-Invite': readInvite() }, body: form
-  });
-  if (!r.ok){
-    const t = await r.text().catch(() => '');
-    // The reason belongs in the console, not swallowed. 403 = invite gate,
-    // 500 = bucket not bound, network error = worker not deployed or CORS.
-    console.error('[bich] cover upload failed', r.status, t);
-    throw new Error(`upload ${r.status}: ${t.slice(0,120) || 'no body'}`);
-  }
-  return await r.json();
+  try {
+    const r = await fetch(WORKER_URL + '/upload', {
+      method: 'POST', headers: { 'X-Bich-Invite': readInvite() }, body: form
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(_) { return null; }
 }
 
 /* ── the feed ──────────────────────────────────────────────────────
@@ -2411,177 +2377,12 @@ async function openDeepLink(){
   else toast('that event is gone');
 }
 
-/* ── connection check ──────────────────────────────────────────────
-   Run bichCheck() in the browser console. It walks the whole write
-   path and reports the first thing that is actually wrong, with the
-   real message from Postgres rather than a friendly one.
-
-   It cleans up after itself: the test event is deleted, or if the
-   delete policy is missing, it is left as a draft you can spot.      */
-async function bichCheck(){
-  const line = (ok, label, detail) =>
-    console.log(`%c${ok ? '  ok  ' : ' FAIL '}%c ${label}${detail ? '\n         ' + detail : ''}`,
-      `background:${ok ? '#1c5' : '#c33'};color:#fff;font-weight:600`, 'color:inherit');
-
-  console.log('%cbich.service connection check', 'font-weight:700;font-size:13px');
-
-  // 1. config present
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY){
-    line(false, 'config', `SUPABASE_URL=${SUPABASE_URL ? 'set' : 'EMPTY'}  SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY ? 'set' : 'EMPTY'}`);
-    console.log('     Fill both at the top of index.html, then hard refresh.');
-    return;
-  }
-  line(true, 'config', SUPABASE_URL);
-
-  const hdr = { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
-                'Content-Type': 'application/json' };
-
-  // 2. can we read?
-  try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/events_public?select=id&limit=1`, { headers: hdr });
-    const t = await r.text();
-    if (!r.ok) { line(false, 'read events_public', `${r.status} ${t.slice(0,200)}`); }
-    else line(true, 'read events_public', `${JSON.parse(t).length} row(s) visible`);
-  } catch(e){ line(false, 'read events_public', e.message); }
-
-  // 3. do the communities exist? (the foreign key everything hangs off)
-  let slugs = [];
-  try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/communities?select=slug`, { headers: hdr });
-    slugs = r.ok ? (await r.json()).map(c => c.slug) : [];
-    line(r.ok, 'communities', slugs.length ? slugs.join(', ') : 'NONE — schema part 1 may not have run');
-  } catch(e){ line(false, 'communities', e.message); }
-
-  // 4. can we create a user? (tests schema part 4's insert policy)
-  let uid = null;
-  const testHandle = 'zzz ' + Math.random().toString(36).slice(2,6);
-  try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/users`, {
-      method:'POST', headers: { ...hdr, Prefer:'return=representation' },
-      body: JSON.stringify({ handle: testHandle })
-    });
-    const t = await r.text();
-    if (!r.ok){
-      line(false, 'insert users', `${r.status} ${t.slice(0,300)}`);
-      if (r.status === 401 || r.status === 403 || /row-level security/i.test(t))
-        console.log('%c     ▸ schema part 4 has not been run. That file adds the insert policies.\n       Without it row level security blocks every write and the table stays empty.',
-          'color:#c33;font-weight:600');
-    } else { uid = JSON.parse(t)[0].id; line(true, 'insert users', uid); }
-  } catch(e){ line(false, 'insert users', e.message); }
-
-  // 5. can we create an event?
-  if (uid){
-    const starts = new Date(Date.now() + 864e5).toISOString();
-    const body = { host_id: uid, title: 'connection check', starts_at: starts,
-                   price_value: 0, price_currency: 'EUR', status: 'live', source: 'manual' };
-    try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/events`, {
-        method:'POST', headers: { ...hdr, Prefer:'return=representation' }, body: JSON.stringify(body) });
-      const t = await r.text();
-      if (!r.ok) line(false, 'insert events', `${r.status} ${t.slice(0,300)}`);
-      else {
-        const row = JSON.parse(t)[0];
-        line(true, 'insert events', row.short_id);
-        await fetch(`${SUPABASE_URL}/rest/v1/events?id=eq.${row.id}`, { method:'DELETE', headers: hdr });
-      }
-    } catch(e){ line(false, 'insert events', e.message); }
-
-    // 6. the community foreign key, the likeliest silent killer
-    try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/events`, {
-        method:'POST', headers: { ...hdr, Prefer:'return=representation' },
-        body: JSON.stringify({ host_id: uid, title: 'fk check', starts_at: new Date(Date.now()+864e5).toISOString(),
-                               community_slug: 'amsterdam', status:'live', source:'manual', price_value:0 }) });
-      const t = await r.text();
-      if (!r.ok && /foreign key|violates/i.test(t)){
-        line(false, 'unknown community', 'a community not in the table is rejected (expected)');
-        console.log('%c     ▸ the app must map free text to a known slug, or send null.',
-          'color:#a80;font-weight:600');
-      } else if (r.ok){
-        const row = JSON.parse(t)[0];
-        line(true, 'unknown community', 'accepted');
-        await fetch(`${SUPABASE_URL}/rest/v1/events?id=eq.${row.id}`, { method:'DELETE', headers: hdr });
-      }
-    } catch(_){}
-
-    await fetch(`${SUPABASE_URL}/rest/v1/users?id=eq.${uid}`, { method:'DELETE', headers: hdr });
-  }
-
-  // 7. the worker
-  if (WORKER_URL){
-    try {
-      const r = await fetch(WORKER_URL + '/upload', { method:'POST', body: new FormData() });
-      line(r.status !== 0, 'worker reachable', `${WORKER_URL} responded ${r.status}` +
-        (r.status === 403 ? ' (invite gate on)' : r.status === 400 ? ' (expected: empty form)' : ''));
-    } catch(e){ line(false, 'worker reachable', e.message + ' — check ALLOWED_ORIGINS in wrangler.toml'); }
-  }
-
-  console.log('%cdone', 'font-weight:700');
-}
-window.bichCheck = bichCheck;
-
-/* ── upload probe ──────────────────────────────────────────────────
-   Run bichUpload() in the console. Makes a tiny test image and pushes
-   it through the exact upload path, reporting the first thing wrong. */
-async function bichUpload(){
-  const log=(ok,l,d)=>console.log(`%c${ok?'  ok  ':' FAIL '}%c ${l}${d?'\n         '+d:''}`,
-    `background:${ok?'#1c5':'#c33'};color:#fff;font-weight:600`,'color:inherit');
-  console.log('%cbich upload probe','font-weight:700;font-size:13px');
-
-  if (!WORKER_URL){ log(false,'worker url','empty in config.js'); return; }
-  log(true,'worker url',WORKER_URL);
-
-  // 1. can the browser make a webp at all? (older Safari could not)
-  const c=document.createElement('canvas'); c.width=c.height=64;
-  const cx=c.getContext('2d'); cx.fillStyle='#c8a96e'; cx.fillRect(0,0,64,64);
-  const webp=c.toDataURL('image/webp');
-  const isWebp=webp.startsWith('data:image/webp');
-  log(isWebp,'webp encode', isWebp?'':'this browser fell back to png/jpeg — worker still accepts those');
-  const dataUrl = isWebp ? webp : c.toDataURL('image/jpeg');
-
-  // 2. build the same multipart form the app sends
-  const blob = await (await fetch(dataUrl)).blob();
-  const form = new FormData();
-  form.append('full', blob, 'full.webp');
-  form.append('thumb', blob, 'thumb.webp');
-
-  // 3. push it
-  let r;
-  try {
-    r = await fetch(WORKER_URL+'/upload',{method:'POST',headers:{'X-Bich-Invite':readInvite()},body:form});
-  } catch(e){
-    log(false,'reach worker', e.message+'  ▸ worker not deployed, or ALLOWED_ORIGINS blocks '+location.origin);
-    return;
-  }
-  const text = await r.text();
-  if (!r.ok){
-    log(false,`upload (${r.status})`, text.slice(0,200));
-    if (r.status===403) console.log('%c     ▸ invite gate is on. set BICH_INVITE_CODES="" in wrangler and redeploy, or set invite in config.js','color:#a80');
-    if (r.status===500) console.log('%c     ▸ the R2 bucket is not bound. check [[r2_buckets]] in wrangler.toml, then redeploy','color:#a80');
-    if (r.status===404) console.log('%c     ▸ /upload route not found. the worker is old — redeploy the current worker.js','color:#a80');
-    return;
-  }
-  const out = JSON.parse(text);
-  log(true,'upload ok', out.url);
-
-  // 4. can the returned url actually be fetched back?
-  try {
-    const img = await fetch(out.url, {cache:'no-store'});
-    log(img.ok, 'read back', img.ok ? out.url : `${img.status} — img.bich.app custom domain may be missing`);
-  } catch(e){ log(false,'read back', e.message+'  ▸ img.bich.app is not serving'); }
-
-  console.log('%cdone','font-weight:700');
-}
-window.bichUpload = bichUpload;
-
-
 initThemes();
 
 renderBundles();
 wireVenueSearch();
 (async () => {
   if (!SB_READY()) { openDeepLink(); return; }   // sample data until configured
-  await loadCommunities();
   await ensureUser().catch(() => {});
   await loadFeed();
   await syncAttendance();     // push anything we marked while offline
@@ -2650,11 +2451,22 @@ const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
 
 /* DEV ONLY — direct Gemini from the browser, for one user on localhost.
    Anything you put here is visible to anyone who opens the page. Google runs
+   leaked-key detection and will block a key it finds in public JS, so this
+   must be '' before this file is ever served from a real domain. */
+/* Must stay empty on bich.app. A key in public JS is a credit card
+   in a shop window, and Google's scanners will disable it. Use it
+   only on localhost. */
+const GEMINI_KEY_DEV = '';
+const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
+const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
+const COVER_MAX_SIDE = 1400;   // long side stored as the cover
+const THUMB_MAX_SIDE = 600;    // long side used on feed cards
+
 // Photo recognition is alpha-gated to a handful of testers. An invite code is an
 // opaque string, not an identity — it maps to a quota bucket and nothing else,
 // so the zero-PII model holds. In the real app store this in IndexedDB beside
 // the handle; localStorage here keeps the prototype simple.
-function readInvite(){ return Store.data.invite || _CFG.invite || ''; }
+function readInvite(){ return Store.data.invite || ''; }
 function setInvite(c){ Store.set({ invite: c }); }
 
 const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read one uploaded photo and turn it into structured event records.
@@ -2800,211 +2612,375 @@ function render(bitmap, crop, maxSide, quality){
            kb: Math.round(dataUrl.length * 0.75 / 1024) };
 }
 
-/* ── crop ──────────────────────────────────────────────────────────
-   A frame over the photo: drag inside to move it, drag a corner to
-   resize, pinch to zoom the photo underneath. Free form on purpose,
-   because a flyer is whatever shape it is and locking a ratio is how
-   you slice off the bottom line where the venue lives.
-
-   Two things the previous version got wrong:
-     · it rebuilt the frame on every window resize, and iOS fires
-       resize whenever the URL bar slides, so the crop reset itself
-       mid gesture
-     · it always reopened on the whole photo, so a second visit threw
-       away the crop you already made
-   Both are fixed here: resize rescales the existing frame, and the
-   previous crop is passed back in.
-
-   Resolves {x,y,w,h} in source pixels, null for the whole photo, or
-   undefined if the person backed out. */
-function openCropper(bitmap, hint, initialCrop){
+/* ── crop UI ──────────────────────────────────────────────────────
+   A rectangle over the photo with four corner handles. Drag inside to
+   move, drag a corner to resize. Free form on purpose: a flyer is
+   whatever shape it is, and locking a ratio is how you slice off the
+   bottom line where the venue lives.
+   Resolves {x,y,w,h} in source pixels, null to use the whole photo,
+   or undefined if the user backed out. */
+function openCropper(bitmap, hint){
   return new Promise(resolve => {
     const root = document.createElement('div');
     root.className = 'cropper';
     root.innerHTML =
       '<div class="cropper__bar">' +
         '<button class="cropper__btn" data-act="cancel">back</button>' +
-        '<span class="cropper__hint">' + (hint || 'frame the flyer') + '</span>' +
-        '<button class="cropper__btn" data-act="reset">reset</button>' +
+        '<span class="cropper__hint">' + (hint || 'drag the corners to the flyer') + '</span>' +
       '</div>' +
-      '<div class="cropper__stage">' +
-        '<canvas class="cropper__canvas"></canvas>' +
+      '<div class="cropper__stage"><canvas class="cropper__canvas"></canvas>' +
         '<div class="cropper__shade"></div>' +
-        '<div class="cropper__rect">' +
-          '<span class="cropper__third cropper__third--v1"></span>' +
-          '<span class="cropper__third cropper__third--v2"></span>' +
-          '<span class="cropper__third cropper__third--h1"></span>' +
-          '<span class="cropper__third cropper__third--h2"></span>' +
-          '<i data-h="nw"></i><i data-h="ne"></i><i data-h="se"></i><i data-h="sw"></i>' +
-        '</div>' +
+        '<div class="cropper__rect"><i data-h="nw"></i><i data-h="ne"></i><i data-h="se"></i><i data-h="sw"></i></div>' +
       '</div>' +
       '<div class="cropper__actions">' +
-        '<button class="cropper__btn" data-act="skip">whole photo</button>' +
+        '<button class="cropper__btn" data-act="skip">use whole photo</button>' +
         '<button class="cropper__btn cropper__btn--go" data-act="ok">use this crop</button>' +
       '</div>';
     document.body.appendChild(root);
 
-    const stage  = root.querySelector('.cropper__stage');
+    const stage = root.querySelector('.cropper__stage');
     const canvas = root.querySelector('.cropper__canvas');
     const rectEl = root.querySelector('.cropper__rect');
-    const shade  = root.querySelector('.cropper__shade');
-    const ctx    = canvas.getContext('2d');
+    const shade = root.querySelector('.cropper__shade');
+    let view = { x:0, y:0, w:0, h:0, scale:1 }, box = null, drag = null;
+    const MIN = 48;
 
-    let view = { x:0, y:0, w:0, h:0, scale:1, zoom:1 };
-    let box  = null;              // in display pixels
-    let drag = null;
-    let pinch = null;
-    const MIN = 56;
-
-    /* fit the photo to the stage at the current zoom */
     function layout(){
       const b = stage.getBoundingClientRect();
-      const base = Math.min(b.width / bitmap.width, b.height / bitmap.height);
-      const s = base * view.zoom;
+      const s = Math.min(b.width / bitmap.width, b.height / bitmap.height);
       view.scale = s;
-      view.w = Math.round(bitmap.width * s);
-      view.h = Math.round(bitmap.height * s);
-      view.x = Math.round((b.width  - view.w) / 2);
-      view.y = Math.round((b.height - view.h) / 2);
+      view.w = Math.round(bitmap.width * s);  view.h = Math.round(bitmap.height * s);
+      view.x = Math.round((b.width - view.w) / 2); view.y = Math.round((b.height - view.h) / 2);
       canvas.width = view.w; canvas.height = view.h;
-      canvas.style.left = view.x + 'px';
-      canvas.style.top  = view.y + 'px';
-      ctx.drawImage(bitmap, 0, 0, view.w, view.h);
+      canvas.style.left = view.x + 'px'; canvas.style.top = view.y + 'px';
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, view.w, view.h);
     }
-
-    /* box from a crop in SOURCE pixels, or the default inset */
-    function setBoxFromSource(crop){
-      if (crop){
-        box = {
-          x: view.x + crop.x * view.scale,
-          y: view.y + crop.y * view.scale,
-          w: crop.w * view.scale,
-          h: crop.h * view.scale
-        };
-      } else {
-        const i = 0.06;
-        box = { x: view.x + view.w*i, y: view.y + view.h*i,
-                w: view.w*(1-i*2),    h: view.h*(1-i*2) };
-      }
-      clampBox();
+    function initBox(){
+      const i = 0.08;
+      box = { x: view.x + view.w*i, y: view.y + view.h*i, w: view.w*(1-i*2), h: view.h*(1-i*2) };
     }
-    function boxToSource(){
-      return {
-        x: Math.max(0, (box.x - view.x) / view.scale),
-        y: Math.max(0, (box.y - view.y) / view.scale),
-        w: Math.min(bitmap.width,  box.w / view.scale),
-        h: Math.min(bitmap.height, box.h / view.scale)
-      };
-    }
-    function clampBox(){
-      const L = view.x, T = view.y, R = view.x + view.w, B = view.y + view.h;
-      box.w = Math.min(box.w, view.w); box.h = Math.min(box.h, view.h);
-      box.x = Math.min(Math.max(box.x, L), R - box.w);
-      box.y = Math.min(Math.max(box.y, T), B - box.h);
-    }
-
     function paint(){
-      rectEl.style.left = box.x+'px';   rectEl.style.top = box.y+'px';
-      rectEl.style.width = box.w+'px';  rectEl.style.height = box.h+'px';
+      rectEl.style.left = box.x+'px'; rectEl.style.top = box.y+'px';
+      rectEl.style.width = box.w+'px'; rectEl.style.height = box.h+'px';
       shade.style.clipPath =
         'polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ' +
         box.x+'px '+box.y+'px, ' + box.x+'px '+(box.y+box.h)+'px, ' +
         (box.x+box.w)+'px '+(box.y+box.h)+'px, ' + (box.x+box.w)+'px '+box.y+'px, ' +
         box.x+'px '+box.y+'px)';
     }
-
-    function pos(e){
-      const b = stage.getBoundingClientRect();
-      return { x: e.clientX - b.left, y: e.clientY - b.top };
-    }
-
-    /* ── gestures ── */
-    const active = new Map();
-    stage.addEventListener('pointerdown', e => {
-      active.set(e.pointerId, pos(e));
-      if (active.size === 2){                       // pinch to zoom the photo
-        const [a,b] = [...active.values()];
-        pinch = { dist: Math.hypot(a.x-b.x, a.y-b.y), zoom: view.zoom, crop: boxToSource() };
-        drag = null;
-        return;
-      }
-      const handle = e.target.dataset ? e.target.dataset.h : null;
-      const inside = e.target === rectEl || handle ||
-                     rectEl.contains(e.target);
-      if (!inside) return;
-      drag = { handle, start: pos(e), box: { ...box } };
-      stage.setPointerCapture(e.pointerId);
-      e.preventDefault();
+    function pos(e){ const b = stage.getBoundingClientRect(); return { x: e.clientX-b.left, y: e.clientY-b.top }; }
+    rectEl.addEventListener('pointerdown', e => {
+      drag = { handle: e.target.dataset.h, start: pos(e), box: Object.assign({}, box) };
+      stage.setPointerCapture(e.pointerId); e.preventDefault();
     });
-
     stage.addEventListener('pointermove', e => {
-      if (active.has(e.pointerId)) active.set(e.pointerId, pos(e));
-
-      if (pinch && active.size === 2){
-        const [a,b] = [...active.values()];
-        const d = Math.hypot(a.x-b.x, a.y-b.y);
-        view.zoom = Math.min(4, Math.max(1, pinch.zoom * (d / pinch.dist)));
-        layout(); setBoxFromSource(pinch.crop); paint();
-        return;
-      }
       if (!drag) return;
-
-      const p = pos(e);
-      const dx = p.x - drag.start.x, dy = p.y - drag.start.y, b0 = drag.box;
-      const L = view.x, T = view.y, R = view.x + view.w, B = view.y + view.h;
-
+      const p = pos(e), dx = p.x-drag.start.x, dy = p.y-drag.start.y, b = drag.box;
+      const L = view.x, T = view.y, R = view.x+view.w, B = view.y+view.h;
       if (!drag.handle){
-        box.x = Math.min(Math.max(b0.x + dx, L), R - b0.w);
-        box.y = Math.min(Math.max(b0.y + dy, T), B - b0.h);
+        box.x = Math.min(Math.max(b.x+dx, L), R-b.w);
+        box.y = Math.min(Math.max(b.y+dy, T), B-b.h);
       } else {
-        let x1 = b0.x, y1 = b0.y, x2 = b0.x + b0.w, y2 = b0.y + b0.h;
-        if (drag.handle.indexOf('w') > -1) x1 = Math.min(Math.max(b0.x + dx, L), x2 - MIN);
-        if (drag.handle.indexOf('e') > -1) x2 = Math.max(Math.min(b0.x + b0.w + dx, R), x1 + MIN);
-        if (drag.handle.indexOf('n') > -1) y1 = Math.min(Math.max(b0.y + dy, T), y2 - MIN);
-        if (drag.handle.indexOf('s') > -1) y2 = Math.max(Math.min(b0.y + b0.h + dy, B), y1 + MIN);
+        let x1=b.x, y1=b.y, x2=b.x+b.w, y2=b.y+b.h;
+        if (drag.handle.indexOf('w')>-1) x1 = Math.min(Math.max(b.x+dx, L), x2-MIN);
+        if (drag.handle.indexOf('e')>-1) x2 = Math.max(Math.min(b.x+b.w+dx, R), x1+MIN);
+        if (drag.handle.indexOf('n')>-1) y1 = Math.min(Math.max(b.y+dy, T), y2-MIN);
+        if (drag.handle.indexOf('s')>-1) y2 = Math.max(Math.min(b.y+b.h+dy, B), y1+MIN);
         box = { x:x1, y:y1, w:x2-x1, h:y2-y1 };
       }
       paint();
     });
+    stage.addEventListener('pointerup', () => { drag = null; });
+    stage.addEventListener('pointercancel', () => { drag = null; });
 
-    function endPointer(e){
-      active.delete(e.pointerId);
-      if (active.size < 2) pinch = null;
-      if (active.size === 0) drag = null;
-    }
-    stage.addEventListener('pointerup', endPointer);
-    stage.addEventListener('pointercancel', endPointer);
-
-    /* Resize must PRESERVE the crop. iOS fires this whenever the URL
-       bar slides, which is why the old version reset itself mid drag. */
-    function onResize(){
-      const keep = boxToSource();
-      layout(); setBoxFromSource(keep); paint();
-    }
-    window.addEventListener('resize', onResize);
-
-    function finish(result){
-      window.removeEventListener('resize', onResize);
-      root.remove();
-      resolve(result);
-    }
-
+    function relayout(){ layout(); initBox(); paint(); }
+    function finish(r){ window.removeEventListener('resize', relayout); root.remove(); resolve(r); }
     root.addEventListener('click', e => {
-      const act = e.target.dataset ? e.target.dataset.act : null;
+      const act = e.target.dataset.act;
       if (!act) return;
       if (act === 'cancel') return finish(undefined);
-      if (act === 'skip')   return finish(null);
-      if (act === 'reset'){ view.zoom = 1; layout(); setBoxFromSource(null); paint(); return; }
-      finish(boxToSource());
+      if (act === 'skip') return finish(null);
+      const s = view.scale;
+      finish({ x:(box.x-view.x)/s, y:(box.y-view.y)/s, w:box.w/s, h:box.h/s });
     });
-
-    requestAnimationFrame(() => {
-      layout();
-      setBoxFromSource(initialCrop || null);
-      paint();
-    });
+    window.addEventListener('resize', relayout);
+    requestAnimationFrame(relayout);
   });
 }
+
+/* The 10-field record, as a Gemini responseSchema. Identical to the Worker's
+   copy — keep them in sync, or better, have the Worker serve it. Never repeat
+   these fields in the prompt: duplicating the schema lowers output quality. */
+const EVENT_SCHEMA = {
+  type: 'object',
+  propertyOrdering: ['events','read_quality'],
+  required: ['events','read_quality'],
+  properties: {
+    events: {
+      type: 'array',
+      items: {
+        type: 'object',
+        propertyOrdering: ['event_name','space_name','venue_latitude','venue_longitude',
+          'date_literal','weekday_literal','year_literal','time_start','time_finish',
+          'recurrence','city','community','description','price','currency','contact','location_source'],
+        required: ['event_name'],
+        properties: {
+          event_name:      { type:'string' },
+          space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
+          venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
+          venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
+          date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed, e.g. "JULY 16th" or "16.08". Do not convert.' },
+          weekday_literal: { type:'string', nullable:true, description:'weekday as printed if any, e.g. "thursday". Do not convert to a date.' },
+          year_literal:    { type:'string', nullable:true, description:'year ONLY if printed. Null if the flyer omits it.' },
+          time_start:      { type:'string', nullable:true, description:'24 hour HH:MM' },
+          time_finish:     { type:'string', nullable:true, description:'24 hour HH:MM if printed. Null if only a start is shown.' },
+          recurrence:      { type:'string', nullable:true, description:'plain words if stated, e.g. "every sunday". Null for a one off.' },
+          city:            { type:'string', nullable:true, description:'town from flyer text, else from supplied EXIF location' },
+          community:       { type:'string', nullable:true, description:'wider local area, coarse and stable, e.g. "Ericeira" or "Mallorca"' },
+          description:     { type:'string', nullable:true, description:'two or three short phrases from the activity type. No dashes of any kind.' },
+          price:           { type:'number', nullable:true },
+          currency:        { type:'string', nullable:true },
+          contact:         { type:'string', nullable:true, description:'phone, handle or link exactly as printed' },
+          location_source: { type:'string', nullable:true, description:'one of printed_coordinates, printed_address, venue_name_only, none' }
+        }
+      }
+    },
+    read_quality: {
+      type: 'object',
+      propertyOrdering: ['is_event','legibility','unreadable','crop_would_help'],
+      required: ['is_event','legibility'],
+      properties: {
+        is_event:        { type:'boolean', description:'false if the photo carries no event information at all' },
+        legibility:      { type:'string', description:'clear, partial, or poor' },
+        unreadable:      { type:'array', nullable:true, items:{ type:'string' },
+                           description:'short names of what could not be read, e.g. "finish time"' },
+        crop_would_help: { type:'boolean', nullable:true,
+                           description:'true when the flyer fills a small part of the frame, sits at a steep angle, or is lost in clutter' }
+      }
+    }
+  }
+};
+
+/* ── date resolution, in code ─────────────────────────────────────
+   Reading "JULY 16th" off a poster is perception, which small models do
+   well. Working out which year that means, or which Sunday is next, is
+   arithmetic, which they do badly. So the model returns what is printed
+   and we do the maths here: deterministic, free, and testable. */
+const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const DAYS   = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+function resolveDate(row, today){
+  const now = today ? new Date(today + 'T00:00:00') : new Date();
+  const lit = (row.date_literal || '').toLowerCase().trim();
+
+  if (lit){
+    let d = null, mo = null;
+    // "july 16", "16 july", "16th july"
+    const named = lit.match(/([a-z]+)\.?\s*(\d{1,2})|(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s*)?([a-z]+)/);
+    if (named){
+      const nm = (named[1] || named[4] || '').slice(0,3);
+      const dd = named[2] || named[3];
+      const idx = MONTHS.indexOf(nm);
+      if (idx > -1 && dd){ mo = idx; d = parseInt(dd,10); }
+    }
+    // "16.08", "16/08", "2026-08-16"
+    if (mo == null){
+      const iso = lit.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+      if (iso) return `${iso[1]}-${String(+iso[2]).padStart(2,'0')}-${String(+iso[3]).padStart(2,'0')}`;
+      const num = lit.match(/(\d{1,2})[-./](\d{1,2})/);
+      if (num){ d = +num[1]; mo = +num[2] - 1; }
+    }
+    if (mo != null && d){
+      const yr = row.year_literal ? parseInt(row.year_literal,10) : null;
+      if (yr) return `${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      // No year printed: pick the year that puts this date CLOSEST to today,
+      // past or future. A flyer on a wall in July saying "JULY 16" is this
+      // year's, a week ago. Pushing it to next year would be absurd.
+      const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      let best = null;
+      for (const y of [now.getFullYear()-1, now.getFullYear(), now.getFullYear()+1]){
+        const diff = Math.abs(new Date(y, mo, d) - ref);
+        if (!best || diff < best.diff) best = { y, diff };
+      }
+      return `${best.y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    }
+  }
+
+  // weekday only: the next one from today
+  const wd = (row.weekday_literal || '').toLowerCase().trim();
+  const wi = DAYS.findIndex(x => wd.startsWith(x.slice(0,3)));
+  if (wi > -1){
+    const delta = ((wi - now.getDay()) + 7) % 7 || 7;
+    const t = new Date(now); t.setDate(now.getDate() + delta);
+    return t.toISOString().slice(0,10);
+  }
+  return '';
+}
+
+/* If a start time exists with no finish, infer a sensible session length. */
+function inferFinish(row){
+  if (row.time_finish) return String(row.time_finish).slice(0,5);
+  const t = row.time_start ? String(row.time_start).slice(0,5) : '';
+  if (!t) return '';
+  const blob = ((row.event_name||'') + ' ' + (row.description||'')).toLowerCase();
+  if (/\bopens?\b|door/.test(blob)) return '';              // door time, not a session
+  const mins = /yoga|pilates|fitness|class|workout/.test(blob) ? 60
+             : /dinner|supper|feast|lunch/.test(blob) ? 150
+             : /sauna|breathwork|meditation/.test(blob) ? 90 : 90;
+  const [h,m] = t.split(':').map(Number);
+  const end = new Date(2000,0,1,h,m + mins);
+  return String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
+}
+
+/* Rebuild the maps link ourselves and never let a forgotten fallback
+   cost us the town. Note EXIF fills city/community, never the pin. */
+function normalizeRows(rows, exif, today){
+  const clean = v => (v === null || v === undefined || v === '') ? '' : v;
+  return rows.map(r => {
+    const lat = r.venue_latitude, lng = r.venue_longitude;
+    const has = lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng);
+    return {
+      event_name:  clean(r.event_name),
+      space_name:  clean(r.space_name),
+      venue_latitude:  has ? +(+lat).toFixed(6) : '',
+      venue_longitude: has ? +(+lng).toFixed(6) : '',
+      date:        resolveDate(r, today),
+      time_start:  r.time_start ? String(r.time_start).slice(0,5) : '',
+      time_finish: inferFinish(r),
+      recurrence:  clean(r.recurrence),
+      city:        clean(r.city),
+      community:   clean(r.community),
+      price:       (r.price == null ? '' : r.price),
+      currency:    clean(r.currency) || 'EUR',
+      contact:     clean(r.contact),
+      google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
+      description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
+      location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none')
+    };
+  }).filter(r => r.event_name);
+}
+
+async function extractEvent(base64, exif){
+  // PRODUCTION: hand off to the Worker (keeps the key server-side)
+  if (PHOTO_ENDPOINT){
+    const r = await fetch(PHOTO_ENDPOINT, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'X-Bich-Invite': readInvite() },
+      body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif })
+    });
+    if (!r.ok) {
+      const msg = await r.json().catch(() => ({}));
+      const err = new Error(msg.error || 'extract failed');
+      err.soft = (r.status === 403 || r.status === 429);   // show the reason, not a generic failure
+      throw err;
+    }
+    const out = await r.json();
+    const rows = Array.isArray(out) ? out : (out.events || []);
+    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
+  }
+  // DEV: direct Gemini from the browser. One user, localhost, key not shipped.
+  if (GEMINI_KEY_DEV){
+    const today = new Date().toISOString().slice(0,10);
+    const exifNote = exif && (exif.lat!=null || exif.dt)
+      ? `\n\nEXIF supplied with this photo (location fallback only, never the event date): GPS ${exif.lat ?? 'none'}, ${exif.lng ?? 'none'} · captured ${exif.dt ?? 'unknown'}`
+      : '\n\nNo EXIF was supplied with this photo.';
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_KEY_DEV },
+      body: JSON.stringify({
+        system_instruction: { parts:[{ text: PHOTO_SYSTEM_PROMPT + `\n\nToday's date is ${today}. Use it to resolve relative dates and weekdays.` }] },
+        contents: [{ role:'user', parts:[
+          { inline_data: { mime_type:'image/jpeg', data: base64 } },
+          { text: 'Extract every event in this photo as records.' + exifNote }
+        ]}],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
+      })
+    });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d || d.error){
+      const err = new Error(d?.error?.code === 429 ? 'busy right now. try again in a moment?' : "couldn't read that photo");
+      err.soft = d?.error?.code === 429;
+      throw err;
+    }
+    const text = (d.candidates?.[0]?.content?.parts || []).map(p => p.text).join('') || '{}';
+    const out = JSON.parse(text);
+    const rows = Array.isArray(out) ? out : (out.events || []);
+    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
+  }
+
+  // DEMO: inline model call so the flow runs without any key or backend
+  const exifLine = exif && (exif.lat!=null || exif.dt)
+    ? `\n\nEXIF supplied (location fallback only, not the event date): GPS ${exif.lat ?? '?'}, ${exif.lng ?? '?'} · captured ${exif.dt ?? '?'}` : '';
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      model:'claude-sonnet-4-6', max_tokens:1000, system: PHOTO_SYSTEM_PROMPT,
+      messages:[{ role:'user', content:[
+        { type:'image', source:{ type:'base64', media_type:'image/jpeg', data: base64 } },
+        { type:'text', text:'Extract the event(s) from this photo as a JSON array of row objects.' + exifLine }
+      ]}]
+    })
+  });
+  if (!res.ok) throw new Error('model ' + res.status);
+  const data = await res.json();
+  const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n')
+    .replace(/```json/gi,'').replace(/```/g,'').trim();
+  const parsed = JSON.parse(text);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElementById(id).value = v; }
+
+/* Photo GPS names the town and centres the map. It NEVER drops the pin:
+   a flyer in a cafe window advertises something happening elsewhere. */
+function setPhotoOrigin(lat, lng){
+  draft.photoLat = lat; draft.photoLng = lng;
+  if (window._miniMap) window._miniMap.setView([lat, lng], 12);
+  const el = document.getElementById('coordsLabel');
+  if (draft.lat == null) el.textContent = 'tap on map to set location';
+}
+
+function fillForm(row){
+  setVal('inputTitle', row.event_name);
+  setVal('inputDesc', row.description);
+  setVal('inputVenue', row.space_name);
+  setVal('inputDate', row.date);
+  if (row.time_start) setVal('inputTime', String(row.time_start).slice(0,5));
+  if (row.price != null && row.price !== '') setVal('inputPrice', row.price);
+  draft.community = row.community || '';
+  if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
+  draft.city = row.city || '';
+  draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
+  draft.mapsLink = row.google_maps_link || '';
+  // the pin comes only from coordinates PRINTED on the flyer, never from EXIF
+  const lat = (row.venue_latitude!=null && row.venue_latitude!=='') ? Number(row.venue_latitude) : null;
+  const lng = (row.venue_longitude!=null && row.venue_longitude!=='') ? Number(row.venue_longitude) : null;
+  if (lat!=null && lng!=null && !Number.isNaN(lat) && !Number.isNaN(lng)) setEventLocation(lat, lng, true);
+  else if (draft.city) document.getElementById('coordsLabel').textContent = `${draft.city} · drop a pin to set the spot`;
+}
+
+/* ── cover upload wiring ── */
+const coverPicker = document.getElementById('coverPicker');
+const coverInput  = document.getElementById('coverInput');
+const coverBusy   = document.getElementById('coverBusy');
+const coverNotice = document.getElementById('coverNotice');
+
+function openPicker(){ coverInput.click(); }
+coverPicker.addEventListener('click', (e) => {
+  if (e.target.id === 'coverReplace' || e.target.id === 'coverCrop') return;
+  if (!coverPicker.classList.contains('has-image')) openPicker();
+});
+coverPicker.addEventListener('keydown', (e) => {
+  if ((e.key==='Enter'||e.key===' ') && !coverPicker.classList.contains('has-image')){ e.preventDefault(); openPicker(); }
+});
+document.getElementById('coverReplace').addEventListener('click', openPicker);
+document.getElementById('coverCrop').addEventListener('click', async () => {
+  if (!sourceBitmap) return;
+  const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
+  if (c !== undefined) readPhoto(c);      // undefined means they backed out
+});
 
 /* Holds the decoded photo so a re-crop never re-reads the file. */
 let sourceBitmap = null, sourceExif = null;
@@ -3025,17 +3001,7 @@ function showCover(dataUrl){
 /* Runs the model on a crop (or the whole photo) and updates the form. */
 async function readPhoto(crop){
   draft.crop = crop || null;          // reused when the cover is uploaded
-
-  /* Gemini bills images in 768px blocks. A crop whose SHORT side lands
-     just above 768 costs twice as many blocks for no extra legibility,
-     so nudge it back under the line when it is close. */
-  const cw = crop ? crop.w : sourceBitmap.width;
-  const ch = crop ? crop.h : sourceBitmap.height;
-  let sendMax = SEND_MAX_SIDE;
-  const shortAt = Math.min(cw, ch) * (SEND_MAX_SIDE / Math.max(cw, ch));
-  if (shortAt > 768 && shortAt < 980) sendMax = Math.floor(SEND_MAX_SIDE * (768 / shortAt));
-
-  const send = render(sourceBitmap, crop, sendMax, 0.85);
+  const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.85);
   showCover(render(sourceBitmap, crop, COVER_MAX_SIDE, 0.85).dataUrl);
 
   coverBusy.classList.add('show');
@@ -3069,7 +3035,7 @@ async function readPhoto(crop){
         : 'photo added. some of it was hard to read';
       coverNotice.innerHTML = missed + '. <button type="button" id="recropBtn" class="cover-recrop">crop closer</button>';
       document.getElementById('recropBtn').addEventListener('click', async () => {
-        const c = await openCropper(sourceBitmap, 'frame the flyer', draft.crop);
+        const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
         if (c !== undefined) readPhoto(c);
       });
       return;
@@ -3112,25 +3078,8 @@ coverInput.addEventListener('change', async (e) => {
   }
   coverBusy.classList.remove('show');
 
-  /* Crop before reading, not after. Two reasons: the person is already
-     looking at the photo so it costs no extra step, and cropping to
-     the flyer means the whole 1000px budget goes to the flyer's text
-     instead of the wall around it, which measurably improves what
-     comes back. Skipping is one tap. */
-  const crop = await openCropper(sourceBitmap, 'frame the flyer', null);
-  if (crop === undefined) {           // backed out: forget the photo
-    coverPicker.classList.remove('has-image');
-    document.getElementById('coverImg').hidden = true;
-    document.getElementById('coverGrad').hidden = true;
-    document.getElementById('coverReplace').hidden = true;
-    document.getElementById('coverCrop').hidden = true;
-    document.getElementById('coverIcon').style.display = '';
-    document.getElementById('coverLabel').style.display = '';
-    document.getElementById('coverHint').style.display = '';
-    sourceBitmap = null;
-    return;
-  }
-  readPhoto(crop);
+  // Straight through, no crop. The crop is offered afterwards, only if needed.
+  readPhoto(null);
 });
 
 
@@ -3217,14 +3166,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   if (SB_READY()){
     try {
       await ensureUser();
-      let img = null;
-      try { img = await uploadCover(); }
-      catch(upErr){
-        // The event is worth saving even if the cover did not upload.
-        // Record it, tell the person plainly, do not lose their event.
-        console.error('[bich] cover did not upload:', upErr.message);
-        window._lastUploadError = upErr.message;
-      }
+      const img = await uploadCover();
       const saved = await sbInsert('events', {
         host_id: CURRENT_USER.id || null,
         title: ev.title,
@@ -3234,7 +3176,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         venue_lat: draft.lat, venue_lng: draft.lng,
         venue_source: draft.mapsLink ? 'printed_coordinates' : 'manual',
         city: draft.city || null,
-        community_slug: resolveCommunity(draft.community),
+        community_slug: draft.community || null,
         photo_lat: draft.photoLat ?? null,   // origin only, never the pin
         photo_lng: draft.photoLng ?? null,
         starts_at: new Date(`${date}T${time}`).toISOString(),
@@ -3250,14 +3192,16 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
       ev.uuid = saved[0].id; ev.id = saved[0].short_id;
       Store.addHosting(ev.id);
       if (img) { ev.cover = img.thumb; ev.cover_full = img.url; }
+      else if (draft.cover) {
+        // The bucket is not reachable. Say so rather than showing a
+        // picture that will vanish on the next refresh.
+        coverNotice.className = 'cover-notice show err';
+        coverNotice.textContent = 'published, but the cover did not upload';
+      }
     } catch(err){
       btn.disabled = false;
       coverNotice.className = 'cover-notice show err';
-      coverNotice.textContent = /row-level security/i.test(err.message || '')
-        ? 'the database is refusing writes. run schema part 4.'
-        : "couldn't publish that. try again?";
-      console.error('[bich] publish failed:', err.message, err.detail || '');
-      alert('could not publish\n\n' + (err.message || 'unknown') + '\n\nrun bichCheck() in the console for detail');
+      coverNotice.textContent = "couldn't publish that. try again?";
       return;
     }
   }
@@ -3266,11 +3210,6 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   renderBundles();
   if (SB_READY()) loadFeed();   // pull it back with real counts
 
-  if (window._lastUploadError){
-    alert('event published, but the cover image did not upload:\n\n' +
-          window._lastUploadError + '\n\nrun bichUpload() in the console to see why');
-    window._lastUploadError = null;
-  }
   btn.textContent = '✓ event published';
   setTimeout(() => {
     closeCreate();
