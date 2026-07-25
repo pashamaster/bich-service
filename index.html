@@ -628,6 +628,7 @@ body { display: flex; align-items: center; justify-content: center; }
   text-align: center; padding: var(--space-md);
 }
 .feed-status.err { color: var(--red); }
+.feed-status.tap { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .cover-picker {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -699,9 +700,14 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.06em; cursor: pointer;
 }
 
-/* Cropper — full screen over everything */
+/* Cropper — full screen over everything, and "everything" has to
+   include the create modal (1001) and its overlay (1000). The cropper
+   is opened FROM inside that modal, so at 400 it rendered underneath
+   both. On a phone the modal is a full height sheet, so its lower half
+   sat on top of the action row and swallowed every tap on "use this
+   crop". The button was never the problem; nothing reached it. */
 .cropper {
-  position: fixed; inset: 0; z-index: 400; background: var(--bg);
+  position: fixed; inset: 0; z-index: 1500; background: var(--bg);
   display: flex; flex-direction: column;
   padding-top: max(env(safe-area-inset-top, 0px), 12px);
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
@@ -2204,7 +2210,8 @@ const Store = {
     attended: {},       // { shortId: isoTimestamp } — feeds the graph
     hosting: [],        // shortIds this device published
     theme: null,
-    invite: ''
+    invite: '',
+    home: null          // { slug } — which community the feed centres on
   },
 
   load() {
@@ -2391,8 +2398,15 @@ async function sbInsert(table, row){
   });
   const body = await r.json().catch(() => null);
   if (!r.ok){
-    const e = new Error((body && body.message) || 'write failed');
-    e.status = r.status;
+    const e = new Error(
+      (body && (body.message || body.details || body.hint)) || `write failed (${r.status})`);
+    e.status = r.status; e.code = body && body.code; e.detail = body;
+    console.error(`[bich] insert into ${table} failed`, r.status, body);
+    throw e;
+  }
+  if (!Array.isArray(body) || !body.length){
+    const e = new Error('the row was written but could not be read back — check the select policy on ' + table);
+    e.status = r.status; e.detail = body;
     throw e;
   }
   return body;
@@ -2540,6 +2554,7 @@ function rowToEvent(r){
     coverFull: r.cover_url || null,
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
+    distanceKm: r.distance_km == null ? null : Math.round(r.distance_km),
     host: '',
     /* Everything used to land in 'personal', so two of the three
        sections on the home screen were permanently empty. */
@@ -2567,10 +2582,40 @@ let KNOWN_COMMUNITIES = null;
 async function loadCommunities(){
   if (KNOWN_COMMUNITIES || !SB_READY()) return KNOWN_COMMUNITIES;
   try {
-    KNOWN_COMMUNITIES = await sbGet(
-      'communities?select=slug,name,country,centre_lat,centre_lng,radius_km&is_active=is.true');
-  } catch(_){ KNOWN_COMMUNITIES = []; }
+    /* community_reach carries kind, may_widen and max_radius_km
+       alongside the circle, so the widening ladder is defined by the
+       database rather than guessed at in three places in the app. */
+    KNOWN_COMMUNITIES = await sbGet('community_reach?select=*');
+  } catch(_){
+    try {
+      KNOWN_COMMUNITIES = await sbGet(
+        'communities?select=slug,name,kind,centre_lat,centre_lng,radius_km&is_active=is.true');
+    } catch(__){ KNOWN_COMMUNITIES = []; }
+  }
   return KNOWN_COMMUNITIES;
+}
+
+/* ── how far to look ───────────────────────────────────────────────
+   A quiet town should not look like an empty app. If Ericeira has
+   four things on this week, showing four things is honest but
+   useless, so the search widens until there is enough to scroll.
+
+   Islands are the exception and it is not a special case so much as
+   geography: past Mallorca's shoreline is open water, and the next
+   land across it is a different scene entirely, not a further away
+   version of the same one. Widening there would put Ibiza in an
+   Ericeira resident's feed. So islands show the whole island, once,
+   and stop.                                                        */
+const FEED_MIN_EVENTS = 20;
+
+function reachLadder(c){
+  const start = c.radius_km || 25;
+  if (!c || c.may_widen === false || c.kind === 'island') return [start];
+  const ceiling = c.max_radius_km || (c.kind === 'city' ? 100 : c.kind === 'region' ? 120 : 60);
+  const steps = [start];
+  let r = start;
+  while (r < ceiling){ r = Math.min(Math.round(r * 2), ceiling); steps.push(r); }
+  return steps;
 }
 
 function resolveCommunity(text){
@@ -2605,14 +2650,29 @@ function haversineKm(lat1, lng1, lat2, lng2){
    exact failure the schema comment warns about. */
 function communityForCoords(lat, lng){
   if (lat == null || lng == null || !KNOWN_COMMUNITIES) return null;
-  let best = null, bestKm = Infinity;
+
+  const inside = [];
   for (const c of KNOWN_COMMUNITIES){
     if (c.centre_lat == null || c.centre_lng == null) continue;
     const km = haversineKm(lat, lng, c.centre_lat, c.centre_lng);
-    if (km <= (c.radius_km || 25) && km < bestKm){ best = c; bestKm = km; }
+    const r = c.radius_km || 25;
+    if (km <= r) inside.push({ c, km, r });
   }
-  if (best) console.info(`[bich] ${lat.toFixed(3)},${lng.toFixed(3)} -> ${best.slug} (${bestKm.toFixed(1)}km from centre)`);
-  return best ? best.slug : null;
+  if (!inside.length) return null;
+
+  /* Smallest circle wins, not nearest centre. Communities nest: an
+     island contains its towns, and a point in Palma is inside both
+     'mallorca' (r=60) and, once you add it, 'palma' (r=10). The more
+     specific one is the useful answer, and it is not always the one
+     whose centre happens to be closest - a point on the edge of Palma
+     can sit nearer the island's centroid than the town's.
+     Same size, then nearest centre breaks the tie. */
+  inside.sort((a, b) => a.r - b.r || a.km - b.km);
+  const win = inside[0];
+  console.info(`[bich] ${lat.toFixed(3)},${lng.toFixed(3)} -> ${win.c.slug}` +
+    ` (${win.km.toFixed(1)}km from centre, r=${win.r})` +
+    (inside.length > 1 ? ` · also inside ${inside.slice(1).map(x => x.c.slug).join(', ')}` : ''));
+  return win.c.slug;
 }
 
 /* Venue names already known near a point, best first. Handed to the
@@ -2651,12 +2711,37 @@ async function venuesNear(lat, lng, slug){
   }
 }
 
-function setFeedStatus(text, isError){
+function setFeedStatus(text, isError, offerLocation){
   const el = document.getElementById('feedStatus');
   if (!el) return;
   el.hidden = !text;
   el.textContent = text || '';
-  el.className = 'feed-status' + (isError ? ' err' : '');
+  el.className = 'feed-status' + (isError ? ' err' : '') + (offerLocation ? ' tap' : '');
+  el.onclick = offerLocation ? askForLocation : null;
+}
+
+/* Only ever called from a tap. The feed never prompts on load - an
+   unexplained permission dialog before you have seen the app is how
+   people decline permanently. */
+async function askForLocation(){
+  if (!navigator.geolocation){ setFeedStatus('this browser has no location', true); return; }
+  setFeedStatus('finding you…');
+  try {
+    const pos = await new Promise((ok, no) =>
+      navigator.geolocation.getCurrentPosition(ok, no, { timeout: 10000, maximumAge: 300000 }));
+    await loadCommunities();
+    const slug = communityForCoords(pos.coords.latitude, pos.coords.longitude);
+    if (!slug){
+      setFeedStatus("we're not in your area yet — showing everywhere", false, true);
+      return;
+    }
+    Store.set({ home: { slug } });
+    await loadFeed();
+  } catch(err){
+    setFeedStatus(err.code === 1
+      ? 'location declined — showing everywhere'
+      : 'could not get your location', err.code !== 1, err.code === 1 ? false : true);
+  }
 }
 
 /* Two ways in, on purpose. feed() is the good one: it resolves the
@@ -2734,8 +2819,60 @@ async function bichCheck(){
 }
 window.bichCheck = bichCheck;
 
+/* Where the viewer is anchored. A stored home wins; otherwise use the
+   browser's position only if permission was ALREADY granted, so the
+   feed never triggers a permission prompt on load. */
+async function feedAnchor(){
+  await loadCommunities();
+  const home = Store.data.home;
+  if (home && home.slug){
+    const c = (KNOWN_COMMUNITIES || []).find(x => x.slug === home.slug);
+    if (c) return c;
+  }
+  try {
+    if (!navigator.permissions || !navigator.geolocation) return null;
+    const st = await navigator.permissions.query({ name: 'geolocation' });
+    if (st.state !== 'granted') return null;
+    const pos = await new Promise((ok, no) =>
+      navigator.geolocation.getCurrentPosition(ok, no, { timeout: 8000, maximumAge: 600000 }));
+    const slug = communityForCoords(pos.coords.latitude, pos.coords.longitude);
+    return (KNOWN_COMMUNITIES || []).find(x => x.slug === slug) || null;
+  } catch(_){ return null; }
+}
+
 async function loadFeed(){
   if (!SB_READY()) return false;
+
+  /* Anchored: widen until there is enough to scroll. */
+  const anchor = await feedAnchor();
+  if (anchor && anchor.centre_lat != null){
+    const ladder = reachLadder(anchor);
+    try {
+      let rows = [], used = ladder[0];
+      for (const km of ladder){
+        rows = await sbRpc('feed_near', {
+          viewer: CURRENT_USER.id || null,
+          near_lat: anchor.centre_lat, near_lng: anchor.centre_lng,
+          radius_km: km, community: anchor.slug, max_results: 60
+        });
+        used = km;
+        if (rows.length >= FEED_MIN_EVENTS) break;
+      }
+      EVENTS.length = 0;
+      rows.forEach(r => EVENTS.push(rowToEvent(r)));
+      renderBundles();
+      const where = (anchor.name || anchor.slug).toLowerCase();
+      setFeedStatus(
+        !rows.length ? `nothing near ${where} yet` :
+        used === ladder[0] ? `${rows.length} in ${where}` :
+        `only ${where} was quiet — showing ${used}km around it`);
+      console.info(`[bich] feed_near ${where} r=${used}km -> ${rows.length} events`);
+      return true;
+    } catch(err){
+      console.warn('[bich] feed_near failed, falling back', err);
+      window._lastFeedError = err;
+    }
+  }
 
   try {
     const rows = await sbRpc('feed', {
@@ -2746,7 +2883,9 @@ async function loadFeed(){
     EVENTS.length = 0;
     rows.forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
-    setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
+    setFeedStatus(EVENTS.length
+      ? 'showing everywhere · tap to centre on your area'
+      : 'nothing published yet', false, true);
     return true;
   } catch(err){
     console.warn('[bich] feed() rpc failed, falling back to events_public', err);
@@ -3183,6 +3322,10 @@ function openCropper(bitmap, hint){
       if (act === 'cancel') return finish(undefined);
       if (act === 'skip') return finish(null);
       const s = view.scale;
+      /* If the stage never got measured, scale is 0 and everything
+         below is Infinity, which render() turns into a NaN sized
+         canvas. Fall back to the whole photo rather than a broken crop. */
+      if (!box || !s || !isFinite(s)) return finish(null);
       finish({ x:(box.x-view.x)/s, y:(box.y-view.y)/s, w:box.w/s, h:box.h/s });
     });
     window.addEventListener('resize', relayout);
@@ -3300,6 +3443,26 @@ function resolveDate(row, today){
 }
 
 /* If a start time exists with no finish, infer a sensible session length. */
+/* A finish time is a clock reading, not a moment. "23:00 - 00:30" is
+   perfectly normal for the events this app is for, and pinning both to
+   the same calendar day makes the end land BEFORE the start. Postgres
+   then refuses the row outright:
+
+     constraint ends_after_starts check (ends_at is null or ends_at > starts_at)
+
+   and the insert policy in schema part 4 repeats the same test. So any
+   event running past midnight failed to publish, with the reason
+   thrown away by the catch. Roll to the next day instead. */
+function endsAtFor(startsAt, finishHHMM){
+  if (!finishHHMM) return null;
+  const [h, m] = String(finishHHMM).split(':').map(Number);
+  if (Number.isNaN(h)) return null;
+  const end = new Date(startsAt);
+  end.setHours(h, m || 0, 0, 0);
+  if (end <= startsAt) end.setDate(end.getDate() + 1);
+  return end;
+}
+
 function inferFinish(row){
   if (row.time_finish) return String(row.time_finish).slice(0,5);
   const t = row.time_start ? String(row.time_start).slice(0,5) : '';
@@ -3653,6 +3816,9 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     try {
       await ensureUser();
       const img = await uploadCover();
+      const startsAt = new Date(`${date}T${time}`);
+      const endsAt = endsAtFor(startsAt, draft.timeFinish);
+
       /* Pin first, flyer text second. A coordinate resolves to one
          slug; "Ericeira coast" resolves to three over a month. */
       const slug = communityForCoords(draft.lat, draft.lng)
@@ -3670,10 +3836,10 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         community_slug: slug,
         photo_lat: draft.photoLat ?? null,   // origin only, never the pin
         photo_lng: draft.photoLng ?? null,
-        starts_at: new Date(`${date}T${time}`).toISOString(),
-        ends_at: draft.timeFinish ? new Date(`${date}T${draft.timeFinish}`).toISOString() : null,
-        price_value: Math.round(ev.price * 100),
-        price_currency: 'EUR',
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt ? endsAt.toISOString() : null,
+        price_value: Math.max(0, Math.round((Number(ev.price) || 0) * 100)),
+        price_currency: draft.currency || 'EUR',
         capacity: document.getElementById('inputCapacity').value
                   ? parseInt(document.getElementById('inputCapacity').value, 10) : null,
         recurrence: draft.recurrence || null,
@@ -3684,6 +3850,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
       });
       ev.uuid = saved[0].id; ev.id = saved[0].short_id;
       Store.addHosting(ev.id);
+      // Publishing here is a better home signal than any permission prompt.
+      if (slug && !(Store.data.home && Store.data.home.slug)) Store.set({ home: { slug } });
       if (img) { ev.cover = img.thumb; ev.cover_full = img.url; }
       else if (draft.cover) {
         // The bucket is not reachable. Say so rather than showing a
@@ -3695,7 +3863,20 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     } catch(err){
       btn.disabled = false;
       coverNotice.className = 'cover-notice show err';
-      coverNotice.textContent = "couldn't publish that. try again?";
+      /* Postgres already said exactly what was wrong. Repeating
+         "try again?" at someone whose end time is before their start
+         time just makes them try again. */
+      const msg = String(err.message || '');
+      coverNotice.textContent =
+        /ends_after_starts/.test(msg)      ? 'the finish time is before the start time' :
+        /row-level security/.test(msg)     ? "the database refused this event. Check the date isn't in the past." :
+        /violates foreign key.*community/.test(msg) ? 'unknown community for this location' :
+        /violates foreign key.*host/.test(msg)      ? 'this device has no user row yet — reload and try again' :
+        /venue_pin_is_complete/.test(msg)  ? 'the pin needs both a latitude and a longitude' :
+        /duplicate key/.test(msg)          ? 'that event already exists' :
+        msg ? "couldn't publish: " + msg.slice(0, 140)
+            : "couldn't publish that. try again?";
+      console.error('[bich] publish failed', err.status || '', err, JSON.stringify(err.detail || {}));
       return;
     }
   }
