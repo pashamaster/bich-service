@@ -5,6 +5,10 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta name="app-version" content="2026-07-23-01" />
   <link rel="manifest" href="/manifest.webmanifest" />
+  <!-- config first: the app reads its addresses and keys from here.
+       Without this the Supabase constants below stay empty, SB_READY()
+       is false forever, and the app silently runs on sample data. -->
+  <script src="/config.js"></script>
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
@@ -601,6 +605,11 @@ body { display: flex; align-items: center; justify-content: center; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+.feed-status {
+  font-size: 0.62rem; letter-spacing: 0.04em; color: var(--muted);
+  text-align: center; padding: var(--space-md);
+}
+.feed-status.err { color: var(--red); }
 .cover-picker {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -1295,16 +1304,17 @@ if ('serviceWorker' in navigator) {
     </div>
 
     <!-- Bundle: For you -->
-    <div class="bundle-divider">
+    <div class="bundle-divider" id="dividerPersonal">
       <div class="bundle-divider__line"></div>
       <div class="bundle-divider__text">for you</div>
       <div class="bundle-divider__line"></div>
     </div>
 
+    <p class="feed-status" id="feedStatus" hidden></p>
     <div class="event-list" id="eventListPersonal"></div>
 
     <!-- Bundle: Nearby tonight -->
-    <div class="bundle-divider">
+    <div class="bundle-divider" id="dividerNearby">
       <div class="bundle-divider__line"></div>
       <div class="bundle-divider__text">nearby · tonight</div>
       <div class="bundle-divider__line"></div>
@@ -1313,7 +1323,7 @@ if ('serviceWorker' in navigator) {
     <div class="event-list" id="eventListNearby"></div>
 
     <!-- Bundle: This weekend -->
-    <div class="bundle-divider">
+    <div class="bundle-divider" id="dividerWeekend">
       <div class="bundle-divider__line"></div>
       <div class="bundle-divider__text">this weekend</div>
       <div class="bundle-divider__line"></div>
@@ -1783,6 +1793,14 @@ function renderBundles() {
   document.getElementById('eventListWeekend').innerHTML =
     EVENTS.filter(e => e.bundle === 'weekend').map(renderEventCard).join('');
 
+  [['Personal','personal'],['Nearby','nearby'],['Weekend','weekend']].forEach(([cap, key]) => {
+    const d = document.getElementById('divider' + cap);
+    const l = document.getElementById('eventList' + cap);
+    const empty = !EVENTS.some(e => e.bundle === key);
+    if (d) d.hidden = empty;
+    if (l) l.hidden = empty;
+  });
+
   document.querySelectorAll('.event-card').forEach(el => {
     el.addEventListener('click', () => openDetail(el.dataset.eventId));
   });
@@ -2131,22 +2149,30 @@ Store.load();
 
    NEVER put the service_role key here. It bypasses every policy.
    ══════════════════════════════════════════════════════════════════ */
-const SUPABASE_URL      = '';
-const SUPABASE_ANON_KEY = '';
-const WORKER_URL        = 'https://api.bich.app';
+const _CFG = (window.BICH_CONFIG || {});
+const SUPABASE_URL      = (_CFG.supabase && _CFG.supabase.url)     || '';
+const SUPABASE_ANON_KEY = (_CFG.supabase && _CFG.supabase.anonKey) || '';
+const WORKER_URL        = (_CFG.worker   && _CFG.worker.url)       || 'https://api.bich.app';
+const APP_VERSION       = _CFG.version || 'dev';
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.error('[bich] no Supabase config. /config.js did not load, or ' +
+                'window.BICH_CONFIG.supabase is empty. The app will run on ' +
+                'sample data and nothing will be saved.');
+}
 
 /* Share links, per spec: bich.app/e/xxxx with a short opaque id, so a
    URL never hints at how many events exist. GitHub Pages cannot route
    /e/ itself, so 404.html hands the id back as ?e= and we pick it up
    on load. */
-const SHARE_BASE = 'https://bich.app/e/';
+const SHARE_BASE = (_CFG.share && _CFG.share.base) || 'https://bich.app/e/';
 
 /* Passkeys bind permanently to this domain. It must be the apex, not
    a github.io address and not a subdomain, or every credential
    enrolled today is orphaned the day you move. Registering on the
    apex also lets api.bich.app share the same identity later. */
-const RP_ID   = 'bich.app';
-const RP_NAME = 'bich.service';
+const RP_ID   = (_CFG.passkey && _CFG.passkey.rpId)   || 'bich.app';
+const RP_NAME = (_CFG.passkey && _CFG.passkey.rpName) || 'bich.service';
 
 const SB_READY = () => Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
@@ -2166,7 +2192,13 @@ async function sbRpc(fn, args){
                'Content-Type': 'application/json' },
     body: JSON.stringify(args || {})
   });
-  if (!r.ok) throw new Error(fn + ' failed ' + r.status);
+  if (!r.ok){
+    const body = await r.json().catch(() => null);
+    const e = new Error((body && (body.message || body.hint || body.details)) || `${fn} failed (${r.status})`);
+    e.status = r.status; e.code = body && body.code; e.detail = body;
+    console.error(`[bich] rpc ${fn} failed`, r.status, body);
+    throw e;
+  }
   return r.json();
 }
 async function workerPost(path, body){
@@ -2249,6 +2281,21 @@ async function sbInsert(table, row){
 async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
   if (draft.venueId) return draft.venueId;
   if (!SB_READY() || !name || lat == null || lng == null) return null;
+
+  /* Look before writing. venues has unique(source, source_id) and
+     source_id is always null here, and Postgres allows any number of
+     null values in a unique constraint - so without this every publish
+     would mint a fresh row for the same place. */
+  try {
+    const near = await sbRpc('search_venues', {
+      q: name, near_lat: lat, near_lng: lng, max_results: 3
+    });
+    const hit = (near || []).find(v =>
+      v.name.trim().toLowerCase() === name.trim().toLowerCase() &&
+      Math.abs(v.lat - lat) < 0.002 && Math.abs(v.lng - lng) < 0.002);
+    if (hit) return hit.id;
+  } catch(_){ /* search is a convenience, not a gate */ }
+
   try {
     const rows = await sbInsert('venues', {
       name: name.slice(0, 200), lat, lng,
@@ -2258,7 +2305,8 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
     });
     return (rows && rows[0] && rows[0].id) || null;
   } catch(err){
-    console.warn('[bich] venue not saved:', err.message);
+    // 409 = the dedupe index caught a race. Not an error worth surfacing.
+    if (err.status !== 409) console.warn('[bich] venue not saved:', err.message);
     return null;   // the event is still worth publishing
   }
 }
@@ -2308,8 +2356,22 @@ function rowToEvent(r){
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
     host: '',
-    bundle: 'personal'
+    /* Everything used to land in 'personal', so two of the three
+       sections on the home screen were permanently empty. */
+    bundle: bundleFor(when)
   };
+}
+
+/* tonight = today. weekend = the next Saturday or Sunday. */
+function bundleFor(when){
+  if (!(when instanceof Date) || Number.isNaN(when.getTime())) return 'personal';
+  const now = new Date();
+  const sameDay = when.toDateString() === now.toDateString();
+  if (sameDay) return 'nearby';
+  const day = when.getDay();
+  const days = Math.floor((when - now) / 86400000);
+  if ((day === 6 || day === 0) && days <= 7) return 'weekend';
+  return 'personal';
 }
 
 /* community_slug is a foreign key into communities(slug). The model
@@ -2331,8 +2393,26 @@ function resolveCommunity(text){
   return hit ? hit.slug : null;
 }
 
+function setFeedStatus(text, isError){
+  const el = document.getElementById('feedStatus');
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || '';
+  el.className = 'feed-status' + (isError ? ' err' : '');
+}
+
+/* Two ways in, on purpose. feed() is the good one: it resolves the
+   crossed paths signal per viewer inside the database. It is also the
+   fragile one, because it is SECURITY DEFINER and depends on grants
+   from schema part 3 being present.
+
+   events_public is a plain view over events. No RPC, no definer, no
+   grant beyond select. If the RPC is misconfigured the events still
+   show, just without the social number - which is far better than
+   silently falling back to seven fake events that look real. */
 async function loadFeed(){
   if (!SB_READY()) return false;
+
   try {
     const rows = await sbRpc('feed', {
       viewer: CURRENT_USER.id || null,
@@ -2342,9 +2422,33 @@ async function loadFeed(){
     EVENTS.length = 0;
     rows.forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
+    setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
     return true;
   } catch(err){
-    console.warn('[bich] feed unavailable, showing sample data', err);
+    console.warn('[bich] feed() rpc failed, falling back to events_public', err);
+    window._lastFeedError = err;
+  }
+
+  try {
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const rows = await sbGet(
+      `events_public?select=*&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
+    EVENTS.length = 0;
+    (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
+    renderBundles();
+    setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
+    return true;
+  } catch(err2){
+    console.error('[bich] events_public also failed', err2);
+    /* Never leave the sample data on screen pretending to be real.
+       An empty feed with an honest message beats seven fictions. */
+    EVENTS.length = 0;
+    renderBundles();
+    const first = window._lastFeedError;
+    setFeedStatus("couldn't load events. run bichCheck() in the console.", true);
+    console.error('[bich] feed unavailable.',
+      'rpc:', first && first.message, first && first.code,
+      '| view:', err2.message, err2.code);
     return false;
   }
 }
@@ -2494,7 +2598,6 @@ function wireVenueSearch(){
 
 const API_BASE = WORKER_URL;
 const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
-const EVENTS_ENDPOINT = API_BASE ? API_BASE + '/events' : null;
 
 /* DEV ONLY — direct Gemini from the browser, for one user on localhost.
    Anything you put here is visible to anyone who opens the page. Google runs
@@ -3196,21 +3299,6 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
 
   // PRODUCTION: POST /events to your backend here (spec section 9).
   // The DB record uses the spec shape (price in cents, ISO starts_at, venue_source, etc.).
-  if (EVENTS_ENDPOINT){
-    try {
-      await fetch(EVENTS_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          title, description: ev.desc, cover_url: draft.cover,
-          venue_name: venue, venue_lat: draft.lat, venue_lng: draft.lng,
-          venue_source: draft.mapsLink ? 'photo' : 'manual', venue_city: draft.city,
-          starts_at: new Date(`${date}T${time}`).toISOString(),
-          ends_at: draft.timeFinish ? new Date(`${date}T${draft.timeFinish}`).toISOString() : null,
-          price_value: Math.round(ev.price*100), price_currency: 'EUR',
-          capacity: document.getElementById('inputCapacity').value ? parseInt(document.getElementById('inputCapacity').value,10) : null
-        })
-      });
-    } catch(_){}
-  }
 
   // Real save. The cover goes to Cloudflare R2; the row goes straight
   // to Supabase. No service key exists anywhere in this system.
@@ -3355,6 +3443,13 @@ document.getElementById('inputTime').value = '19:00';
    defined above it. This block used to sit inside loadFeed(), which
    meant none of it ever ran. */
 initThemes();
+if (SB_READY()) {
+  /* The seven built in events are a design fixture, not data. The
+     moment a real database is configured they must go, or a failed
+     load looks exactly like a working one. */
+  EVENTS.length = 0;
+  setFeedStatus('loading…');
+}
 renderBundles();
 wireVenueSearch();
 (async () => {
