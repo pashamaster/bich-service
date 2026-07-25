@@ -1893,7 +1893,13 @@ async function sbUpsert(table, row){
     },
     body: JSON.stringify(row)
   });
-  if (!r.ok) throw new Error('sync failed');
+  if (!r.ok){
+    const body = await r.json().catch(() => null);
+    const e = new Error((body && (body.message || body.hint || body.details)) || `write failed (${r.status})`);
+    e.status = r.status; e.code = body && body.code; e.detail = body;
+    console.error(`[bich] ${table} upsert failed`, r.status, body);
+    throw e;
+  }
 }
 
 /* ─── TAB SWITCHING ─── */
@@ -2183,6 +2189,18 @@ async function workerPost(path, body){
 let CURRENT_USER = { id: Store.data.uid, handle: Store.data.handle };
 
 async function ensureUser(handle){
+  /* A uuid kept in local storage outlives the row it points at - a
+     dropped table during development is enough. Every attendance insert
+     would then fail the user_id foreign key, silently. Check once. */
+  if (CURRENT_USER.id && !CURRENT_USER._checked){
+    try {
+      const rows = await sbGet(`users?id=eq.${CURRENT_USER.id}&select=id&limit=1`);
+      if (rows && rows.length){ CURRENT_USER._checked = true; return CURRENT_USER; }
+      console.warn('[bich] stored user id no longer exists, claiming a new handle');
+      CURRENT_USER = { id: null, handle: null };
+      Store.set({ uid: null });
+    } catch(_){ return CURRENT_USER; }   // offline: trust it
+  }
   if (CURRENT_USER.id) return CURRENT_USER;
   if (!SB_READY()) return CURRENT_USER;
   let name = handle || currentHandle;
@@ -2224,6 +2242,27 @@ async function sbInsert(table, row){
 /* Covers go to Cloudflare R2 through the worker. R2 charges nothing
    for egress at any volume, which is the whole reason images live
    there and not beside the database. */
+/* The venue book only gets better if publishing adds to it. Schema
+   part 4 opened an insert policy for exactly this and nothing used it,
+   so venue_id stayed null, the bump_venue_use trigger never fired and
+   use_count never left zero. */
+async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
+  if (draft.venueId) return draft.venueId;
+  if (!SB_READY() || !name || lat == null || lng == null) return null;
+  try {
+    const rows = await sbInsert('venues', {
+      name: name.slice(0, 200), lat, lng,
+      city: city || null,
+      community_slug: communitySlug || null,
+      source: fromPhoto ? 'photo' : 'manual'
+    });
+    return (rows && rows[0] && rows[0].id) || null;
+  } catch(err){
+    console.warn('[bich] venue not saved:', err.message);
+    return null;   // the event is still worth publishing
+  }
+}
+
 async function uploadCover(){
   if (!WORKER_URL || !sourceBitmap) return null;
 
@@ -2273,6 +2312,25 @@ function rowToEvent(r){
   };
 }
 
+/* community_slug is a foreign key into communities(slug). The model
+   returns free text like "Ericeira", the slugs are lowercase. Sending
+   the raw value fails the whole event insert with a 23503, so resolve
+   it against the real list and send null when there is no match. */
+let KNOWN_COMMUNITIES = null;
+async function loadCommunities(){
+  if (KNOWN_COMMUNITIES || !SB_READY()) return KNOWN_COMMUNITIES;
+  try { KNOWN_COMMUNITIES = await sbGet('communities?select=slug,name'); }
+  catch(_){ KNOWN_COMMUNITIES = []; }
+  return KNOWN_COMMUNITIES;
+}
+function resolveCommunity(text){
+  if (!text || !KNOWN_COMMUNITIES) return null;
+  const t = String(text).trim().toLowerCase();
+  const hit = KNOWN_COMMUNITIES.find(c =>
+    c.slug === t || c.name.toLowerCase() === t || t.indexOf(c.slug) > -1);
+  return hit ? hit.slug : null;
+}
+
 async function loadFeed(){
   if (!SB_READY()) return false;
   try {
@@ -2283,7 +2341,13 @@ async function loadFeed(){
     });
     EVENTS.length = 0;
     rows.forEach(r => EVENTS.push(rowToEvent(r)));
-    
+    renderBundles();
+    return true;
+  } catch(err){
+    console.warn('[bich] feed unavailable, showing sample data', err);
+    return false;
+  }
+}
 
 /* ── themes ────────────────────────────────────────────────────────
    night is the brand. sun brightens it for glare. paper is for direct
@@ -2377,23 +2441,6 @@ async function openDeepLink(){
   else toast('that event is gone');
 }
 
-initThemes();
-
-renderBundles();
-wireVenueSearch();
-(async () => {
-  if (!SB_READY()) { openDeepLink(); return; }   // sample data until configured
-  await ensureUser().catch(() => {});
-  await loadFeed();
-  await syncAttendance();     // push anything we marked while offline
-  await openDeepLink();
-})();
-    return true;
-  } catch(err){
-    console.warn('feed unavailable, showing sample data', err);
-    return false;
-  }
-}
 
 /* ── venue autocomplete ────────────────────────────────────────────
    Our own venue book first. It costs nothing, works offline once
@@ -2950,6 +2997,10 @@ function fillForm(row){
   if (row.time_start) setVal('inputTime', String(row.time_start).slice(0,5));
   if (row.price != null && row.price !== '') setVal('inputPrice', row.price);
   draft.community = row.community || '';
+  /* Both columns exist in events and the model already extracts them;
+     they were being parsed and then dropped on the floor. */
+  draft.recurrence = row.recurrence || '';
+  draft.contact = row.contact || '';
   if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
   draft.city = row.city || '';
   draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
@@ -3167,16 +3218,18 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
     try {
       await ensureUser();
       const img = await uploadCover();
+      const slug = resolveCommunity(draft.community);
+      const venueId = await ensureVenue(ev.venue, draft.lat, draft.lng, draft.city, slug, Boolean(draft.cover));
       const saved = await sbInsert('events', {
         host_id: CURRENT_USER.id || null,
         title: ev.title,
         description: ev.desc || null,
-        venue_id: draft.venueId || null,
+        venue_id: venueId,
         venue_name: ev.venue || null,
         venue_lat: draft.lat, venue_lng: draft.lng,
         venue_source: draft.mapsLink ? 'printed_coordinates' : 'manual',
         city: draft.city || null,
-        community_slug: draft.community || null,
+        community_slug: slug,
         photo_lat: draft.photoLat ?? null,   // origin only, never the pin
         photo_lng: draft.photoLng ?? null,
         starts_at: new Date(`${date}T${time}`).toISOString(),
@@ -3185,6 +3238,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         price_currency: 'EUR',
         capacity: document.getElementById('inputCapacity').value
                   ? parseInt(document.getElementById('inputCapacity').value, 10) : null,
+        recurrence: draft.recurrence || null,
+        contact: draft.contact || null,
         cover_url: img ? img.url : null,
         status: 'live',
         source: draft.cover ? 'photo' : 'manual'
@@ -3294,6 +3349,22 @@ const today = new Date();
 today.setDate(today.getDate() + 1);
 document.getElementById('inputDate').value = today.toISOString().split('T')[0];
 document.getElementById('inputTime').value = '19:00';
+
+/* ── boot ──────────────────────────────────────────────────────────
+   Last thing in the file on purpose: every function it calls is
+   defined above it. This block used to sit inside loadFeed(), which
+   meant none of it ever ran. */
+initThemes();
+renderBundles();
+wireVenueSearch();
+(async () => {
+  if (!SB_READY()) { openDeepLink(); return; }   // sample data until configured
+  await loadCommunities();
+  await ensureUser().catch(err => console.warn('[bich] user setup failed', err));
+  await loadFeed();
+  await syncAttendance();
+  await openDeepLink();
+})();
 </script>
 
 </body>
