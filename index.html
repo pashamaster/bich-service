@@ -2311,28 +2311,80 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
   }
 }
 
+function canvasToBlob(canvas, mime, quality){
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('canvas could not encode ' + mime)),
+                  mime, quality);
+  });
+}
+
+/* Every failure in here used to `return null` with no log, so an empty
+   R2 bucket looked identical to a working upload. Each one now says
+   which of the five things went wrong. */
 async function uploadCover(){
-  if (!WORKER_URL || !sourceBitmap) return null;
+  window._lastUploadError = null;
 
-  /* Two sizes, both made in the browser from the cropped original:
-     600px for feed cards, 1400px for the detail hero. Storing both
-     costs nothing against a 10GB bucket and stops the feed pulling
-     full size images. No server side resizing needed, which is what
-     keeps this on the free tier. */
-  const full  = render(sourceBitmap, draft.crop, COVER_MAX_SIDE, 0.85);
-  const thumb = render(sourceBitmap, draft.crop, THUMB_MAX_SIDE, 0.78);
+  if (!WORKER_URL){
+    window._lastUploadError = 'no worker url configured (check /config.js)';
+    console.warn('[bich] cover not uploaded:', window._lastUploadError);
+    return null;
+  }
+  if (!sourceBitmap){
+    window._lastUploadError = 'the decoded photo is no longer in memory';
+    console.warn('[bich] cover not uploaded:', window._lastUploadError);
+    return null;
+  }
 
-  const form = new FormData();
-  form.append('full',  await (await fetch(full.dataUrl)).blob(),  'full.webp');
-  form.append('thumb', await (await fetch(thumb.dataUrl)).blob(), 'thumb.webp');
+  /* Two sizes, both from the cropped original: 600px for feed cards,
+     1400px for the detail hero. toBlob rather than a data URL: the old
+     canvas -> base64 -> fetch -> blob route held three copies of the
+     image at once, which is a real risk on a phone already holding a
+     40 MB ImageBitmap. */
+  let form;
+  try {
+    const full  = render(sourceBitmap, draft.crop, COVER_MAX_SIDE, 0.85);
+    const thumb = render(sourceBitmap, draft.crop, THUMB_MAX_SIDE, 0.78);
+    const ext = full.mime === 'image/webp' ? 'webp' : 'jpg';
+    form = new FormData();
+    form.append('full',  await canvasToBlob(full.canvas,  full.mime,  0.85), 'full.'  + ext);
+    form.append('thumb', await canvasToBlob(thumb.canvas, thumb.mime, 0.78), 'thumb.' + ext);
+  } catch(err){
+    window._lastUploadError = 'could not encode the image: ' + err.message;
+    console.error('[bich] cover not uploaded:', window._lastUploadError);
+    return null;
+  }
 
   try {
     const r = await fetch(WORKER_URL + '/upload', {
-      method: 'POST', headers: { 'X-Bich-Invite': readInvite() }, body: form
+      method: 'POST',
+      headers: { 'X-Bich-Invite': readInvite() },
+      body: form,
+      signal: AbortSignal.timeout(30000)
     });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch(_) { return null; }
+    if (!r.ok){
+      const body = await r.text().catch(() => '');
+      const why =
+        r.status === 403 ? 'the invite gate rejected this device (worker BICH_INVITE_CODES is set, config.invite is not)' :
+        r.status === 404 ? 'the worker has no /upload route - deploy the current worker.js' :
+        r.status === 413 ? 'the image is larger than the worker accepts' :
+        r.status === 415 ? 'the worker refused the image type' :
+        r.status === 500 ? 'no R2 bucket bound to the worker - check the [[r2_buckets]] block in wrangler.toml and redeploy' :
+        'HTTP ' + r.status;
+      throw new Error(why + (body ? ' — ' + body.slice(0, 160) : ''));
+    }
+    const out = await r.json();
+    if (!out || !out.url) throw new Error('worker replied without a url: ' + JSON.stringify(out).slice(0, 160));
+    console.info('[bich] cover stored at', out.key);
+    return out;
+  } catch(err){
+    window._lastUploadError =
+      err.name === 'TimeoutError' ? 'the upload timed out after 30s' :
+      /failed to fetch|load failed|networkerror/i.test(err.message)
+        ? `could not reach ${WORKER_URL}. Either the worker is not deployed, or its ALLOWED_ORIGINS does not include ${location.origin}`
+        : err.message;
+    console.error('[bich] cover upload failed:', window._lastUploadError);
+    return null;
+  }
 }
 
 /* ── the feed ──────────────────────────────────────────────────────
@@ -2758,7 +2810,7 @@ function render(bitmap, crop, maxSide, quality){
   const canvas = drawScaled(bitmap, sx, sy, sw, sh, dw, dh);
   const mime = supportsWebp() ? 'image/webp' : 'image/jpeg';
   const dataUrl = canvas.toDataURL(mime, quality);
-  return { dataUrl, base64: dataUrl.split(',')[1], mime, width: dw, height: dh,
+  return { canvas, dataUrl, base64: dataUrl.split(',')[1], mime, width: dw, height: dh,
            kb: Math.round(dataUrl.length * 0.75 / 1024) };
 }
 
@@ -3339,7 +3391,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         // The bucket is not reachable. Say so rather than showing a
         // picture that will vanish on the next refresh.
         coverNotice.className = 'cover-notice show err';
-        coverNotice.textContent = 'published, but the cover did not upload';
+        coverNotice.textContent = 'published, but the cover did not upload — '
+          + (window._lastUploadError || 'reason unknown, see the console');
       }
     } catch(err){
       btn.disabled = false;
