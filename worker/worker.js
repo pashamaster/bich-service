@@ -31,13 +31,14 @@ const EVENT_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        propertyOrdering: ['event_name','space_name','venue_latitude','venue_longitude',
+        propertyOrdering: ['event_name','space_name','venue_match','venue_latitude','venue_longitude',
           'date_literal','weekday_literal','year_literal','time_start','time_finish',
           'recurrence','city','community','description','price','currency','contact','location_source'],
         required: ['event_name'],
         properties: {
           event_name:      { type:'string' },
           space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
+          venue_match:     { type:'string', nullable:true, description:'If space_name matches one of the known venues supplied in the prompt, the exact string from that list. Null otherwise, and null when no list was supplied.' },
           venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed. Do not convert.' },
@@ -112,6 +113,12 @@ export default {
     const path = url.pathname.replace(/\/+$/, '');
 
     if (request.method === 'GET' && url.pathname.includes('/img/')) return serveImage(request, env, origin);
+
+    /* Health has to sit above the POST-only check and above the invite
+       gate: it is a GET you can hit from a browser bar, and its whole
+       job is telling you when the gate is misconfigured. */
+    if (request.method === 'GET' && path.endsWith('/health')) return health(request, env, origin);
+
     if (request.method !== 'POST') return json({ error: 'nothing here' }, 405, origin);
 
     /* Invite gate. An invite code is an opaque string mapping to a
@@ -128,6 +135,68 @@ export default {
     return json({ error: 'nothing here' }, 404, origin);
   }
 };
+
+/* ── health ────────────────────────────────────────────────────────
+   Answers "is this deployed correctly" without anyone reading logs or
+   guessing. Reports whether each binding EXISTS; ?deep=1 additionally
+   proves each one WORKS by writing a throwaway R2 object and asking
+   Google to describe the model. Never returns a key, only whether one
+   is present.                                                        */
+async function health(request, env, origin) {
+  const url = new URL(request.url);
+  const deep = url.searchParams.get('deep') === '1';
+  const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const yours = request.headers.get('Origin') || null;
+
+  const out = {
+    worker: 'up',
+    r2_bucket_bound: Boolean(env.COVERS),
+    gemini_key_present: Boolean(env.GEMINI_API_KEY),
+    gemini_model: env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+    kv_quota_bound: Boolean(env.BICH_KV),
+    invite_gate_on: Boolean((env.BICH_INVITE_CODES || '').trim()),
+    public_img_base: env.PUBLIC_IMG_BASE || '(falling back to /img on this worker)',
+    allowed_origins: allowed,
+    your_origin: yours,
+    origin_allowed: !allowed.length || (yours ? allowed.includes(yours) : null)
+  };
+
+  if (deep && env.GEMINI_API_KEY) {
+    try {
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${out.gemini_model}`,
+        { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
+      const b = await r.json().catch(() => null);
+      out.gemini = r.ok
+        ? { key_works: true, model_reachable: true, name: b?.name,
+            methods: b?.supportedGenerationMethods }
+        : { key_works: r.status !== 401 && r.status !== 403,
+            model_reachable: false, status: r.status,
+            error: b?.error?.message || 'unknown',
+            hint: r.status === 404
+              ? `this key cannot reach "${out.gemini_model}". List what it can: ` +
+                `curl -s -H "x-goog-api-key: $KEY" ` +
+                `"https://generativelanguage.googleapis.com/v1beta/models" | grep '"name"'`
+              : r.status === 403 ? 'key rejected: wrong key, or the Generative Language API is not enabled on that project'
+              : undefined };
+    } catch { out.gemini = { key_works: null, error: 'could not reach googleapis.com' }; }
+  } else if (deep) {
+    out.gemini = { key_works: false, error: 'GEMINI_API_KEY secret is not set. Run: wrangler secret put GEMINI_API_KEY' };
+  }
+
+  if (deep && env.COVERS) {
+    const key = `health/${Date.now()}.txt`;
+    try {
+      await env.COVERS.put(key, 'ok');
+      out.r2 = { writable: Boolean(await env.COVERS.get(key)) };
+      await env.COVERS.delete(key);
+    } catch (e) { out.r2 = { writable: false, error: String(e).slice(0, 140) }; }
+  }
+
+  out.ok = out.r2_bucket_bound && out.gemini_key_present && out.origin_allowed !== false
+           && (!deep || (out.gemini?.model_reachable !== false && out.r2?.writable !== false));
+  return json(out, 200, origin);
+}
 
 /* Magic bytes. JPEG starts FF D8 FF, PNG 89 50 4E 47, WebP is RIFF
    then WEBP at offset 8. */
@@ -245,7 +314,7 @@ async function extractEvent(request, env, origin) {
   let body;
   try { body = await request.json(); } catch { return json({ error: 'bad request' }, 400, origin); }
 
-  const { image, mime = 'image/jpeg', exif = null } = body || {};
+  const { image, mime = 'image/jpeg', exif = null, known_venues = [] } = body || {};
   if (!image || typeof image !== 'string') return json({ error: 'no image' }, 400, origin);
   if (image.length > 8 * 1024 * 1024) return json({ error: 'image too large' }, 413, origin);
 
@@ -263,6 +332,24 @@ async function extractEvent(request, env, origin) {
     ? `\n\nEXIF supplied (location fallback only, never the event date): GPS ${exif.lat ?? 'none'}, ${exif.lng ?? 'none'} · captured ${exif.dt ?? 'unknown'}`
     : '\n\nNo EXIF was supplied with this photo.';
 
+  /* Venue names we already hold for this area. Reading a venue off a
+     flyer is the single least reliable field: the type is stylised,
+     often partly obscured, and a near miss ("Casa Eyra") creates a
+     duplicate that never merges. Giving the model the real strings
+     turns an open transcription into a much easier multiple choice. */
+  const venueList = Array.isArray(known_venues)
+    ? known_venues.filter(v => typeof v === 'string' && v.length < 120).slice(0, 40)
+    : [];
+  const venueLine = venueList.length
+    ? `\n\nVenues already known near these coordinates:\n` +
+      venueList.map(v => `  · ${v}`).join('\n') +
+      `\n\nIf the space named on the flyer is one of these, copy that string EXACTLY into space_name ` +
+      `and set venue_match to the same string. Match on meaning, not spelling: a flyer reading ` +
+      `"ORGANIC WAY" matches "The Organic Way". If the flyer names a space that is NOT on this list, ` +
+      `write what the flyer says and leave venue_match null. Never pick the nearest looking entry to ` +
+      `something unrelated - a wrong match is worse than no match.`
+    : '';
+
   let res;
   try {
     res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -272,7 +359,7 @@ async function extractEvent(request, env, origin) {
         system_instruction: { parts: [{ text: systemPrompt(today) }] },
         contents: [{ role: 'user', parts: [
           { inline_data: { mime_type: mime, data: image } },
-          { text: 'Extract every event in this photo as records.' + exifLine }
+          { text: 'Extract every event in this photo as records.' + exifLine + venueLine }
         ]}],
         generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
       })
