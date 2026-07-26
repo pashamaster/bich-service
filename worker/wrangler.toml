@@ -30,11 +30,22 @@ BICH_INVITE_CODES = ""
 
 DAILY_CAP = "180"
 
+# The core/magic wall. "false" makes /extract-event return 404 and no
+# request can reach Gemini. Set to "true" only on the magic deployment.
+MAGIC_ENABLED = "false"
+
+# Passkeys. The RP id must be the apex domain and must never change:
+# every existing passkey is cryptographically bound to it and would be
+# orphaned by an edit.
+WEBAUTHN_RP_ID = "bich.app"
+WEBAUTHN_RP_NAME = "bich.service"
+
 # Secrets, never vars:
 #   wrangler secret put GEMINI_API_KEY
-# There is deliberately NO Supabase key here.
+#   wrangler secret put SUPABASE_JWT_SECRET   # mints the recovery session
+# There is deliberately NO Supabase service role key here.
 
-# Optional daily quota counter:
+# Required for passkeys (challenges + credentials) and the daily quota:
 #   wrangler kv namespace create BICH_KV
 # [[kv_namespaces]]
 # binding = "BICH_KV"

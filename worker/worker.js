@@ -22,6 +22,11 @@
  *   GET  /img/<key>       serves a stored image
  */
 
+import {
+  passkeyRegisterBegin, passkeyRegisterFinish,
+  passkeyAuthBegin, passkeyAuthFinish
+} from './passkey.js';
+
 const EVENT_SCHEMA = {
   type: 'object',
   propertyOrdering: ['events', 'read_quality'],
@@ -130,6 +135,15 @@ export default {
 
     if (request.method !== 'POST') return json({ error: 'nothing here' }, 405, origin);
 
+    /* Passkeys sit ABOVE the invite gate. That gate exists to ration
+       Gemini calls; recovering your own history costs nothing, and
+       locking somebody out of their own history because they have no
+       invite code would be absurd. */
+    if (path.endsWith('/passkey/register/begin'))  return passkeyRegisterBegin(request, env, json, origin);
+    if (path.endsWith('/passkey/register/finish')) return passkeyRegisterFinish(request, env, json, origin);
+    if (path.endsWith('/passkey/auth/begin'))      return passkeyAuthBegin(request, env, json, origin);
+    if (path.endsWith('/passkey/auth/finish'))     return passkeyAuthFinish(request, env, json, origin);
+
     /* Invite gate. An invite code is an opaque string mapping to a
        quota bucket, not a person, so the zero PII model holds.
        Leave BICH_INVITE_CODES unset to run open. */
@@ -140,7 +154,16 @@ export default {
     }
 
     if (path.endsWith('/upload'))        return uploadImage(request, env, origin);
-    if (path.endsWith('/extract-event')) return extractEvent(request, env, origin);
+    if (path.endsWith('/extract-event')) {
+      /* The core/magic split is enforced HERE, not in the browser. A
+         switch in the client is a suggestion; this is a wall. With
+         MAGIC_ENABLED off, nothing reaches Gemini however the request
+         is crafted, so a core deployment cannot spend money at all. */
+      if (String(env.MAGIC_ENABLED || 'false') !== 'true') {
+        return json({ error: 'magic is off on this deployment' }, 404, origin);
+      }
+      return extractEvent(request, env, origin);
+    }
     return json({ error: 'nothing here' }, 404, origin);
   }
 };
