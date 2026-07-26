@@ -666,6 +666,24 @@ body { display: flex; align-items: center; justify-content: center; }
 .edit-sheet__foot { padding: 12px 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .edit-sheet__note { font-family: var(--font-mono); font-size: 0.6rem; color: var(--red); margin-top: 12px; }
 
+.map-filter-bar--cat { border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.pin-list {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 1550;
+  max-height: 62dvh; overflow-y: auto; background: var(--bg);
+  border-top: 1px solid var(--border-accent);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  animation: slideup 0.22s ease both;
+}
+.pin-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 12px 16px; border: 0; border-bottom: 1px solid var(--border);
+  background: none; text-align: left; cursor: pointer; min-height: 44px;
+  font-family: var(--font-mono); font-size: 0.66rem; color: var(--text);
+}
+.pin-row__when { color: var(--accent); flex-shrink: 0; font-size: 0.6rem; }
+.pin-row__t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-row__c { color: var(--subtle); font-size: 0.56rem; text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
+
 .bulk-result {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 1550;
   max-height: 70dvh; overflow-y: auto; background: var(--bg);
@@ -1397,8 +1415,11 @@ if ('serviceWorker' in navigator) {
     <div class="map-filter-bar">
       <button class="map-chip active" data-filter="any">any day</button>
       <button class="map-chip" data-filter="today">today</button>
-      <button class="map-chip" data-filter="week">this week</button>
-      <button class="map-chip" data-filter="next">next week</button>
+      <button class="map-chip" data-filter="week">next 7 days</button>
+      <button class="map-chip" data-filter="next">the 7 after</button>
+    </div>
+    <div class="map-filter-bar map-filter-bar--cat" id="mapCatBar">
+      <button class="map-chip active" data-cat="all">everything</button>
     </div>
     <div id="map"></div>
     <div class="map-footer-sheet">
@@ -1642,6 +1663,10 @@ if ('serviceWorker' in navigator) {
         <div class="detail-meta-grid__label">going</div>
         <div class="detail-meta-grid__value" id="detailGoing"></div>
       </div>
+      <div class="detail-meta-grid__item" id="detailCatItem" hidden>
+        <div class="detail-meta-grid__label">kind</div>
+        <div class="detail-meta-grid__value" id="detailCat"></div>
+      </div>
       <div class="detail-meta-grid__item" id="detailEndsItem" hidden>
         <div class="detail-meta-grid__label">until</div>
         <div class="detail-meta-grid__value" id="detailEnds"></div>
@@ -1714,6 +1739,14 @@ if ('serviceWorker' in navigator) {
     <button class="btn btn--primary" id="acceptPasskey">save passkey</button>
     <button class="btn" id="dismissPasskey">maybe later</button>
   </div>
+</div>
+
+<div class="pin-list" id="pinList" hidden>
+  <div class="bulk-result__head">
+    <span class="text-label" id="pinListHead"></span>
+    <button type="button" class="edit-sheet__x" id="pinListClose">close</button>
+  </div>
+  <div id="pinListBody"></div>
 </div>
 
 <div class="edit-sheet" id="editSheet" hidden>
@@ -1935,11 +1968,19 @@ function renderBundles() {
 }
 
 /* ─── EVENT DETAIL ─── */
-const MONEY = { EUR: '€', USD: '$', GBP: '£' };
+/* A symbol lookup only knows the currencies someone thought of. Intl
+   knows all of them, places the symbol correctly per locale and groups
+   digits - which starts mattering the moment a price is IDR 200,000
+   rather than EUR 12. */
 function money(v, cur){
   if (!v) return 'free';
-  const sym = MONEY[cur] || '';
-  return sym ? sym + v : v + ' ' + (cur || '');
+  const code = (cur || 'EUR').toUpperCase();
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency', currency: code,
+      minimumFractionDigits: 0, maximumFractionDigits: 2
+    }).format(v);
+  } catch(_){ return v + ' ' + code; }
 }
 
 /* feed() returns a lean row - it has no ends_at, capacity, recurrence
@@ -1967,6 +2008,22 @@ function paintDetail(e){
     }
   };
   set('detailPrice', money(e.price, e.currency));
+  set('detailCat', e.category || '', 'detailCatItem');
+
+  /* The mockup shows "Garden House Kemang · Jl. Kemang Raya 12,
+     Jakarta". venue_address has existed in the schema since part 1
+     and was never written or read. */
+  /* The mockup shows "Garden House Kemang · Jl. Kemang Raya 12,
+     Jakarta". venue_address has existed since schema part 1 and was
+     never written or read. The old line here concatenated e.address
+     unconditionally, so every event loaded from Supabase rendered
+     "The Space · undefined". */
+  const where = document.getElementById('detailWhere');
+  if (where){
+    where.textContent =
+      [e.venue, e.venueAddress || e.address, e.city].filter(Boolean).join(' · ')
+      || 'location to be confirmed';
+  }
   set('detailGoing', `${e.going} ${e.going === 1 ? 'person' : 'people'}`);
   set('detailCap', e.capacity ? `${e.capacity} places` : '', 'detailCapItem');
   set('detailRepeat', e.recurrence || '', 'detailRepeatItem');
@@ -2086,7 +2143,6 @@ function openDetail(id) {
   document.getElementById('detailTitle').textContent = e.title;
   document.getElementById('detailDesc').textContent = e.desc;
   document.getElementById('detailWhen').textContent = e.when;
-  document.getElementById('detailWhere').textContent = e.venue + ' · ' + e.address;
   document.getElementById('detailHost').textContent = e.host;
   paintDetail(e);
   if (e.crossed >= 3) {
@@ -2238,8 +2294,14 @@ function applyMapTheme(){
 }
 
 function initMap() {
+  /* Opening on a hardcoded Mallorca centre meant everyone else in the
+     world got the Mediterranean. fitBounds in paintMap() takes over
+     as soon as there is anything to frame; this is only what shows
+     during the first paint. */
+  const home = (KNOWN_COMMUNITIES || []).find(c =>
+    c.slug === (Store.data.home && Store.data.home.slug));
   const map = L.map('map', {
-    center: [39.62, 2.65],
+    center: home && home.centre_lat != null ? [home.centre_lat, home.centre_lng] : [39.62, 2.65],
     zoom: 10,
     zoomControl: true,
     attributionControl: true
@@ -2261,29 +2323,182 @@ function initMap() {
     pane: 'shadowPane'
   }).addTo(map);
 
-  // Cluster groups (simulated — single markers, with one cluster bubble)
-  EVENTS.forEach(e => {
-    const m = L.marker([e.lat, e.lng], {
-      icon: L.divIcon({
-        className: '',
-        html: '<div class="map-marker map-marker--single"></div>',
-        iconSize: [14, 14]
-      })
-    }).addTo(map);
-    m.on('click', () => openDetail(e.id));
-  });
-
-  // Simulated cluster
-  L.marker([39.58, 2.65], {
-    icon: L.divIcon({
-      className: '',
-      html: '<div class="map-marker">7</div>',
-      iconSize: [32, 32]
-    })
-  }).addTo(map);
-
   window._mapReady = true;
   window._map = map;
+  paintMap();
+}
+
+/* ── the map's date filter ─────────────────────────────────────────
+   The four chips existed in the markup and did nothing except swap a
+   CSS class. Nothing read data-filter, so "today" and "next week"
+   showed the same pins. */
+let mapFilter = 'any';
+let mapCategory = 'all';
+
+function filterRange(name){
+  const now = new Date();
+  const midnight = d => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+  const start = midnight(now);
+
+  if (name === 'today'){
+    /* From midnight, not from now. A club night that started an hour
+       ago is the single most relevant thing on the map, and using now
+       as the lower bound hid exactly those. mappableEvents() drops
+       anything that has actually finished. */
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    return [start, end];
+  }
+  /* Rolling windows, not calendar weeks. A Mon-Sun "this week" is
+     degenerate on a Sunday - it collapses to the same set as "today",
+     so two of the four chips do the same thing on a seventh of all
+     days, and "next week" quietly means tomorrow. Seven days from now
+     is what someone browsing for something to do actually means, and
+     it behaves identically whichever day they open the app. */
+  if (name === 'week'){
+    const end = new Date(start); end.setDate(end.getDate() + 7);
+    return [now, end];
+  }
+  if (name === 'next'){
+    const from = new Date(start); from.setDate(from.getDate() + 7);
+    const to = new Date(from);    to.setDate(to.getDate() + 7);
+    return [from, to];
+  }
+  return [now, null];                     // any day
+}
+
+function mappableEvents(){
+  const [from, to] = filterRange(mapFilter);
+  return EVENTS.filter(e => {
+    /* A pin is required. L.marker([null, null]) throws "Invalid
+       LatLng" and takes the whole map down with it, and plenty of
+       events publish without coordinates. */
+    if (e.lat == null || e.lng == null) return false;
+    const when = e.when instanceof Date ? e.when : new Date(e.when);
+    if (Number.isNaN(when.getTime())) return false;
+    if (to && when >= to) return false;
+
+    /* Still on counts as on. An event with a finish time is live until
+       that finish; without one, give it two hours before it drops off,
+       which covers a class and understates a party in the safe
+       direction. */
+    if (when < from){
+      const ends = e.ends_at ? new Date(e.ends_at) : new Date(when.getTime() + 2 * 3600 * 1000);
+      if (!(ends > new Date())) return false;
+    }
+    if (mapCategory !== 'all' && (e.category || 'other') !== mapCategory) return false;
+    return true;
+  });
+}
+
+/* Re-plots from scratch. Markers used to be added once inside
+   initMap(), so anything loaded after the map tab was first opened
+   never appeared, and anything removed stayed forever. */
+/* What a stacked pin opens. Forty classes at one studio need a list,
+   not a marker that silently picks one. */
+function openPinList(group){
+  const panel = document.getElementById('pinList');
+  const body  = document.getElementById('pinListBody');
+  const head  = document.getElementById('pinListHead');
+  if (!panel) return;
+  const sorted = group.slice().sort((a, b) => new Date(a.when) - new Date(b.when));
+  head.textContent = `${sorted.length} at ${sorted[0].venue || 'this pin'}`;
+  body.innerHTML = sorted.map(e => {
+    const d = new Date(e.when);
+    return `<button type="button" class="pin-row" data-id="${escapeHtml(e.id)}">
+      <span class="pin-row__when">${d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})}
+        ${String(d.getHours()).padStart(2,'0')}.${String(d.getMinutes()).padStart(2,'0')}</span>
+      <span class="pin-row__t">${escapeHtml(e.title)}</span>
+      ${e.category ? `<span class="pin-row__c">${escapeHtml(e.category)}</span>` : ''}
+    </button>`;
+  }).join('');
+  body.onclick = (ev) => {
+    const b = ev.target.closest('[data-id]');
+    if (!b) return;
+    panel.hidden = true;
+    openDetail(b.dataset.id);
+  };
+  panel.hidden = false;
+}
+
+/* Chips are built from the categories actually present, so the bar
+   never offers a filter that would empty the map. */
+function paintCategoryChips(){
+  const bar = document.getElementById('mapCatBar');
+  if (!bar) return;
+  const present = [...new Set(EVENTS
+    .filter(e => e.lat != null && e.lng != null)
+    .map(e => e.category).filter(Boolean))].sort();
+  bar.innerHTML = `<button class="map-chip${mapCategory === 'all' ? ' active' : ''}" data-cat="all">everything</button>`
+    + present.map(c =>
+        `<button class="map-chip${mapCategory === c ? ' active' : ''}" data-cat="${escapeHtml(c)}">${escapeHtml(c)}</button>`
+      ).join('');
+  bar.hidden = present.length < 2;   // one category is not a choice
+}
+
+function paintMap(){
+  paintCategoryChips();
+  const map = window._map;
+  if (!map) return;
+
+  (window._mapMarkers || []).forEach(m => map.removeLayer(m));
+  window._mapMarkers = [];
+
+  const rows = mappableEvents();
+
+  /* Group by pin before plotting. A venue that uploads a week of
+     classes produces forty events at ONE set of coordinates: forty
+     markers stacked pixel on pixel, looking like one, and a tap
+     opening whichever happened to be added last. Now one marker per
+     place, carrying its count. */
+  const byPin = new Map();
+  rows.forEach(e => {
+    const key = e.lat.toFixed(5) + ',' + e.lng.toFixed(5);
+    if (!byPin.has(key)) byPin.set(key, []);
+    byPin.get(key).push(e);
+  });
+
+  byPin.forEach(group => {
+    const first = group[0];
+    const n = group.length;
+    const m = L.marker([first.lat, first.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: n > 1
+          ? `<div class="map-marker">${n > 99 ? '99+' : n}</div>`
+          : '<div class="map-marker map-marker--single"></div>',
+        iconSize: n > 1 ? [32, 32] : [14, 14]
+      })
+    }).addTo(map);
+    m.on('click', () => n === 1 ? openDetail(first.id) : openPinList(group));
+    window._mapMarkers.push(m);
+  });
+
+  const count = document.querySelector('.map-footer-sheet__count');
+  if (count){
+    const pinless = EVENTS.length - EVENTS.filter(e => e.lat != null && e.lng != null).length;
+    count.innerHTML = `<span class="num">${rows.length}</span> `
+      + (rows.length === 1 ? 'event' : 'events')
+      + (byPin.size && byPin.size !== rows.length ? ` at ${byPin.size} place${byPin.size === 1 ? '' : 's'}` : '')
+      + (mapFilter === 'any' ? '' : ' ' + document.querySelector('.map-chip.active').textContent.trim())
+      + (mapCategory !== 'all' ? ' · ' + mapCategory : '')
+      + (pinless ? ` · ${pinless} without a pin` : '');
+  }
+
+  /* Frame what there is rather than sitting on a hardcoded centre.
+     maxZoom stops a single event filling the screen with one street. */
+  /* Only reframe when the set of pins actually changed. Refitting on
+     every repaint yanked the map back from wherever the person had
+     panned to, every time the feed refreshed. */
+  const shape = [...byPin.keys()].sort().join('|');
+  const moved = shape !== window._mapShape;
+  window._mapShape = shape;
+  if (rows.length && moved){
+    map.fitBounds(rows.map(e => [e.lat, e.lng]), { padding: [40, 40], maxZoom: 14 });
+  } else {
+    const home = (KNOWN_COMMUNITIES || []).find(c =>
+      c.slug === (Store.data.home && Store.data.home.slug));
+    if (home && home.centre_lat != null) map.setView([home.centre_lat, home.centre_lng], 10);
+  }
 }
 
 /* ─── CREATE EVENT MODAL ─── */
@@ -2725,7 +2940,7 @@ async function myEvents(){
   catch(err){ console.warn('[bich] my_events failed', err.message); return []; }
 }
 
-const BULK_MAX = 20;
+const BULK_MAX = 50;
 
 /* Creates every event on a listings photo, in order, sharing one
    cover. Deliberately sequential: twenty parallel inserts would race
@@ -2757,6 +2972,8 @@ async function bulkCreate(rows, rq){
         description: r.description,
         lineup: r.lineup,
         venueName: r.space_name,
+        venueAddress: r.venue_address,
+        category: r.category,
         lat: r.venue_latitude === '' ? null : r.venue_latitude,
         lng: r.venue_longitude === '' ? null : r.venue_longitude,
         venueSource: r.venue_latitude !== '' ? 'printed_coordinates'
@@ -2765,7 +2982,7 @@ async function bulkCreate(rows, rq){
         city: r.city, community: r.community,
         photoLat: sourceExif && sourceExif.lat, photoLng: sourceExif && sourceExif.lng,
         date: r.date, timeStart: r.time_start, timeFinish: r.time_finish,
-        price: r.price, currency: r.currency,
+        price: r.price, currency: r.currency, category: r.category,
         recurrence: r.recurrence, contact: r.contact,
         coverUrl: img ? img.url : null,
         source: 'photo'
@@ -2848,6 +3065,8 @@ async function saveEvent(spec){
     description: withLineup(spec.description, renderLineup(spec.lineup)) || null,
     venue_id: venueId,
     venue_name: spec.venueName || null,
+    venue_address: spec.venueAddress || null,
+    category: spec.category || null,
     venue_lat: spec.lat ?? null,
     venue_lng: spec.lng ?? null,
     venue_source: spec.venueSource || 'manual',
@@ -2865,6 +3084,7 @@ async function saveEvent(spec){
     cover_url: spec.coverUrl || null,
     status: 'live',
     source: spec.source || 'manual',
+    category: spec.category || null,
     edit_token_hash: hash
   });
 
@@ -2983,6 +3203,9 @@ function rowToEvent(r){
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
     communitySlug: r.community_slug || null,
+    category: r.category || null,
+    category: r.category || null,
+    venueAddress: r.venue_address || null,
     distanceKm: r.distance_km == null ? null : Math.round(r.distance_km),
     host: '',
     /* Everything used to land in 'personal', so two of the three
@@ -3290,6 +3513,7 @@ async function loadFeed(){
       EVENTS.length = 0;
       rows.forEach(r => EVENTS.push(rowToEvent(r)));
       renderBundles();
+      if (window._mapReady) paintMap();
       const where = (anchor.name || anchor.slug).toLowerCase();
       setFeedStatus(
         !rows.length ? `nothing near ${where} yet` :
@@ -3328,6 +3552,7 @@ async function loadFeed(){
     EVENTS.length = 0;
     (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
+    if (window._mapReady) paintMap();
     setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
     return true;
   } catch(err2){
@@ -4000,7 +4225,11 @@ function normalizeRows(rows, exif, today){
       contact:     clean(r.contact),
       google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
       description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
-      location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none')
+      location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none'),
+      category:      clean(r.category),
+      venue_address: clean(r.venue_address),
+      venue_match:   clean(r.venue_match),
+      lineup:        Array.isArray(r.lineup) ? r.lineup : null
     };
   }).filter(r => r.event_name);
 }
@@ -4099,11 +4328,14 @@ function fillForm(row){
   /* Both columns exist in events and the model already extracts them;
      they were being parsed and then dropped on the floor. */
   draft.recurrence = row.recurrence || '';
+  draft.category = row.category || '';
+  draft.venueAddress = row.venue_address || '';
   /* The model was given the real venue strings and told to echo one
      back. If it did, we already know which row that is - no fuzzy
      search, no duplicate. */
   if (row.venue_match) linkKnownVenue(row.venue_match);
   draft.contact = row.contact || '';
+  draft.category = row.category || null;
   if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
   draft.city = row.city || '';
   draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
@@ -4298,7 +4530,8 @@ function resetCreateForm(){
   Object.assign(draft, {
     cover:null, crop:null, lat:null, lng:null, city:'', community:'',
     timeFinish:'', mapsLink:'', venueId:null, venueSource:null,
-    lineup:null, recurrence:'', contact:'', currency:'',
+    lineup:null, recurrence:'', contact:'', currency:'', category:null,
+    category:'', venueAddress:'',
     photoLat:null, photoLng:null
   });
   if (sourceBitmap && sourceBitmap.close) sourceBitmap.close();
@@ -4362,6 +4595,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         description: ev.desc,
         lineup: draft.lineup,
         venueName: ev.venue,
+        venueAddress: draft.venueAddress,
+        category: draft.category,
         venueId: draft.venueId,
         lat: draft.lat, lng: draft.lng,
         venueSource: draft.venueSource || (draft.mapsLink ? 'printed_coordinates' : 'manual'),
@@ -4370,7 +4605,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         date, timeStart: time, timeFinish: draft.timeFinish,
         price: ev.price, currency: draft.currency,
         capacity: document.getElementById('inputCapacity').value,
-        recurrence: draft.recurrence, contact: draft.contact,
+        recurrence: draft.recurrence, contact: draft.contact, category: draft.category,
         coverUrl: img ? img.url : null,
         source: draft.cover ? 'photo' : 'manual'
       });
@@ -4467,11 +4702,14 @@ document.getElementById('dismissPasskey')?.addEventListener('click', () => {
   document.getElementById('recoveryPrompt').classList.remove('visible');
 });
 
-/* Filter chips */
+/* Filter chips. They now actually filter. */
 document.querySelectorAll('.map-chip').forEach(chip => {
   chip.addEventListener('click', () => {
     document.querySelectorAll('.map-chip').forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
+    mapFilter = chip.dataset.filter || 'any';
+    window._mapShape = null;        // reframe when the window changes
+    paintMap();
   });
 });
 
@@ -4503,6 +4741,16 @@ document.getElementById('editClose').addEventListener('click', closeEditSheet);
 document.getElementById('editSave').addEventListener('click', saveEdit);
 document.getElementById('editSheet').addEventListener('click', (e) => {
   if (e.target.id === 'editSheet') closeEditSheet();   // tap the scrim
+});
+document.getElementById('mapCatBar').addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-cat]');
+  if (!chip) return;
+  mapCategory = chip.dataset.cat || 'all';
+  window._mapShape = null;          // a filter change should reframe
+  paintMap();
+});
+document.getElementById('pinListClose').addEventListener('click', () => {
+  document.getElementById('pinList').hidden = true;
 });
 document.getElementById('bulkClose').addEventListener('click', () => {
   document.getElementById('bulkResult').hidden = true;

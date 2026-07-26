@@ -25,10 +25,24 @@
    button history: tapping back from an event should leave the app,
    not bounce through a redirect. */
 (function () {
-  var p = location.pathname.replace(/^\/+/, '');
-  var m = p.match(/^e\/([A-Za-z0-9_-]{4,32})$/);
-  var target = m ? ('/?e=' + encodeURIComponent(m[1])) : '/';
-  location.replace(target + location.hash);
+  var p = location.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
+
+  /* Two shapes, both valid:
+       bich.app/a3f9k      the short link we mint now
+       bich.app/e/a3f9k    everything shared before that change
+
+     Anything already out in the world has to keep resolving, so the
+     old namespaced form is matched first and never retired. */
+  var m = p.match(/^e\/([a-z0-9]{4,32})$/i) || p.match(/^([a-z0-9]{4,32})$/i);
+
+  /* A bare code only. Anything with a dot is a real asset that failed
+     to load - config.js, an icon - and redirecting those to the app
+     would turn a missing file into a silent blank screen. */
+  var code = (m && p.indexOf('.') === -1) ? m[1] : null;
+
+  location.replace((code ? '/?e=' + encodeURIComponent(code) : '/') +
+                   location.search.replace(/^\?/, code ? '&' : '?') +
+                   location.hash);
 })();
 </script>
 </body>

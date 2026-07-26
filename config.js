@@ -36,7 +36,7 @@ window.BICH_CONFIG = {
   /* Share links, per spec: bich.app/e/xxxx with a short opaque id, so
      a URL never hints at how many events exist. */
   share: {
-    base: 'https://bich.app/e/'
+    base: 'https://bich.app/'
   },
 
   /* Passkeys bind permanently to this domain. It must be the apex:
