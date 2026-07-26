@@ -191,6 +191,25 @@ body { display: flex; align-items: center; justify-content: center; }
   color: var(--accent); line-height: 1.1;
 }
 .me-note { font-size: 0.72rem; line-height: 1.55; color: var(--muted); margin-top: var(--space-sm); }
+.me-list-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px var(--space-md); border-bottom: 1px solid var(--border-accent);
+  background: var(--accent-dim);
+  font-family: var(--font-mono); font-size: 0.6rem;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.me-list-bar button {
+  background: none; border: 0; color: var(--accent); cursor: pointer;
+  font: inherit; text-transform: uppercase; letter-spacing: 0.06em;
+  min-height: 44px; padding: 0 4px; white-space: nowrap;
+}
+.me-stat {
+  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: 4px; min-height: 44px;
+  font: inherit; color: inherit;
+}
+.me-stat strong { transition: color var(--ease); }
+.me-stat:active strong { color: var(--accent); }
 .me-stats {
   display: flex; gap: var(--space-sm); margin-bottom: var(--space-2xl);
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
@@ -623,6 +642,10 @@ body { display: flex; align-items: center; justify-content: center; }
   border-radius: 2px;
   background: var(--bg-elevated);
   overflow: hidden;
+}
+.detail-nopin {
+  font-family: var(--font-mono); font-size: 0.62rem; color: var(--subtle);
+  border: 1px dashed var(--border); padding: 18px; text-align: center;
 }
 .detail-map__link {
   display: inline-block; margin-top: 8px;
@@ -1389,6 +1412,11 @@ if ('serviceWorker' in navigator) {
 
     </div>
 
+    <div class="me-list-bar" id="meListBar" hidden>
+      <span id="meListBarText"></span>
+      <button type="button" id="meListExit">back to the feed</button>
+    </div>
+
     <!-- Bundle: For you -->
     <div class="bundle-divider" id="dividerPersonal">
       <div class="bundle-divider__line"></div>
@@ -1449,9 +1477,6 @@ if ('serviceWorker' in navigator) {
 
   <!-- ME -->
   <main class="screen" id="screen-me" style="display:none;">
-    <div class="app-header">
-      <div class="brand">bich<small>· service ·</small></div>
-    </div>
     <div class="me-body">
       <div class="me-block">
         <span class="text-label">you are</span>
@@ -1460,9 +1485,12 @@ if ('serviceWorker' in navigator) {
       </div>
 
       <div class="me-stats">
-        <div><strong id="meGoing">0</strong><span class="text-label">going</span></div>
-        <div><strong id="meAttended">0</strong><span class="text-label">attended</span></div>
-        <div><strong id="meHosting">0</strong><span class="text-label">hosting</span></div>
+        <button type="button" class="me-stat" data-list="going">
+          <strong id="meGoing">0</strong><span class="text-label">going</span></button>
+        <button type="button" class="me-stat" data-list="attended">
+          <strong id="meAttended">0</strong><span class="text-label">attended</span></button>
+        <button type="button" class="me-stat" data-list="hosting">
+          <strong id="meHosting">0</strong><span class="text-label">hosting</span></button>
       </div>
 
       <div class="me-block">
@@ -1701,6 +1729,7 @@ if ('serviceWorker' in navigator) {
     <div class="detail-map-block" id="detailMapBlock" hidden>
       <div class="text-label" style="margin-bottom: 8px;">getting there</div>
       <div class="detail-map" id="detailMap"></div>
+      <p class="detail-nopin" id="detailNoPin" hidden></p>
       <a class="detail-map__link" id="detailMapLink" target="_blank" rel="noopener">open in maps</a>
     </div>
 
@@ -1715,6 +1744,12 @@ if ('serviceWorker' in navigator) {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
         <circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/>
         <path d="m8.5 10.5 7-3M8.5 13.5l7 3"/>
+      </svg>
+    </button>
+    <button class="btn btn--share" id="copyLinkBtn" title="copy link" aria-label="copy link">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
+        <rect x="9" y="9" width="11" height="11" rx="2"/>
+        <path d="M5 15V5a2 2 0 0 1 2-2h10"/>
       </svg>
     </button>
   </div>
@@ -2042,8 +2077,23 @@ function paintDetail(e){
 
   const block = document.getElementById('detailMapBlock');
   const hasPin = e.lat != null && e.lng != null;
-  block.hidden = !hasPin;
-  if (!hasPin) return;
+  const mapEl = document.getElementById('detailMap');
+  const linkEl = document.getElementById('detailMapLink');
+  const noPin = document.getElementById('detailNoPin');
+
+  /* The block used to disappear entirely without coordinates, so an
+     event created without a pin looked like a page missing a section.
+     Say what is actually true instead. */
+  block.hidden = false;
+  mapEl.hidden = !hasPin;
+  linkEl.hidden = !hasPin;
+  noPin.hidden = hasPin;
+  if (!hasPin){
+    noPin.textContent = iOwn(e.id)
+      ? 'no pin on this one yet. tap edit to place it.'
+      : 'the host has not placed this on the map yet.';
+    return;
+  }
 
   const link = document.getElementById('detailMapLink');
   link.href = `https://www.google.com/maps/search/?api=1&query=${e.lat},${e.lng}`;
@@ -2151,7 +2201,13 @@ function openDetail(id) {
   document.getElementById('detailTitle').textContent = e.title;
   document.getElementById('detailDesc').textContent = e.desc;
   document.getElementById('detailWhen').textContent = e.when;
-  document.getElementById('detailHost').textContent = e.host;
+  /* events_public exposes no host handle, so e.host is always ''. Show
+     our own handle on our own events and hide the block otherwise,
+     rather than printing a label over empty space. */
+  const hostName = iOwn(e.id) ? (currentHandle || 'you') : (e.host || '');
+  document.getElementById('detailHost').textContent = hostName;
+  const hostBlock = document.getElementById('detailHostBlock');
+  if (hostBlock) hostBlock.hidden = !hostName;
   paintDetail(e);
   if (e.crossed >= 3) {
     document.getElementById('detailCircle').style.display = '';
@@ -2194,6 +2250,27 @@ document.getElementById('closeDetail').addEventListener('click', () => {
   document.getElementById('detailScreen').classList.remove('visible');
 });
 
+/* shareEvent() has existed since the beginning and nothing ever
+   called it, so the button was decorative. */
+document.querySelector('.detail-actions').addEventListener('click', async (e) => {
+  /* Delegated because both buttons wrap an <svg>: a tap frequently
+     lands on a <path>, and a handler bound to the button still fires,
+     but only if the listener is on an ancestor when the icon is
+     replaced. Cheap insurance either way. */
+  const btn = e.target.closest('#shareBtn, #copyLinkBtn');
+  if (!btn) return;
+  const ev = EVENTS.find(x => x.id === window._openEventId);
+  if (!ev) return;
+  if (btn.id === 'shareBtn') return shareEvent(ev);
+  const url = shareUrl(ev);
+  toast(await copyLink(url) ? 'link copied' : url);
+});
+
+/* Share and copy are different intentions. On a phone the share sheet
+   is what people want; when they ask to copy a link they mean the
+   clipboard, and being handed a share sheet instead is the bug. */
+
+
 document.getElementById('attendBtn').addEventListener('click', async () => {
   const id = window._openEventId;
   if (!id) return;
@@ -2207,7 +2284,8 @@ document.getElementById('attendBtn').addEventListener('click', async () => {
   const ev = EVENTS.find(x => x.id === id);
   if (ev) {
     ev.going = Math.max(0, (ev.going || 0) + (nowGoing ? 1 : -1));
-    document.getElementById('detailGoing').textContent = `${ev.going} people`;
+    document.getElementById('detailGoing').textContent =
+      `${ev.going} ${ev.going === 1 ? 'person' : 'people'}`;
     renderBundles();
   }
 
@@ -2222,24 +2300,71 @@ document.getElementById('attendBtn').addEventListener('click', async () => {
           status: nowGoing ? 'going' : 'cancelled'
         });
       }
-    } catch (_) { /* stays queued in the local store */ }
+    } catch (err) {
+      /* This used to swallow everything, so a device whose user row
+         had gone would silently never record a single going. */
+      console.error('[bich] attendance not saved', err);
+      toast(explainWriteError(err));
+    }
+  } else if (SB_READY() && ev && !ev.uuid) {
+    console.warn('[bich] no uuid on this event, attendance stays local only');
   }
+  queuePendingAttendance(id, nowGoing);
 });
+
+/* syncAttendance only ever pushed 'going', because setGoing(id,false)
+   deletes the key - so a cancellation that failed to reach the server
+   was lost for good and that person stayed counted forever. Keep an
+   explicit queue of BOTH directions instead. */
+function queuePendingAttendance(shortId, going){
+  const q = Object.assign({}, Store.data.pendingAttend || {});
+  q[shortId] = { going, at: new Date().toISOString() };
+  Store.set({ pendingAttend: q });
+}
+function clearPendingAttendance(shortId){
+  const q = Object.assign({}, Store.data.pendingAttend || {});
+  delete q[shortId];
+  Store.set({ pendingAttend: q });
+}
 
 /* Push anything the local store knows that the database might not.
    Runs on launch, costs nothing when everything already agrees. */
 async function syncAttendance(){
   if (!SB_READY() || !CURRENT_USER.id) return;
-  const ids = Object.keys(Store.data.going);
+
+  const pending = Store.data.pendingAttend || {};
+  const ids = Object.keys(pending);
+  if (!ids.length) return;
+
+  let sent = 0, stuck = 0;
   for (const shortId of ids) {
-    const ev = EVENTS.find(x => x.id === shortId);
-    if (!ev || !ev.uuid) continue;
+    let ev = EVENTS.find(x => x.id === shortId);
+
+    /* The event may not be in the current feed - it can be in another
+       community, or already past. Look it up rather than dropping the
+       change on the floor, which is what silently lost cancellations. */
+    if (!ev || !ev.uuid) {
+      try {
+        const rows = await sbGet(
+          `events_public?select=id,short_id&short_id=eq.${encodeURIComponent(shortId)}&limit=1`);
+        if (rows && rows[0]) ev = { id: rows[0].short_id, uuid: rows[0].id };
+      } catch(_){}
+    }
+    if (!ev || !ev.uuid){ stuck++; continue; }
+
     try {
       await sbUpsert('attendances', {
-        event_id: ev.uuid, user_id: CURRENT_USER.id, status: 'going'
+        event_id: ev.uuid, user_id: CURRENT_USER.id,
+        status: pending[shortId].going ? 'going' : 'cancelled'
       });
-    } catch (_) {}
+      clearPendingAttendance(shortId);
+      sent++;
+    } catch (err) {
+      console.warn('[bich] could not sync attendance for', shortId, err.message);
+      stuck++;
+    }
   }
+  if (sent || stuck) console.info(`[bich] attendance sync: ${sent} sent, ${stuck} still queued`);
 }
 
 async function sbUpsert(table, row){
@@ -2272,6 +2397,12 @@ document.querySelectorAll('.tab').forEach(tab => {
     Object.entries(screens).forEach(([k, id]) => {
       document.getElementById(id).style.display = k === target ? '' : 'none';
     });
+    /* The header chip and the me screen both show the handle, so on
+       that one screen it appears twice, six centimetres apart. The me
+       screen states it properly; the chip is the redundant one. */
+    const chip = document.getElementById('handleChip');
+    if (chip) chip.hidden = (target === 'me' || target === 'profile');
+
     if (target === 'map' && !window._mapReady) initMap();
     // Hide FAB on map view (already crowded)
     document.getElementById('fabCreate').style.display = target === 'home' ? '' : 'none';
@@ -2308,10 +2439,13 @@ function initMap() {
      during the first paint. */
   const home = (KNOWN_COMMUNITIES || []).find(c =>
     c.slug === (Store.data.home && Store.data.home.slug));
+  /* Leaflet's +/- overlaps the first filter chip on a narrow screen,
+     and pinch already does the job on touch. Keep it for a mouse. */
+  const wantsZoomControl = !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches);
   const map = L.map('map', {
     center: home && home.centre_lat != null ? [home.centre_lat, home.centre_lng] : [39.62, 2.65],
     zoom: 10,
-    zoomControl: true,
+    zoomControl: wantsZoomControl,
     attributionControl: true
   });
 
@@ -2618,6 +2752,7 @@ const Store = {
     hosting: [],        // shortIds this device published
     theme: null,
     invite: '',
+    pendingAttend: {},  // { shortId: {going, at} } — both directions
     home: null,         // { slug } — which community the feed centres on
     tokens: {}          // { shortId: editToken } — proof we made it
   },
@@ -3621,6 +3756,66 @@ function initThemes(){
 /* The me screen is the only place identity and settings live. It is
    read only by design: no avatar, no bio, no display name separate
    from the handle (open question Q2's anti-features). */
+/* Tapping a counter on the me screen opens the home feed narrowed to
+   that set. Reuses renderEventCard and the same three containers, so
+   there is one card design and one click path, not two.
+
+   Past events are included on purpose: "attended" is entirely history,
+   and a host wants to find last month's event to copy or correct it.
+   The normal feed hides the past; these lists are the exception. */
+let meListMode = null;
+
+async function openMeList(kind){
+  const wanted =
+    kind === 'going'    ? Object.keys(Store.data.going || {}) :
+    kind === 'attended' ? Object.keys(Store.data.attended || {}) :
+                          (Store.data.hosting || []);
+  if (!wanted.length){ toast(`nothing ${kind} yet`); return; }
+
+  meListMode = kind;
+  document.querySelector('.tab[data-screen="home"]').click();
+  setFeedStatus(`your ${kind} · ${wanted.length}`, false);
+  document.getElementById('meListBar').hidden = false;
+  document.getElementById('meListBarText').textContent =
+    `showing what you are ${kind}, past included`;
+
+  /* Anything already loaded, plus whatever the feed does not carry -
+     past events, other communities. events_public has no time filter
+     of its own, so one query by id covers both. */
+  const have = new Map(EVENTS.filter(e => wanted.includes(e.id)).map(e => [e.id, e]));
+  const missing = wanted.filter(id => !have.has(id));
+  if (missing.length && SB_READY()){
+    try {
+      const list = missing.map(encodeURIComponent).join(',');
+      const rows = await sbGet(`events_public?select=*&short_id=in.(${list})`);
+      (rows || []).forEach(r => have.set(r.short_id, rowToEvent(r)));
+    } catch(err){ console.warn('[bich] could not load your list', err.message); }
+  }
+
+  const rows = [...have.values()].sort((a, b) => new Date(b.when) - new Date(a.when));
+  EVENTS.length = 0;
+  rows.forEach(e => EVENTS.push(Object.assign(e, { bundle: 'personal' })));
+  renderBundles();
+
+  /* Opening any card from the hosting list lands on the detail screen,
+     where the edit and cancel buttons already appear for anything this
+     device holds a token for. Nothing extra to build - but say so,
+     because an edit button that only exists one screen deeper is an
+     edit button nobody finds. */
+  if (kind === 'hosting'){
+    document.getElementById('meListBarText').textContent =
+      'events you published, past included · open one to edit';
+  }
+}
+
+function exitMeList(){
+  if (!meListMode) return;
+  meListMode = null;
+  document.getElementById('meListBar').hidden = true;
+  setFeedStatus('');
+  loadFeed();
+}
+
 async function renderMe(){
   document.getElementById('meHandle').textContent = currentHandle;
   document.getElementById('meGoing').textContent    = Object.keys(Store.data.going).length;
@@ -3639,14 +3834,59 @@ async function renderMe(){
    the address bar back to the pretty form, and open the event. */
 function shareUrl(ev){ return SHARE_BASE + (ev.id || ev.short_id || ''); }
 
+/* Put the link on the clipboard, whatever the browser supports.
+   navigator.clipboard needs a secure context AND a live user gesture;
+   inside a standalone PWA it is sometimes simply absent. The
+   execCommand path is deprecated everywhere and still the only thing
+   that works in those cases. Returns whether it actually landed, so
+   the caller never claims success it did not have. */
+async function copyLink(url){
+  try {
+    if (navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(url);
+      return true;
+    }
+  } catch(err){ console.warn('[bich] clipboard API refused:', err.message); }
+
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.setAttribute('readonly', '');
+    // Off screen but still rendered - a display:none field cannot be selected.
+    ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, url.length);      // iOS ignores select() alone
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) return true;
+  } catch(err){ console.warn('[bich] execCommand copy failed:', err.message); }
+
+  return false;
+}
+
 async function shareEvent(ev){
   const url = shareUrl(ev);
-  const text = `${ev.title.toLowerCase()} · ${ev.when}`;
+  const when = ev.when instanceof Date ? ev.when : new Date(ev.when);
+  const text = `${String(ev.title || '').toLowerCase()} · ${
+    when.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' })}`;
+
   if (navigator.share){
-    try { await navigator.share({ title: ev.title, text, url }); return; } catch(_){ return; }
+    try {
+      await navigator.share({ title: ev.title, text, url });
+      return;
+    } catch(err){
+      /* AbortError means they closed the sheet - that is a choice, not
+         a failure, so do nothing. Anything else means the sheet never
+         worked, and the old code returned silently on both, which is
+         why the button looked dead. */
+      if (err && err.name === 'AbortError') return;
+      console.warn('[bich] share sheet failed, copying instead:', err && err.message);
+    }
   }
-  try { await navigator.clipboard.writeText(url); toast('link copied'); }
-  catch(_){ prompt('copy this link', url); }
+
+  toast(await copyLink(url) ? 'link copied' : 'could not copy — long press the link');
+  if (!(await copyLink(url))) prompt('copy this link', url);
 }
 
 function toast(msg){
@@ -4718,16 +4958,23 @@ document.getElementById('dismissPasskey')?.addEventListener('click', () => {
   document.getElementById('recoveryPrompt').classList.remove('visible');
 });
 
-/* Filter chips. They now actually filter. */
-document.querySelectorAll('.map-chip').forEach(chip => {
-  chip.addEventListener('click', () => {
-    document.querySelectorAll('.map-chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
+/* Both bars use the same .map-chip class, so a global querySelectorAll
+   bound the date handler to the CATEGORY chips too: tapping "wellness"
+   also set mapFilter back to 'any' and stripped the active state off
+   the date row. And chips rebuilt by paintCategoryChips() lost their
+   listeners entirely, because innerHTML replaces the nodes.
+
+   Delegated, and scoped to the date bar only. */
+document.querySelector('.map-filter-bar:not(.map-filter-bar--cat)')
+  .addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-filter]');
+    if (!chip) return;
+    chip.parentElement.querySelectorAll('.map-chip')
+      .forEach(c => c.classList.toggle('active', c === chip));
     mapFilter = chip.dataset.filter || 'any';
-    window._mapShape = null;        // reframe when the window changes
+    window._mapShape = null;        // a window change should reframe
     paintMap();
   });
-});
 
 /* ─── INIT ─── */
 renderBundles();
@@ -4758,6 +5005,22 @@ document.getElementById('editSave').addEventListener('click', saveEdit);
 document.getElementById('editSheet').addEventListener('click', (e) => {
   if (e.target.id === 'editSheet') closeEditSheet();   // tap the scrim
 });
+document.querySelector('.me-stats').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-list]');
+  if (b) openMeList(b.dataset.list);
+});
+document.getElementById('meListExit').addEventListener('click', exitMeList);
+
+/* Leaving the home tab drops the filter, or the next visit shows a
+   stale personal list pretending to be the feed. */
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  if (t.dataset.screen !== 'home' && meListMode) {
+    meListMode = null;
+    document.getElementById('meListBar').hidden = true;
+    setFeedStatus('');
+  }
+}));
+
 document.getElementById('mapCatBar').addEventListener('click', (e) => {
   const chip = e.target.closest('[data-cat]');
   if (!chip) return;
