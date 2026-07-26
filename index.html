@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-23-01" />
+  <meta name="app-version" content="2026-07-26-01" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -55,6 +55,14 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The UA rule for the hidden attribute is `[hidden] { display: none }`,
+   an attribute selector - so ANY class rule that sets display beats it.
+   .edit-sheet and .detail-owner both set display:flex, which meant
+   hidden did nothing: the edit sheet sat over the home screen at
+   z-index 1600, and the owner controls showed on every event.
+   One line stops the whole class of bug recurring. */
+[hidden] { display: none !important; }
 
 html, body {
   height: 100%;
@@ -2688,6 +2696,14 @@ const SUPABASE_URL      = (_CFG.supabase && _CFG.supabase.url)     || '';
 const SUPABASE_ANON_KEY = (_CFG.supabase && _CFG.supabase.anonKey) || '';
 const WORKER_URL        = (_CFG.worker   && _CFG.worker.url)       || 'https://api.bich.app';
 const APP_VERSION       = _CFG.version || 'dev';
+
+/* Which build is this phone actually running? Three files carry a
+   version and they drift, so print all three at boot. If they differ,
+   the service worker is serving something stale and bumping
+   CACHE_VERSION in sw.js is the fix. */
+console.info('[bich] build',
+  (document.querySelector('meta[name=app-version]') || {}).content,
+  '· config', APP_VERSION);
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error('[bich] no Supabase config. /config.js did not load, or ' +

@@ -16,7 +16,7 @@
    Bump CACHE_VERSION on every release. That is the whole ritual.
    ══════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = '2026-07-24-01';
+const CACHE_VERSION = '2026-07-26-01';
 const CACHE = `bich-${CACHE_VERSION}`;
 
 self.addEventListener('install', (e) => {
@@ -51,13 +51,24 @@ self.addEventListener('fetch', (e) => {
     e.respondWith((async () => {
       try {
         const fresh = await fetch(req, { cache: 'no-store' });
-        const cache = await caches.open(CACHE);
-        cache.put(req, fresh.clone());
+        // Only cache a good response. Without this a 404 or a 502 from
+        // Pages becomes the offline copy of your app.
+        if (fresh && fresh.ok) {
+          const cache = await caches.open(CACHE);
+          cache.put(req, fresh.clone());
+        }
         return fresh;
       } catch (_) {
-        const hit = await caches.match(req);
-        return hit || caches.match('/index.html') ||
-               new Response('offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
+        /* caches.match() returns a PROMISE, which is always truthy, so
+           the offline Response below was dead code and this expression
+           could resolve to undefined - respondWith(undefined) rejects
+           and the browser shows its own network error instead. Await
+           each candidate. Also '/' is the cache key for a navigation,
+           not '/index.html'. */
+        return (await caches.match(req))
+            || (await caches.match('/'))
+            || (await caches.match('/index.html'))
+            || new Response('offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
       }
     })());
     return;
@@ -68,10 +79,12 @@ self.addEventListener('fetch', (e) => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(req);
     const net = fetch(req).then(res => {
-      if (res && res.status === 200) cache.put(req, res.clone());
+      if (res && res.ok) cache.put(req, res.clone());
       return res;
     }).catch(() => null);
-    return hit || net || new Response('', { status: 504 });
+    // same trap: `net` is a promise and always truthy, so the 504 never
+    // fired and a failed fetch handed respondWith a null.
+    return hit || (await net) || new Response('', { status: 504 });
   })());
 });
 
