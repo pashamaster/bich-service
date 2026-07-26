@@ -31,7 +31,7 @@ const EVENT_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        propertyOrdering: ['event_name','space_name','venue_match','lineup','duration_source','venue_latitude','venue_longitude',
+        propertyOrdering: ['event_name','space_name','venue_match','category','venue_address','lineup','duration_source','venue_latitude','venue_longitude',
           'date_literal','weekday_literal','year_literal','time_start','time_finish',
           'recurrence','city','community','description','price','currency','contact','location_source'],
         required: ['event_name'],
@@ -46,6 +46,8 @@ const EVENT_SCHEMA = {
                                stage:{ type:'string', nullable:true, description:'room or stage if the flyer names more than one' }
                              }, required:['act'] } },
           duration_source: { type:'string', nullable:true, description:'"stated" when the finish time is printed, "inferred" when you derived it from the activity type. Null when there is no finish time.' },
+          category:        { type:'string', nullable:true, description:'exactly one of: music, wellness, food, market, sport, art, talk, film, social, workshop, nightlife, other. Yoga, breathwork and meditation are wellness. A dj night is nightlife. A gig is music. Null only if genuinely unclear.' },
+          venue_address:   { type:'string', nullable:true, description:'street address as printed, without the venue name. Null if no address is printed.' },
           venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed. Do not convert.' },
@@ -420,7 +422,37 @@ September", or a calendar grid, mean SEVERAL events. One record per date.
 If it is genuinely ambiguous, return ONE event with a lineup. Merging can be
 undone later; splitting cannot.
 
-Never return more than 20 events. If the photo lists more, return the 20
+DATE RANGES AND WEEKDAY COLUMNS. This is the case most often got wrong.
+
+A timetable usually carries a date range in its header, like "29.12 - 04.01",
+with columns labelled only MONDAY, TUESDAY and so on. Those columns are
+SPECIFIC DATES inside that range. They are not a repeating weekly pattern.
+Work out each weekday's actual date within the range and use it. Leave
+recurrence null.
+
+The range may cross a year boundary. "29.12 - 04.01" beginning in December
+means the December dates are one year and the January dates are the NEXT.
+Use the EXIF capture date, or today's date, to decide which year the range
+starts in, then let the rollover follow.
+
+CROSS CHECK THE WEEKDAYS, because they pin the year on their own. The first
+day of the printed range must fall on the weekday of the first column. For
+"29.12 - 04.01" over MONDAY to SUNDAY, 29 December has to be a Monday, and
+that is true in 2025 but not in 2024 or 2026. If the year you chose does not
+line up, you chose wrong: try the adjacent years until the weekdays match. If
+none match, the range and the columns disagree - use the range, and say so in
+location_note.
+
+Set recurrence ONLY when the flyer itself says the schedule repeats: "every
+week", "weekly", "every monday", "ongoing". A date range in the header is
+the opposite of a recurrence - it is a statement that this schedule applies
+to these dates and no others.
+
+If a grid has neither a date range nor an explicit recurrence, treat each
+weekday as the next upcoming occurrence of that weekday and say so in
+read_quality.unreadable.
+
+Never return more than 50 events. If the photo lists more, return the 50
 soonest and say so in read_quality.unreadable.
 
 DURATION. When a finish time is printed, use it and set duration_source
