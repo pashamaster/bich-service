@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-02" />
+  <meta name="app-version" content="2026-07-26-03" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2438,11 +2438,7 @@ async function syncAttendance(){
 async function sbUpsert(table, row){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
-    headers: {
-      apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
-      'Content-Type': 'application/json',
-      Prefer: 'resolution=merge-duplicates,return=minimal'
-    },
+    headers: sbAuthHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
     body: JSON.stringify(row)
   });
   if (!r.ok){
@@ -2929,11 +2925,30 @@ const RP_NAME = (_CFG.passkey && _CFG.passkey.rpName) || 'bich.service';
 
 const SB_READY = () => Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+/* ── who this request claims to be ─────────────────────────────────
+   Every call below used to send the anon key as the bearer token,
+   which is how the whole app has been anonymous: to Postgres, every
+   device looks like the same nameless caller and auth.uid() is null.
+
+   SESSION_JWT is where a real identity lands once a device proves one
+   — today nothing sets it, so behaviour is unchanged. When it is set,
+   Postgres sees auth.uid() and row level security can say "the host
+   may edit this" instead of "whoever holds the secret may edit this".
+   One place to change, so the helpers below never drift apart. */
+let SESSION_JWT = null;
+
+function sbAuthHeaders(extra){
+  return Object.assign({
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: 'Bearer ' + (SESSION_JWT || SUPABASE_ANON_KEY)
+  }, extra || {});
+}
+
 /* Plain REST, no library. PostgREST is just HTTP and the supabase-js
    bundle would be the heaviest thing on the page. */
 async function sbGet(path){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY }
+    headers: sbAuthHeaders()
   });
   if (!r.ok) throw new Error('read failed ' + r.status);
   return r.json();
@@ -2941,8 +2956,7 @@ async function sbGet(path){
 async function sbRpc(fn, args){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
     method: 'POST',
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
-               'Content-Type': 'application/json' },
+    headers: sbAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(args || {})
   });
   if (!r.ok){
@@ -3041,10 +3055,7 @@ function iOwn(shortId){ return Boolean(tokenFor(shortId)); }
 async function sbInsert(table, row){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
-    headers: {
-      apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
-      'Content-Type': 'application/json', Prefer: 'return=representation'
-    },
+    headers: sbAuthHeaders({ 'Content-Type': 'application/json', Prefer: 'return=representation' }),
     body: JSON.stringify(row)
   });
   const body = await r.json().catch(() => null);
