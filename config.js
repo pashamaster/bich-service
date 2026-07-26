@@ -47,6 +47,15 @@ window.BICH_CONFIG = {
     rpName: 'bich.service'
   },
 
+  /* Core vs magic. Core never calls a model: with this false the
+     magic button does not render and no photo is ever sent anywhere
+     but R2. This is the convenience switch, NOT the protection — the
+     worker's own MAGIC_ENABLED is what actually refuses the request,
+     because anything in this file is editable by anyone reading it. */
+  magic: {
+    enabled: false
+  },
+
   /* Alpha gate for the photo feature. An invite code is an opaque
      string mapping to a quota bucket, not a person, so the zero PII
      model holds. Blank means no gate on the client side; the worker
@@ -55,7 +64,7 @@ window.BICH_CONFIG = {
 
   /* Bump on every release. Shown in the me screen so you can tell at
      a glance which build a phone is actually running. */
-  version: '2026-07-26-03'
+  version: '2026-07-26-04'
 };
 
 /* ──────────────────────────────────────────────────────────────────

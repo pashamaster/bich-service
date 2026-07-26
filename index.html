@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-03" />
+  <meta name="app-version" content="2026-07-26-04" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -680,13 +680,34 @@ body { display: flex; align-items: center; justify-content: center; }
   border-bottom: 1px solid var(--border-accent); padding-bottom: 2px;
 }
 /* owner controls, the edit sheet and the bulk result list */
-.read-toggle {
-  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+/* The magic button. Off is the resting state and looks like any other
+   quiet control; armed is unmistakable, because from that point a
+   photo becomes published events with no further confirmation. */
+.magic-btn {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  width: 100%; margin-top: 10px; padding: 12px 14px;
+  min-height: 48px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono); font-size: 0.62rem;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-  cursor: pointer; min-height: 44px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); cursor: pointer; text-align: left;
+  transition: border-color var(--ease), background var(--ease), color var(--ease);
 }
-.read-toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+.magic-btn__spark { font-size: 0.9rem; line-height: 1; opacity: 0.5; }
+.magic-btn__label { font-weight: 500; }
+.magic-btn__hint {
+  flex-basis: 100%; text-transform: none; letter-spacing: 0.02em;
+  font-size: 0.58rem; color: var(--subtle);
+}
+.magic-btn[aria-pressed="true"] {
+  background: var(--accent-dim);
+  border-color: var(--border-accent);
+  color: var(--accent);
+}
+.magic-btn[aria-pressed="true"] .magic-btn__spark { opacity: 1; }
+.magic-btn[aria-pressed="true"] .magic-btn__hint { color: var(--accent); }
 
 .detail-owner { display: flex; gap: 8px; margin-top: 24px; }
 .detail-owner__btn {
@@ -1597,10 +1618,14 @@ if ('serviceWorker' in navigator) {
         <div class="cover-picker__busy" id="coverBusy"><div class="cover-picker__spinner"></div><span>reading your photo</span></div>
       </div>
       <input type="file" id="coverInput" accept="image/*" class="visually-hidden" />
-      <label class="read-toggle">
-        <input type="checkbox" id="readFlyer" checked />
-        <span>read the flyer for me</span>
-      </label>
+      <!-- Off by default, and hidden entirely on a core build. Pressing
+           it is the whole consent step: from that tap onwards the photo
+           goes to the model and whatever it finds is published. -->
+      <button type="button" class="magic-btn" id="magicBtn" hidden aria-pressed="false">
+        <span class="magic-btn__spark" aria-hidden="true">✦</span>
+        <span class="magic-btn__label">magic</span>
+        <span class="magic-btn__hint">read the photo and post what's on it</span>
+      </button>
       <p class="cover-notice" id="coverNotice"></p>
     </div>
 
@@ -4685,6 +4710,37 @@ function fillForm(row){
 
 /* ── cover upload wiring ── */
 const coverPicker = document.getElementById('coverPicker');
+
+/* ── magic: off unless someone deliberately turns it on ────────────
+   Core is the default everywhere. MAGIC_ARMED is per create-sheet, not
+   sticky: the next event starts in core again, because "I want the
+   model to publish for me" is a decision about one photo, not a
+   setting somebody forgets they left on.
+
+   The button only exists at all when config says this build has magic.
+   The real enforcement is in the worker — MAGIC_ENABLED there returns
+   404 for /extract-event — because a switch in the browser is a
+   suggestion and a switch on the server is a wall. */
+let MAGIC_ARMED = false;
+const MAGIC_AVAILABLE = Boolean(_CFG.magic && _CFG.magic.enabled && WORKER_URL);
+
+const magicBtn = document.getElementById('magicBtn');
+if (magicBtn && MAGIC_AVAILABLE) magicBtn.hidden = false;
+
+function setMagic(on){
+  MAGIC_ARMED = Boolean(on) && MAGIC_AVAILABLE;
+  if (!magicBtn) return;
+  magicBtn.setAttribute('aria-pressed', MAGIC_ARMED ? 'true' : 'false');
+  magicBtn.querySelector('.magic-btn__hint').textContent = MAGIC_ARMED
+    ? 'armed — the next photo gets read and posted'
+    : "read the photo and post what's on it";
+}
+
+if (magicBtn) magicBtn.addEventListener('click', () => {
+  setMagic(!MAGIC_ARMED);
+  if (MAGIC_ARMED && !coverPicker.classList.contains('has-image')) openPicker();
+});
+
 const coverInput  = document.getElementById('coverInput');
 const coverBusy   = document.getElementById('coverBusy');
 const coverNotice = document.getElementById('coverNotice');
@@ -4737,8 +4793,10 @@ async function readPhoto(crop){
   draft.lineup = null;                // never carry one photo's into the next
   showCover(render(sourceBitmap, crop, COVER_MAX_SIDE, 0.85).dataUrl);
 
-  const readIt = document.getElementById('readFlyer');
-  if (readIt && !readIt.checked){
+  /* Core is the default and does not read anything. No model call, no
+     worker call, no spend — the photo is a cover and that is all. Only
+     an armed magic button gets past here. */
+  if (!MAGIC_ARMED){
     coverNotice.className = 'cover-notice show';
     coverNotice.textContent = 'photo added as the cover. fill in the rest.';
     return;
@@ -4774,37 +4832,15 @@ async function readPhoto(crop){
       return;
     }
 
-    /* Scenario 3. More than one event on the photo means a listings
-       image, and asking someone to publish fifteen events one at a
-       time is not a workflow. Create them. */
-    if (rows.length > 1){
-      coverNotice.className = 'cover-notice show';
-      await bulkCreate(rows, rq);
-      return;
-    }
-
-    draft.lineup = rows[0].lineup || null;
-    fillForm(rows[0]);
+    /* Magic was armed by a deliberate press, and that press IS the
+       approval. Whatever the photo yielded — a single gig or a month's
+       listings — goes straight into the database, up to BULK_MAX. The
+       old code only did this for two or more and dropped a single
+       event into the form to be published by hand, which made the
+       button mean two different things depending on the photo. */
     coverNotice.className = 'cover-notice show';
-
-    // Only ask for a crop when we can name what we missed. An unexplained
-    // "try cropping" is a chore; a named one is a repair the user chooses.
-    const weak = rq.legibility === 'poor' || rq.legibility === 'partial' || rq.crop_would_help;
-    if (weak && !crop){
-      const missed = (rq.unreadable && rq.unreadable.length)
-        ? 'photo added. missing ' + rq.unreadable.slice(0, 2).join(' and ')
-        : 'photo added. some of it was hard to read';
-      coverNotice.innerHTML = missed + '. <button type="button" id="recropBtn" class="cover-recrop">crop closer</button>';
-      document.getElementById('recropBtn').addEventListener('click', async () => {
-        const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
-        if (c !== undefined) readPhoto(c);
-      });
-      return;
-    }
-    const lineN = (draft.lineup || []).length;
-    coverNotice.textContent = lineN
-      ? `filled from your photo, with ${lineN} in the line up. edit anything.`
-      : 'filled from your photo. edit anything.';
+    await bulkCreate(rows, rq);
+    return;
 
   } catch(err){
     coverBusy.classList.remove('show');
@@ -4857,6 +4893,9 @@ function resetCreateForm(){
   document.getElementById('coverHint').style.display = '';
   coverPicker.classList.remove('has-image');
   coverNotice.className = 'cover-notice';
+  /* Magic disarms with the sheet. Leaving it on would mean the next
+     photo publishes without anyone deciding that it should. */
+  setMagic(false);
   document.getElementById('coordsLabel').textContent = 'tap on map to set location';
   if (window._miniMap && miniMarker){ window._miniMap.removeLayer(miniMarker); miniMarker = null; }
   /* Everything the last photo put on the draft. Missing one here is
