@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-01" />
+  <meta name="app-version" content="2026-07-26-02" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -367,6 +367,16 @@ body { display: flex; align-items: center; justify-content: center; }
   position: absolute; inset: 0;
   background: linear-gradient(180deg, var(--scrim-soft) 0%, transparent 30%, transparent 60%, var(--scrim-strong) 100%);
 }
+/* A cover is optional. When there is none, the slot becomes a quiet
+   tinted panel in the app's own palette rather than a broken image or
+   somebody else's stock photograph. */
+.event-card__media--nocover,
+.detail-hero--nocover {
+  background-image:
+    linear-gradient(145deg, var(--accent-dim) 0%, transparent 55%),
+    linear-gradient(0deg, var(--bg-elevated), var(--bg-elevated));
+}
+.event-card__media--nocover { aspect-ratio: 16 / 7; }
 
 .event-card__overlay {
   position: absolute; inset: 0;
@@ -587,8 +597,14 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 .modal-body::-webkit-scrollbar { width: 0; }
 
+/* The publish button lives here, pinned to the bottom of a 100dvh
+   sheet. Without the inset its lower third sits under the iPhone home
+   indicator, where a tap is either swallowed or read as a system
+   gesture. Every other bottom-anchored surface in this file already
+   does this; the create sheet was the one that got missed. */
 .modal-footer {
-  padding: var(--space-md);
+  padding: var(--space-md) var(--space-md)
+           calc(var(--space-md) + max(env(safe-area-inset-bottom, 0px), 0px));
   border-top: 1px solid var(--border);
 }
 
@@ -612,6 +628,15 @@ body { display: flex; align-items: center; justify-content: center; }
   font-size: 0.85rem;
   color: var(--text);
   transition: border-color var(--ease);
+}
+/* Safari zooms the whole page whenever a focused field is under 16px,
+   and it does not zoom back out on blur — so one tap on the title
+   field leaves the create form wider than the screen for the rest of
+   the session. 16px only where there is a touch pointer, so the
+   deliberately small price and capacity fields keep their size on a
+   desktop. */
+@media (pointer: coarse) {
+  .input, .textarea, select { font-size: 16px; }
 }
 .input:focus, .textarea:focus { outline: none; border-color: var(--border-accent); }
 .input::placeholder, .textarea::placeholder { color: var(--subtle); }
@@ -1107,7 +1132,8 @@ body { display: flex; align-items: center; justify-content: center; }
 .detail-actions {
   position: fixed;
   bottom: 0; left: 0; right: 0;
-  padding: var(--space-md);
+  padding: var(--space-md) var(--space-md)
+           calc(var(--space-md) + max(env(safe-area-inset-bottom, 0px), 0px));
   background: linear-gradient(to top, var(--bg) 60%, transparent);
   display: flex; gap: var(--space-sm);
   z-index: 10;
@@ -1746,12 +1772,6 @@ if ('serviceWorker' in navigator) {
         <path d="m8.5 10.5 7-3M8.5 13.5l7 3"/>
       </svg>
     </button>
-    <button class="btn btn--share" id="copyLinkBtn" title="copy link" aria-label="copy link">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
-        <rect x="9" y="9" width="11" height="11" rx="2"/>
-        <path d="M5 15V5a2 2 0 0 1 2-2h10"/>
-      </svg>
-    </button>
   </div>
 </div>
 
@@ -1970,7 +1990,7 @@ function renderEventCard(e) {
 
   return `
     <article class="event-card" data-event-id="${e.id}">
-      <div class="event-card__media" style="background-image:url('${e.cover}')">
+      <div class="event-card__media${e.cover ? '' : ' event-card__media--nocover'}"${e.cover ? ` style="background-image:url('${e.cover}')"` : ''}>
         <div class="event-card__overlay">
           <div class="event-card__overlay-top">
             ${crossed}
@@ -2142,13 +2162,18 @@ function openEditSheet(ev){
   set('editPrice', ev.price || '');
   set('editCap', ev.capacity == null ? '' : ev.capacity);
   set('editDesc', ev.desc || '');
+  /* The host is now counted as going the moment they publish, so a
+     plain `going > 0` would lock the date on every brand new event
+     against its own creator. What locks a date is somebody ELSE
+     having made plans around it. */
+  const others = Math.max(0, (ev.going || 0) - (iOwn(ev.id) && Store.isGoing(ev.id) ? 1 : 0));
   const note = document.getElementById('editNote');
-  note.hidden = !(ev.going > 0);
-  note.textContent = ev.going > 0
-    ? `${ev.going} ${ev.going === 1 ? 'person is' : 'people are'} going, so the date is locked. cancel and repost to move it.`
+  note.hidden = !(others > 0);
+  note.textContent = others > 0
+    ? `${others} ${others === 1 ? 'person is' : 'people are'} going, so the date is locked. cancel and repost to move it.`
     : '';
-  document.getElementById('editDate').disabled = ev.going > 0;
-  document.getElementById('editTime').disabled = ev.going > 0;
+  document.getElementById('editDate').disabled = others > 0;
+  document.getElementById('editTime').disabled = others > 0;
   document.getElementById('editSheet').hidden = false;
 }
 
@@ -2197,7 +2222,9 @@ async function saveEdit(){
 function openDetail(id) {
   const e = EVENTS.find(x => x.id === id);
   if (!e) return;
-  document.getElementById('detailHero').style.backgroundImage = `url('${e.cover}')`;
+  const hero = document.getElementById('detailHero');
+  hero.style.backgroundImage = e.cover ? `url('${e.cover}')` : '';
+  hero.classList.toggle('detail-hero--nocover', !e.cover);
   document.getElementById('detailTitle').textContent = e.title;
   document.getElementById('detailDesc').textContent = e.desc;
   document.getElementById('detailWhen').textContent = e.when;
@@ -2257,59 +2284,100 @@ document.querySelector('.detail-actions').addEventListener('click', async (e) =>
      lands on a <path>, and a handler bound to the button still fires,
      but only if the listener is on an ancestor when the icon is
      replaced. Cheap insurance either way. */
-  const btn = e.target.closest('#shareBtn, #copyLinkBtn');
+  const btn = e.target.closest('#shareBtn');
   if (!btn) return;
   const ev = EVENTS.find(x => x.id === window._openEventId);
   if (!ev) return;
-  if (btn.id === 'shareBtn') return shareEvent(ev);
-  const url = shareUrl(ev);
-  toast(await copyLink(url) ? 'link copied' : url);
+  /* One button, one intention. shareEvent() already falls back to the
+     clipboard when the Web Share API is missing, which is the desktop
+     case, so the separate copy button was a second control for an
+     outcome the first one already produced. */
+  return shareEvent(ev);
 });
 
-/* Share and copy are different intentions. On a phone the share sheet
-   is what people want; when they ask to copy a link they mean the
-   clipboard, and being handed a share sheet instead is the bug. */
+/* ── writing an attendance ─────────────────────────────────────────
+   One place, so the publish flow and the going button cannot drift
+   apart. Returns 'saved' when the row is in Postgres, 'queued' when
+   the device is offline and syncAttendance() will retry, or 'failed'
+   when the database actively refused it.
 
+   The distinction matters: 'queued' is fine and the optimistic count
+   should stand, 'failed' means the number on screen is a lie and has
+   to be put back. The old code could not tell the two apart, which is
+   how an event ended up showing a lit "you're going" button beside a
+   count of zero — the button was read from localStorage, the count
+   from Postgres, and nothing reconciled them. */
+async function writeAttendance(eventUuid, going){
+  if (!SB_READY() || !eventUuid) return 'queued';
+  try {
+    await ensureUser();
+    if (!CURRENT_USER.id){
+      /* Used to fall straight through and write nothing at all, with
+         no error anywhere. ensureUser() returns an empty user when
+         the stored uuid points at a deleted row, or when the users
+         insert was refused. Both are worth seeing. */
+      console.warn('[bich] no user row on this device, attendance queued');
+      return 'queued';
+    }
+    await sbUpsert('attendances', {
+      event_id: eventUuid, user_id: CURRENT_USER.id,
+      status: going ? 'going' : 'cancelled'
+    });
+    return 'saved';
+  } catch (err){
+    const offline = /failed to fetch|load failed|networkerror/i.test(err.message || '');
+    if (offline){
+      console.warn('[bich] offline, attendance queued');
+      return 'queued';
+    }
+    console.error('[bich] attendance refused', err.status || '', err);
+    return 'failed';
+  }
+}
 
 document.getElementById('attendBtn').addEventListener('click', async () => {
   const id = window._openEventId;
   if (!id) return;
-  const nowGoing = !Store.isGoing(id);
+  const btn = document.getElementById('attendBtn');
+  if (btn.dataset.busy === '1') return;      // double taps were double counting
+  btn.dataset.busy = '1';
 
-  // optimistic: the local store is the truth the person sees
+  const wasGoing = Store.isGoing(id);
+  const nowGoing = !wasGoing;
+  const ev = EVENTS.find(x => x.id === id);
+
+  const paintCount = () => {
+    const el = document.getElementById('detailGoing');
+    if (el && ev) el.textContent = `${ev.going} ${ev.going === 1 ? 'person' : 'people'}`;
+  };
+
+  // optimistic, so the tap feels instant
   Store.setGoing(id, nowGoing);
   paintAttendButton(nowGoing);
   Store.requestPersistence();
-
-  const ev = EVENTS.find(x => x.id === id);
-  if (ev) {
+  if (ev){
     ev.going = Math.max(0, (ev.going || 0) + (nowGoing ? 1 : -1));
-    document.getElementById('detailGoing').textContent =
-      `${ev.going} ${ev.going === 1 ? 'person' : 'people'}`;
+    paintCount();
     renderBundles();
   }
 
-  // tell the database if it is reachable. If not, the local state
-  // stands and syncAttendance() will catch up on the next launch.
-  if (SB_READY() && ev && ev.uuid) {
-    try {
-      await ensureUser();
-      if (CURRENT_USER.id) {
-        await sbUpsert('attendances', {
-          event_id: ev.uuid, user_id: CURRENT_USER.id,
-          status: nowGoing ? 'going' : 'cancelled'
-        });
-      }
-    } catch (err) {
-      /* This used to swallow everything, so a device whose user row
-         had gone would silently never record a single going. */
-      console.error('[bich] attendance not saved', err);
-      toast(explainWriteError(err));
+  const result = await writeAttendance(ev && ev.uuid, nowGoing);
+
+  if (result === 'failed'){
+    /* Put everything back. Leaving the optimistic state up after a
+       refusal is what produced the screen this fix exists for. */
+    Store.setGoing(id, wasGoing);
+    paintAttendButton(wasGoing);
+    if (ev){
+      ev.going = Math.max(0, (ev.going || 0) + (nowGoing ? -1 : 1));
+      paintCount();
+      renderBundles();
     }
-  } else if (SB_READY() && ev && !ev.uuid) {
-    console.warn('[bich] no uuid on this event, attendance stays local only');
+    toast("couldn't save that — try again");
+  } else if (result === 'queued'){
+    queuePendingAttendance(id, nowGoing);
   }
-  queuePendingAttendance(id, nowGoing);
+  btn.dataset.busy = '0';
 });
 
 /* syncAttendance only ever pushed 'going', because setGoing(id,false)
@@ -3133,7 +3201,7 @@ async function bulkCreate(rows, rq){
         city: r.city, community: r.community,
         photoLat: sourceExif && sourceExif.lat, photoLng: sourceExif && sourceExif.lng,
         date: r.date, timeStart: r.time_start, timeFinish: r.time_finish,
-        price: r.price, currency: r.currency, category: r.category,
+        price: r.price, currency: r.currency,
         recurrence: r.recurrence, contact: r.contact,
         coverUrl: img ? img.url : null,
         source: 'photo'
@@ -3235,7 +3303,6 @@ async function saveEvent(spec){
     cover_url: spec.coverUrl || null,
     status: 'live',
     source: spec.source || 'manual',
-    category: spec.category || null,
     edit_token_hash: hash
   });
 
@@ -3337,7 +3404,10 @@ function rowToEvent(r){
     uuid: r.id,
     title: r.title,
     desc: r.description || '',
-    cover: r.cover_url || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80',
+    /* No stock fallback. A cover is optional, and showing a stranger's
+       photo of a crowd in its place misrepresents the event. Cards and
+       the detail hero render a plain tinted panel when this is null. */
+    cover: r.cover_url || null,
     venue: r.venue_name || '',
     address: r.city || '',
     lat: r.venue_lat, lng: r.venue_lng,
@@ -3354,7 +3424,6 @@ function rowToEvent(r){
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
     communitySlug: r.community_slug || null,
-    category: r.category || null,
     category: r.category || null,
     venueAddress: r.venue_address || null,
     distanceKm: r.distance_km == null ? null : Math.round(r.distance_km),
@@ -4786,8 +4855,8 @@ function resetCreateForm(){
   Object.assign(draft, {
     cover:null, crop:null, lat:null, lng:null, city:'', community:'',
     timeFinish:'', mapsLink:'', venueId:null, venueSource:null,
-    lineup:null, recurrence:'', contact:'', currency:'', category:null,
-    category:'', venueAddress:'',
+    lineup:null, recurrence:'', contact:'', currency:'', category:'',
+    venueAddress:'',
     photoLat:null, photoLng:null
   });
   if (sourceBitmap && sourceBitmap.close) sourceBitmap.close();
@@ -4811,6 +4880,15 @@ function formatWhen(dateStr, timeStr){
 /* ── publish: build the event, save it, show it in the feed ── */
 document.getElementById('publishBtn').addEventListener('click', async () => {
   const title = document.getElementById('inputTitle').value.trim();
+  /* After a publish that saved the event but lost the cover, this
+     button is a dismiss control, not a publish control. Route the tap
+     and stop, or the same event gets published twice. */
+  const pb = document.getElementById('publishBtn');
+  if (pb.dataset.mode === 'close'){
+    if (typeof window._publishFinish === 'function') window._publishFinish();
+    return;
+  }
+
   const venue = document.getElementById('inputVenue').value.trim();
   const date  = document.getElementById('inputDate').value;
   const time  = document.getElementById('inputTime').value;
@@ -4821,19 +4899,31 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   }
   const btn = document.getElementById('publishBtn');
   btn.disabled = true;
+  let coverFailed = false;
 
   // event shaped for the prototype feed (renderEventCard)
   const ev = {
     id: 'e_' + Math.random().toString(36).slice(2,10),     // opaque short id (nanoid in prod)
     title,
     desc: document.getElementById('inputDesc').value.trim(),
-    cover: draft.cover || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80',
+    /* Both of these used to be invented. The cover fell back to a
+       stock Unsplash crowd, so an event with no photo was published
+       under a picture its host never chose and which vanished on the
+       next refresh; the pin fell back to 39.62, 2.65, which is
+       Mallorca, so an event with no location silently appeared on a
+       different island. An absent value is now absent. */
+    cover: draft.cover || null,
     venue,
     address: draft.city || '',
-    lat: draft.lat ?? 39.62, lng: draft.lng ?? 2.65,
+    lat: draft.lat ?? null, lng: draft.lng ?? null,
     when: formatWhen(date, time),
     price: parseFloat(document.getElementById('inputPrice').value) || 0,
-    going: 1, crossed: 0,
+    /* Was `going: 1`, a leftover from before there was a database. It
+       made every new event claim an attendee that no attendances row
+       backed, so the count dropped to 0 the moment loadFeed() replaced
+       this object with the real one. The host is now marked going
+       properly, below, after the row actually saves. */
+    going: 0, crossed: 0,
     host: currentHandle,
     bundle: 'personal'
   };
@@ -4861,11 +4951,21 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         date, timeStart: time, timeFinish: draft.timeFinish,
         price: ev.price, currency: draft.currency,
         capacity: document.getElementById('inputCapacity').value,
-        recurrence: draft.recurrence, contact: draft.contact, category: draft.category,
+        recurrence: draft.recurrence, contact: draft.contact,
         coverUrl: img ? img.url : null,
         source: draft.cover ? 'photo' : 'manual'
       });
       ev.uuid = saved.id; ev.id = saved.short_id;
+
+      /* If you are posting the walk, you are going on the walk. Nothing
+         wrote this row before, so every event opened its life reading
+         "0 people" while its own host was looking at it. Best effort:
+         a refused attendance must not undo a published event. */
+      if (await writeAttendance(ev.uuid, true) === 'saved'){
+        Store.setGoing(ev.id, true);
+        ev.going = 1;
+      }
+
       if (img) { ev.cover = img.thumb; ev.cover_full = img.url; }
       else if (draft.cover) {
         // The bucket is not reachable. Say so rather than showing a
@@ -4873,6 +4973,10 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         coverNotice.className = 'cover-notice show err';
         coverNotice.textContent = 'published, but the cover did not upload — '
           + (window._lastUploadError || 'reason unknown, see the console');
+        /* The sheet used to close 900ms later and wipe this message,
+           so nobody ever read it. Hold the sheet open instead and let
+           them dismiss it themselves. */
+        coverFailed = true;
       }
     } catch(err){
       btn.disabled = false;
@@ -4890,15 +4994,31 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
   renderBundles();
   if (SB_READY()) loadFeed();   // pull it back with real counts
 
-  btn.textContent = '✓ event published';
-  setTimeout(() => {
+  const finish = () => {
     closeCreate();
     resetCreateForm();
     btn.textContent = 'publish event';
     btn.disabled = false;
+    delete btn.dataset.mode;
     // jump home so the new event is visible
     document.querySelector('.tab[data-screen="home"]').click();
-  }, 900);
+  };
+
+  if (coverFailed){
+    /* The event is live and the reason the picture is missing is on
+       screen. Closing on a timer would delete that sentence before it
+       could be read, which is what used to happen. The button becomes
+       a dismiss control; the guard at the top of this listener routes
+       the next tap to finish() instead of publishing again. */
+    btn.disabled = false;
+    btn.dataset.mode = 'close';
+    btn.textContent = 'published without the cover — close';
+    window._publishFinish = finish;
+    return;
+  }
+
+  btn.textContent = '✓ event published';
+  setTimeout(finish, 900);
 });
 
 /* ─── ONBOARDING + HANDLE ─── */
