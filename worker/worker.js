@@ -31,7 +31,7 @@ const EVENT_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        propertyOrdering: ['event_name','space_name','venue_match','venue_latitude','venue_longitude',
+        propertyOrdering: ['event_name','space_name','venue_match','lineup','duration_source','venue_latitude','venue_longitude',
           'date_literal','weekday_literal','year_literal','time_start','time_finish',
           'recurrence','city','community','description','price','currency','contact','location_source'],
         required: ['event_name'],
@@ -39,6 +39,13 @@ const EVENT_SCHEMA = {
           event_name:      { type:'string' },
           space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
           venue_match:     { type:'string', nullable:true, description:'If space_name matches one of the known venues supplied in the prompt, the exact string from that list. Null otherwise, and null when no list was supplied.' },
+          lineup:          { type:'array', nullable:true, description:'Set times, programme or timetable INSIDE this one event. Empty or null when the flyer has no schedule. Never use this for separate events.',
+                             items: { type:'object', properties:{
+                               time: { type:'string', nullable:true, description:'HH:MM 24 hour when this slot starts. Null if only an order is given.' },
+                               act:  { type:'string', description:'performer, act, talk or session name exactly as printed' },
+                               stage:{ type:'string', nullable:true, description:'room or stage if the flyer names more than one' }
+                             }, required:['act'] } },
+          duration_source: { type:'string', nullable:true, description:'"stated" when the finish time is printed, "inferred" when you derived it from the activity type. Null when there is no finish time.' },
           venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed. Do not convert.' },
@@ -385,6 +392,54 @@ async function extractEvent(request, env, origin) {
      often partly obscured, and a near miss ("Casa Eyra") creates a
      duplicate that never merges. Giving the model the real strings
      turns an open transcription into a much easier multiple choice. */
+  /* One event or several? This is the judgement the schema cannot
+     express on its own, and getting it wrong in the splitting
+     direction is the expensive one: three cards for the same night
+     get shared and marked going and can never be quietly recombined. */
+  const shapeRules = `
+
+DECIDING HOW MANY EVENTS ARE IN THIS PHOTO.
+
+Return ONE event with a filled "lineup" when ALL of these hold:
+  · the same calendar date
+  · the same venue
+  · the listed times sit inside one continuous span
+  · the rows read as performers, acts, stages or sessions, not as event titles
+  · one door time or one price covers all of them
+Headings like "line up", "set times", "programme", "timetable", "stages",
+"schedule" mean ONE event. Put every row in "lineup", in printed order.
+
+Return SEPARATE events when ANY of these hold:
+  · the dates differ
+  · the venues differ
+  · a row carries its own price or its own ticket link
+  · the gaps between rows are days rather than hours
+Headings like "what's on", "this month", "upcoming", "programme for
+September", or a calendar grid, mean SEVERAL events. One record per date.
+
+If it is genuinely ambiguous, return ONE event with a lineup. Merging can be
+undone later; splitting cannot.
+
+Never return more than 20 events. If the photo lists more, return the 20
+soonest and say so in read_quality.unreadable.
+
+DURATION. When a finish time is printed, use it and set duration_source
+"stated". When none is printed, infer from the activity and set
+duration_source "inferred":
+  club night or party      5 to 6 hours
+  gig or live set          2 to 3 hours
+  dj set listed in lineup  finish at the last slot plus 90 minutes
+  yoga or fitness class    60 minutes
+  workshop                 2 to 3 hours
+  market or fair           4 to 6 hours
+  dinner or supper club    2 to 3 hours
+  exhibition opening       2 to 3 hours
+  talk or screening        90 minutes
+  anything else            90 minutes
+A door or opening hour such as "opens 5pm" is not a session length: leave the
+finish empty. An event crossing midnight is normal and expected; give the
+finish as a clock time and the app will resolve the date.`;
+
   const venueList = Array.isArray(known_venues)
     ? known_venues.filter(v => typeof v === 'string' && v.length < 120).slice(0, 40)
     : [];
@@ -407,7 +462,7 @@ async function extractEvent(request, env, origin) {
         system_instruction: { parts: [{ text: systemPrompt(today) }] },
         contents: [{ role: 'user', parts: [
           { inline_data: { mime_type: mime, data: image } },
-          { text: 'Extract every event in this photo as records.' + exifLine + venueLine }
+          { text: 'Extract every event in this photo as records.' + exifLine + venueLine + shapeRules }
         ]}],
         generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
       })
