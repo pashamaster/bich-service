@@ -22,10 +22,15 @@
  *   GET  /img/<key>       serves a stored image
  */
 
-import {
-  passkeyRegisterBegin, passkeyRegisterFinish,
-  passkeyAuthBegin, passkeyAuthFinish
-} from './passkey.js';
+/* Passkey routes are written but the module they need is not in this
+   repo yet, and an import of a missing file fails the BUILD, not the
+   request — wrangler deploy would refuse the whole worker and take the
+   working upload route down with it. Restore these two blocks together
+   with passkey.js, never separately. */
+// import {
+//   passkeyRegisterBegin, passkeyRegisterFinish,
+//   passkeyAuthBegin, passkeyAuthFinish
+// } from './passkey.js';
 
 const EVENT_SCHEMA = {
   type: 'object',
@@ -138,11 +143,16 @@ export default {
     /* Passkeys sit ABOVE the invite gate. That gate exists to ration
        Gemini calls; recovering your own history costs nothing, and
        locking somebody out of their own history because they have no
-       invite code would be absurd. */
-    if (path.endsWith('/passkey/register/begin'))  return passkeyRegisterBegin(request, env, json, origin);
-    if (path.endsWith('/passkey/register/finish')) return passkeyRegisterFinish(request, env, json, origin);
-    if (path.endsWith('/passkey/auth/begin'))      return passkeyAuthBegin(request, env, json, origin);
-    if (path.endsWith('/passkey/auth/finish'))     return passkeyAuthFinish(request, env, json, origin);
+       invite code would be absurd. Commented out with the import at
+       the top of this file — the two go back in together. */
+    // if (path.endsWith('/passkey/register/begin'))  return passkeyRegisterBegin(request, env, json, origin);
+    // if (path.endsWith('/passkey/register/finish')) return passkeyRegisterFinish(request, env, json, origin);
+    // if (path.endsWith('/passkey/auth/begin'))      return passkeyAuthBegin(request, env, json, origin);
+    // if (path.endsWith('/passkey/auth/finish'))     return passkeyAuthFinish(request, env, json, origin);
+
+    /* Reverse geocoding sits above the invite gate: it costs nothing,
+       it is needed by core, and it never touches Gemini. */
+    if (path.endsWith('/geocode')) return reverseGeocode(request, env, origin);
 
     /* Invite gate. An invite code is an opaque string mapping to a
        quota bucket, not a person, so the zero PII model holds.
@@ -547,4 +557,127 @@ finish as a clock time and the app will resolve the date.`;
   } catch {
     return json({ error: "couldn't read that photo" }, 502, origin);
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   REVERSE GEOCODING — coordinates to a community
+
+   Why this runs on the worker instead of in the browser:
+
+     · Nominatim's usage policy wants one request per second and a
+       User-Agent that identifies the app. A browser cannot honour
+       either on behalf of everyone, a worker can.
+     · Caching. Coordinates round to ~1km before lookup, so a whole
+       town collapses to a handful of cache keys and almost every call
+       is served from KV without touching OSM at all.
+     · The person's coordinates never leave for a third party from
+       their own device — the request comes from the edge, not from
+       them.
+
+   No location permission is involved anywhere in this file. The
+   coordinates arriving here came from an event's venue or a photo's
+   own EXIF, both of which the app already had for other reasons.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Which administrative level counts as "a community" is a per-region
+   judgement, not a global rule. Default is the town or city. The
+   overrides are for places where the island IS the community: Canggu
+   and Ubud are different villages that behave like one place, and
+   splitting them would leave both feeds empty.
+
+   Keyed by ISO country code. Order matters — first key that has a
+   value in the OSM address wins. */
+const PLACE_LEVELS = {
+  _default: ['city', 'town', 'village', 'municipality', 'suburb', 'county'],
+  ID:       ['island', 'state', 'city', 'town', 'village'],        // Bali as one
+  GR:       ['island', 'city', 'town', 'village'],                 // the islands
+  PT:       ['island', 'city', 'town', 'village', 'municipality'], // Azores, Madeira
+  ES:       ['island', 'city', 'town', 'village', 'municipality'], // Balearics, Canaries
+  CV:       ['island', 'city', 'town', 'village'],
+  MV:       ['island', 'atoll', 'city', 'town']
+};
+
+function pickPlace(addr, countryCode) {
+  const order = PLACE_LEVELS[String(countryCode || '').toUpperCase()] || PLACE_LEVELS._default;
+  for (const key of order) {
+    const value = addr[key];
+    if (value && String(value).trim()) return { name: String(value).trim(), kind: key };
+  }
+  // Nothing recognisable. Better to have no community than a wrong one.
+  return null;
+}
+
+async function reverseGeocode(request, env, origin) {
+  const url = new URL(request.url);
+  const lat = Number(url.searchParams.get('lat'));
+  const lng = Number(url.searchParams.get('lng'));
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) ||
+      lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return json({ error: 'lat and lng required' }, 400, origin);
+  }
+
+  /* Round to three decimals, roughly 100m, before it becomes a cache
+     key. Two people standing in the same square share a lookup, and
+     the stored key is deliberately coarser than the coordinate that
+     arrived. */
+  const key = `geo:${lat.toFixed(3)},${lng.toFixed(3)}`;
+
+  if (env.BICH_KV) {
+    const hit = await env.BICH_KV.get(key, 'json').catch(() => null);
+    if (hit) return json({ ...hit, cached: true }, 200, origin);
+  }
+
+  const q = new URL('https://nominatim.openstreetmap.org/reverse');
+  q.searchParams.set('lat', String(lat));
+  q.searchParams.set('lon', String(lng));
+  q.searchParams.set('format', 'jsonv2');
+  q.searchParams.set('zoom', '12');          // settlement level, not street
+  q.searchParams.set('addressdetails', '1');
+
+  let body;
+  try {
+    const r = await fetch(q.toString(), {
+      headers: {
+        // Nominatim's policy requires this to identify the caller.
+        'User-Agent': 'bich.service/1.0 (https://bich.app)',
+        'Accept': 'application/json'
+      }
+    });
+    if (!r.ok) return json({ error: `geocoder said ${r.status}` }, 502, origin);
+    body = await r.json();
+  } catch (err) {
+    return json({ error: 'geocoder unreachable' }, 502, origin);
+  }
+
+  const addr = (body && body.address) || {};
+  const country = String(addr.country_code || '').toUpperCase() || null;
+  const place = pickPlace(addr, country);
+
+  if (!place || !body.osm_id) {
+    /* Middle of the sea, or somewhere OSM has no settlement for. The
+       event still publishes; it just has no community, which is the
+       same blank state a brand new visitor has. */
+    return json({ community: null, reason: 'no settlement at these coordinates' }, 200, origin);
+  }
+
+  const out = {
+    osm_id:  `${body.osm_type || 'x'}/${body.osm_id}`,
+    name:    place.name,
+    kind:    place.kind,
+    country,
+    // The centre of the PLACE, not the coordinate we were handed, so a
+    // community's circle is not centred on one person's back garden.
+    lat: Number(body.lat) || lat,
+    lng: Number(body.lon) || lng
+  };
+
+  if (env.BICH_KV) {
+    // Places do not move. Thirty days is conservative.
+    await env.BICH_KV.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 30 })
+      .catch(() => {});
+  }
+
+  return json(out, 200, origin);
 }
