@@ -183,6 +183,12 @@ async function health(request, env, origin) {
   const out = {
     worker: 'up',
     r2_bucket_bound: Boolean(env.COVERS),
+    /* Where covers are served from. If this is a domain that was never
+       attached to the bucket, uploads succeed and every image is dead —
+       so it is worth being able to read it back rather than guess. When
+       unset the worker serves them itself, which always works. */
+    image_base: env.PUBLIC_IMG_BASE || (new URL(request.url).origin + '/img (served by this worker)'),
+    magic_enabled: String(env.MAGIC_ENABLED || 'false') === 'true',
     gemini_key_present: Boolean(env.GEMINI_API_KEY),
     gemini_model: env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
     kv_quota_bound: Boolean(env.BICH_KV),
