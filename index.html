@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-05" />
+  <meta name="app-version" content="2026-07-26-06" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -840,6 +840,11 @@ body { display: flex; align-items: center; justify-content: center; }
 .cover-picker__busy span { font-size: 0.6rem; letter-spacing: 0.1em; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* Notice line under cover after extraction */
+.coords-label.is-guess, #coordsLabel.is-guess {
+  color: var(--accent);
+  opacity: 0.9;
+}
+
 .cover-notice { font-size: 0.62rem; letter-spacing: 0.04em; color: var(--accent); margin-top: 8px; display: none; }
 .cover-notice.show { display: block; }
 .cover-notice.err { color: var(--red); }
@@ -2347,7 +2352,7 @@ async function writeAttendance(eventUuid, going){
     await sbUpsert('attendances', {
       event_id: eventUuid, user_id: CURRENT_USER.id,
       status: going ? 'going' : 'cancelled'
-    });
+    }, 'event_id,user_id');
     return 'saved';
   } catch (err){
     const offline = /failed to fetch|load failed|networkerror/i.test(err.message || '');
@@ -2460,8 +2465,15 @@ async function syncAttendance(){
   if (sent || stuck) console.info(`[bich] attendance sync: ${sent} sent, ${stuck} still queued`);
 }
 
-async function sbUpsert(table, row){
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+/* onConflict names the columns that make a row unique. PostgREST will
+   guess the primary key when it is omitted, and that guess is where
+   composite keys go wrong — a wrong or absent target comes back as
+   42P10 "no unique or exclusion constraint matching the ON CONFLICT
+   specification", which reads like a policy refusal and is not one.
+   Saying it costs nothing and removes a whole class of confusion. */
+async function sbUpsert(table, row, onConflict){
+  const qs = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : '';
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}${qs}`, {
     method: 'POST',
     headers: sbAuthHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
     body: JSON.stringify(row)
@@ -2770,6 +2782,12 @@ function initMiniMap() {
 /* single source of truth for the pin — used by map taps AND photo extraction */
 function setEventLocation(lat, lng, fromPhoto) {
   draft.lat = +lat; draft.lng = +lng;
+  if (!fromPhoto){
+    // a deliberate tap outranks a guess from EXIF
+    draft.pinFromExif = false;
+    const lbl = document.getElementById('coordsLabel');
+    if (lbl) lbl.classList.remove('is-guess');
+  }
 
   /* Coordinates are the better source of truth for which community an
      event belongs to. Text from a flyer says "Ericeira coast"; a pin
@@ -3345,7 +3363,13 @@ async function saveEvent(spec){
   const row = saved[0];
   rememberToken(row.short_id, token);
   Store.addHosting(row.short_id);
-  if (slug && !(Store.data.home && Store.data.home.slug)) Store.set({ home: { slug } });
+  /* Signal three: publishing somewhere makes it your community, every
+     time, not just the first time. Deliberate enough to be silent. */
+  if (spec.lat != null && spec.lng != null){
+    adoptCommunity(spec.lat, spec.lng, 'publish').catch(() => {});
+  } else if (slug){
+    adoptCommunityFrom(null, slug);
+  }
   return row;
 }
 
@@ -4020,6 +4044,24 @@ async function shareEvent(ev){
   if (!(await copyLink(url))) prompt('copy this link', url);
 }
 
+/* A toast with one undo. Used where the app changed something on the
+   person's behalf and being able to put it back matters more than the
+   two seconds of screen space. */
+function toastAction(msg, label, onAction){
+  toast(msg);
+  const el = document.getElementById('toast');
+  if (!el) return;
+  const btn = document.createElement('button');
+  btn.textContent = label;
+  btn.style.cssText = 'margin-left:12px;background:none;border:none;padding:4px 2px;' +
+    'color:var(--accent);font:inherit;text-decoration:underline;cursor:pointer;';
+  btn.addEventListener('click', () => {
+    el.style.opacity = '0';
+    try { onAction(); } catch(err){ console.warn('[bich] undo failed', err); }
+  }, { once: true });
+  el.appendChild(btn);
+}
+
 function toast(msg){
   let el = document.getElementById('toast');
   if (!el){
@@ -4047,10 +4089,78 @@ function toast(msg){
    Only when nothing is set yet. Someone who has already published, or
    already chose an area, does not get moved by opening a link to
    somewhere else. */
+/* ── community: a passive, always-current best guess ───────────────
+   No location permission is ever requested for this. navigator
+   .geolocation is used in exactly one place in this app — the manual
+   "centre the map on me" button — and nothing here goes near it.
+
+   A community is inferred as a side effect of three things that carry
+   coordinates anyway:
+
+     · opening a shared event link   → that event's venue
+     · picking a photo with EXIF GPS → the photo's own coordinates,
+                                       whether or not it is published
+     · publishing an event           → that event's venue
+
+   Last signal wins. One label, overwritten, never merged and never a
+   list: someone in Lisbon who opens a friend's link to Canggu becomes
+   Canggu, and becomes Lisbon again the next time a Lisbon photo goes
+   through. A visitor who has done none of the three has no community,
+   which is the same blank state as a new handle with no history. */
+
+const COMMUNITY_SIGNALS = { link: 'shared link', photo: 'photo location', publish: 'published here' };
+
+async function resolvePlace(lat, lng){
+  if (lat == null || lng == null || !WORKER_URL) return null;
+  try {
+    const r = await fetch(`${WORKER_URL}/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`);
+    if (!r.ok) return null;
+    const p = await r.json();
+    return (p && p.osm_id && p.name) ? p : null;
+  } catch(_){ return null; }        // offline: no community, no error
+}
+
+async function adoptCommunity(lat, lng, signal){
+  const place = await resolvePlace(lat, lng);
+  if (!place) return false;
+
+  let slug = null;
+  try {
+    slug = await sbRpc('ensure_community', {
+      p_osm_id: place.osm_id, p_name: place.name, p_kind: place.kind,
+      p_country: place.country, p_lat: place.lat, p_lng: place.lng
+    });
+  } catch(err){
+    console.warn('[bich] could not record community', err);
+    return false;
+  }
+  if (!slug) return false;
+
+  const previous = Store.data.home && Store.data.home.slug;
+  if (previous === slug) return false;                    // already there
+
+  Store.set({ home: { slug, name: place.name, via: signal } });
+  KNOWN_COMMUNITIES = null;                               // refetch, it may be new
+  console.info(`[bich] community → ${slug} (${COMMUNITY_SIGNALS[signal] || signal})`);
+
+  /* Moving somebody's whole feed because a friend sent them a link is
+     the one case that will feel broken rather than clever, so that one
+     is announced and reversible. Publishing or photographing a place is
+     deliberate enough to just happen. */
+  if (signal === 'link' && previous){
+    toastAction(`showing ${place.name.toLowerCase()}`, 'stay put', () => {
+      Store.set({ home: { slug: previous } });
+      loadFeed();
+    });
+  }
+  return true;
+}
+
+/* Kept for callers that already have a slug and no coordinates. */
 function adoptCommunityFrom(ev, slug){
-  if (Store.data.home && Store.data.home.slug) return false;
   const s = slug || (ev && ev.community_slug) || null;
   if (!s) return false;
+  if (Store.data.home && Store.data.home.slug === s) return false;
   Store.set({ home: { slug: s } });
   console.info('[bich] adopted community from shared link:', s);
   return true;
@@ -4086,7 +4196,11 @@ async function openDeepLink(){
      every shared link opened the app and then did nothing. */
   openDetail(ev.id);
 
-  if (adoptCommunityFrom(ev, slug)) loadFeed();
+  /* Signal one: the link itself. Fires on first paint, before any
+     other interaction, using the event's own venue coordinates. */
+  if (ev && ev.lat != null && ev.lng != null){
+    adoptCommunity(ev.lat, ev.lng, 'link').then(changed => { if (changed) loadFeed(); });
+  } else if (adoptCommunityFrom(ev, slug)) loadFeed();
 }
 
 
@@ -4700,7 +4814,27 @@ function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElemen
 function setPhotoOrigin(lat, lng){
   draft.photoLat = lat; draft.photoLng = lng;
   if (window._miniMap) window._miniMap.setView([lat, lng], 12);
+
+  /* Signal two: a photo that carries GPS updates the community, whether
+     or not this event is ever published. Nothing is asked of anyone —
+     the coordinates were already in the file. */
+  adoptCommunity(lat, lng, 'photo').catch(() => {});
+
   const el = document.getElementById('coordsLabel');
+
+  /* In MAGIC the pin must never come from EXIF: a flyer photographed
+     in a cafe window advertises something across town, so where the
+     photo was taken is the wrong answer. In CORE the photo IS the
+     place — someone standing at the spot taking a picture of it — so
+     the same rule that protects magic breaks core. Pre-fill the pin,
+     mark it a guess, and let them drag it. */
+  if (!MAGIC_ARMED && draft.lat == null){
+    setEventLocation(lat, lng, true);     // the one place that moves the pin
+    draft.pinFromExif = true;
+    el.textContent = 'from your photo — tap the map to move it';
+    el.classList.add('is-guess');
+    return;
+  }
   if (draft.lat == null) el.textContent = 'tap on map to set location';
 }
 
@@ -4919,6 +5053,9 @@ function resetCreateForm(){
   document.getElementById('coverHint').style.display = '';
   coverPicker.classList.remove('has-image');
   coverNotice.className = 'cover-notice';
+  draft.pinFromExif = false;
+  const _cl = document.getElementById('coordsLabel');
+  if (_cl) _cl.classList.remove('is-guess');
   /* Magic disarms with the sheet. Leaving it on would mean the next
      photo publishes without anyone deciding that it should. */
   setMagic(false);
