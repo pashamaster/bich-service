@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-04" />
+  <meta name="app-version" content="2026-07-26-05" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3417,7 +3417,33 @@ async function uploadCover(){
     }
     const out = await r.json();
     if (!out || !out.url) throw new Error('worker replied without a url: ' + JSON.stringify(out).slice(0, 160));
-    console.info('[bich] cover stored at', out.key);
+
+    /* The bytes are in R2 now, but that does NOT mean anyone can see
+       them. The worker builds these URLs from PUBLIC_IMG_BASE, and if
+       that domain was never connected to the bucket the upload
+       "succeeds", the row saves a cover_url, and every image on the
+       feed is dead. Worse: the worker's own fallback of serving through
+       /img only applies when PUBLIC_IMG_BASE is UNSET, so a wrong value
+       is quieter than no value. Load one and find out. */
+    const reachable = await new Promise(resolve => {
+      const probe = new Image();
+      const done = ok => { probe.onload = probe.onerror = null; resolve(ok); };
+      probe.onload  = () => done(true);
+      probe.onerror = () => done(false);
+      probe.src = out.thumb || out.url;
+      setTimeout(() => done(false), 8000);
+    });
+    if (!reachable){
+      window._lastUploadError =
+        `stored in R2, but ${new URL(out.url).origin} did not serve it back. `
+        + 'That domain is probably not connected to the bucket — either attach it in '
+        + 'R2 → Settings → Custom Domains, or clear PUBLIC_IMG_BASE in wrangler.toml '
+        + 'and redeploy so covers are served through the worker instead.';
+      console.error('[bich] cover unreachable:', out.url, window._lastUploadError);
+      return null;
+    }
+
+    console.info('[bich] cover stored at', out.key, '→', out.url);
     return out;
   } catch(err){
     window._lastUploadError =
