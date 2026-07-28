@@ -22,15 +22,10 @@
  *   GET  /img/<key>       serves a stored image
  */
 
-/* Passkey routes are written but the module they need is not in this
-   repo yet, and an import of a missing file fails the BUILD, not the
-   request — wrangler deploy would refuse the whole worker and take the
-   working upload route down with it. Restore these two blocks together
-   with passkey.js, never separately. */
-// import {
-//   passkeyRegisterBegin, passkeyRegisterFinish,
-//   passkeyAuthBegin, passkeyAuthFinish
-// } from './passkey.js';
+import {
+  passkeyRegisterBegin, passkeyRegisterFinish,
+  passkeyAuthBegin, passkeyAuthFinish
+} from './passkey.js';
 
 const EVENT_SCHEMA = {
   type: 'object',
@@ -143,12 +138,11 @@ export default {
     /* Passkeys sit ABOVE the invite gate. That gate exists to ration
        Gemini calls; recovering your own history costs nothing, and
        locking somebody out of their own history because they have no
-       invite code would be absurd. Commented out with the import at
-       the top of this file — the two go back in together. */
-    // if (path.endsWith('/passkey/register/begin'))  return passkeyRegisterBegin(request, env, json, origin);
-    // if (path.endsWith('/passkey/register/finish')) return passkeyRegisterFinish(request, env, json, origin);
-    // if (path.endsWith('/passkey/auth/begin'))      return passkeyAuthBegin(request, env, json, origin);
-    // if (path.endsWith('/passkey/auth/finish'))     return passkeyAuthFinish(request, env, json, origin);
+       invite code would be absurd. */
+    if (path.endsWith('/passkey/register/begin'))  return passkeyRegisterBegin(request, env, json, origin);
+    if (path.endsWith('/passkey/register/finish')) return passkeyRegisterFinish(request, env, json, origin);
+    if (path.endsWith('/passkey/auth/begin'))      return passkeyAuthBegin(request, env, json, origin);
+    if (path.endsWith('/passkey/auth/finish'))     return passkeyAuthFinish(request, env, json, origin);
 
     /* Reverse geocoding sits above the invite gate: it costs nothing,
        it is needed by core, and it never touches Gemini. */
