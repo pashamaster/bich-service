@@ -53,7 +53,10 @@ window.BICH_CONFIG = {
      worker's own MAGIC_ENABLED is what actually refuses the request,
      because anything in this file is editable by anyone reading it. */
   magic: {
-    enabled: false
+    /* Was false, which is why no magic button appeared. The button
+       renders on this switch; the worker's own MAGIC_ENABLED is what
+       actually permits the model call. BOTH must be on. */
+    enabled: true
   },
 
   /* Alpha gate for the photo feature. An invite code is an opaque
@@ -64,7 +67,7 @@ window.BICH_CONFIG = {
 
   /* Bump on every release. Shown in the me screen so you can tell at
      a glance which build a phone is actually running. */
-  version: '2026-07-26-06'
+  version: '2026-07-26-07'
 };
 
 /* ──────────────────────────────────────────────────────────────────

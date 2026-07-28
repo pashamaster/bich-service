@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-06" />
+  <meta name="app-version" content="2026-07-26-07" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3402,19 +3402,27 @@ async function uploadCover(){
     return null;
   }
 
-  /* Two sizes, both from the cropped original: 600px for feed cards,
-     1400px for the detail hero. toBlob rather than a data URL: the old
-     canvas -> base64 -> fetch -> blob route held three copies of the
-     image at once, which is a real risk on a phone already holding a
-     40 MB ImageBitmap. */
+  /* ONE image, not two.
+     There used to be a 1400px hero and a 600px card thumbnail. But
+     `events` has a single cover_url column, publish saved the FULL
+     size into it, and rowToEvent read that same column back for the
+     cards — so every thumbnail ever uploaded sat in R2 unread while
+     feed cards downloaded 1400px images. Two uploads, one of them
+     pure waste.
+
+     1000px at 0.82 is the compromise: sharp enough as a hero on a
+     3x phone screen, small enough (~180KB) that a dozen of them on
+     a feed over 4G is not punishing.
+
+     toBlob rather than a data URL: the old canvas -> base64 -> fetch
+     -> blob route held three copies of the image at once, which is a
+     real risk on a phone already holding a 40 MB ImageBitmap. */
   let form;
   try {
-    const full  = render(sourceBitmap, draft.crop, COVER_MAX_SIDE, 0.85);
-    const thumb = render(sourceBitmap, draft.crop, THUMB_MAX_SIDE, 0.78);
-    const ext = full.mime === 'image/webp' ? 'webp' : 'jpg';
+    const full = render(sourceBitmap, draft.crop, COVER_MAX_SIDE, 0.82);
+    const ext  = full.mime === 'image/webp' ? 'webp' : 'jpg';
     form = new FormData();
-    form.append('full',  await canvasToBlob(full.canvas,  full.mime,  0.85), 'full.'  + ext);
-    form.append('thumb', await canvasToBlob(thumb.canvas, thumb.mime, 0.78), 'thumb.' + ext);
+    form.append('full', await canvasToBlob(full.canvas, full.mime, 0.82), 'full.' + ext);
   } catch(err){
     window._lastUploadError = 'could not encode the image: ' + err.message;
     console.error('[bich] cover not uploaded:', window._lastUploadError);
@@ -3454,7 +3462,7 @@ async function uploadCover(){
       const done = ok => { probe.onload = probe.onerror = null; resolve(ok); };
       probe.onload  = () => done(true);
       probe.onerror = () => done(false);
-      probe.src = out.thumb || out.url;
+      probe.src = out.url;
       setTimeout(() => done(false), 8000);
     });
     if (!reachable){
@@ -4267,8 +4275,8 @@ const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
 const GEMINI_KEY_DEV = '';
 const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
 const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
-const COVER_MAX_SIDE = 1400;   // long side stored as the cover
-const THUMB_MAX_SIDE = 600;    // long side used on feed cards
+const COVER_MAX_SIDE = 1000;   // the only stored size, hero and card both
+const THUMB_MAX_SIDE = 600;    // unused since one-image covers; kept for the cropper
 
 // Photo recognition is alpha-gated to a handful of testers. An invite code is an
 // opaque string, not an identity — it maps to a quota bucket and nothing else,
@@ -5179,7 +5187,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         ev.going = 1;
       }
 
-      if (img) { ev.cover = img.thumb; ev.cover_full = img.url; }
+      if (img) ev.cover = img.url;      // one size, so one field
       else if (draft.cover) {
         // The bucket is not reachable. Say so rather than showing a
         // picture that will vanish on the next refresh.
