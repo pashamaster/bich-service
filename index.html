@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-07" />
+  <meta name="app-version" content="2026-07-26-09" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -741,6 +741,26 @@ body { display: flex; align-items: center; justify-content: center; }
 .edit-sheet__row { display: flex; gap: 8px; }
 .edit-sheet__row > div { flex: 1; min-width: 0; }
 .edit-sheet__foot { padding: 12px 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.edit-map {
+  height: 180px; width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  background: var(--surface);
+}
+.edit-sheet__hint {
+  font-family: var(--font-mono); font-size: 0.58rem;
+  letter-spacing: 0.06em; color: var(--subtle); margin: 0 0 12px;
+}
+.edit-cover { margin-bottom: 12px; }
+.edit-cover img {
+  width: 100%; aspect-ratio: 16 / 10; object-fit: cover;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  display: block; margin-bottom: 8px;
+}
+.edit-cover__actions { display: flex; gap: var(--space-sm); }
+.edit-cover__actions .btn { flex: 1; min-height: 44px; font-size: 0.6rem; }
+
 .edit-sheet__note { font-family: var(--font-mono); font-size: 0.6rem; color: var(--red); margin-top: 12px; }
 
 .map-filter-bar--cat { border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -1560,7 +1580,11 @@ if ('serviceWorker' in navigator) {
           <span class="me-row__label" id="passkeyState">no passkey saved</span>
           <button class="btn" id="mePasskey">save a passkey</button>
         </div>
-        <p class="me-note">your history lives on this device. a passkey lets it follow you to another one.</p>
+        <div class="me-row">
+          <span class="me-row__label">already have one?</span>
+          <button class="btn btn--ghost" id="meRestore">restore from passkey</button>
+        </div>
+        <p class="me-note">your history lives on this device. a passkey lets it follow you to another one. no email, no password — just your face or fingerprint.</p>
       </div>
 
       <div class="me-block">
@@ -1862,8 +1886,43 @@ if ('serviceWorker' in navigator) {
         <div><label class="text-label" for="editPrice">price</label><input class="input" id="editPrice" type="number" min="0" step="0.5" inputmode="decimal" /></div>
         <div><label class="text-label" for="editCap">capacity</label><input class="input" id="editCap" type="number" min="1" inputmode="numeric" /></div>
       </div>
+      <label class="text-label" for="editCategory">category</label>
+      <select class="input" id="editCategory">
+        <option value="">unset</option>
+        <option value="music">music</option>
+        <option value="wellness">wellness</option>
+        <option value="food">food</option>
+        <option value="market">market</option>
+        <option value="sport">sport</option>
+        <option value="art">art</option>
+        <option value="talk">talk</option>
+        <option value="film">film</option>
+        <option value="social">social</option>
+        <option value="workshop">workshop</option>
+        <option value="nightlife">nightlife</option>
+        <option value="other">other</option>
+      </select>
+
       <label class="text-label" for="editDesc">description</label>
       <textarea class="input" id="editDesc" rows="5" maxlength="2000"></textarea>
+
+      <!-- The pin. Extraction gets this wrong more often than any other
+           field, so it has to be fixable without republishing. -->
+      <span class="text-label">pin</span>
+      <div class="edit-map" id="editMap"></div>
+      <p class="edit-sheet__hint" id="editCoords">tap the map to move it</p>
+
+      <!-- The cover. Same reason. -->
+      <span class="text-label">cover</span>
+      <div class="edit-cover" id="editCoverBox">
+        <img id="editCoverImg" alt="" hidden />
+        <div class="edit-cover__actions">
+          <button type="button" class="btn btn--ghost" id="editCoverPick">replace photo</button>
+          <button type="button" class="btn btn--ghost" id="editCoverClear">remove</button>
+        </div>
+      </div>
+      <input type="file" id="editCoverInput" accept="image/*" class="visually-hidden" />
+
       <p class="edit-sheet__note" id="editNote" hidden></p>
     </div>
     <div class="edit-sheet__foot">
@@ -2196,6 +2255,20 @@ function openEditSheet(ev){
      plain `going > 0` would lock the date on every brand new event
      against its own creator. What locks a date is somebody ELSE
      having made plans around it. */
+  /* ── the three fields that used to be uneditable ──────────────────
+     Pin, cover and category. Extraction gets exactly these wrong most
+     often, and an event written by magic is still the host's event. */
+  setVal('editCategory', ev.category || '');
+
+  editDraft = { lat: ev.lat ?? null, lng: ev.lng ?? null, cover: undefined };
+
+  const coverImg = document.getElementById('editCoverImg');
+  coverImg.hidden = !ev.cover;
+  if (ev.cover) coverImg.src = ev.cover;
+  document.getElementById('editCoverClear').hidden = !ev.cover;
+
+  requestAnimationFrame(() => initEditMap(ev.lat, ev.lng));
+
   const others = Math.max(0, (ev.going || 0) - (iOwn(ev.id) && Store.isGoing(ev.id) ? 1 : 0));
   const note = document.getElementById('editNote');
   note.hidden = !(others > 0);
@@ -2211,6 +2284,80 @@ function closeEditSheet(){
   document.getElementById('editSheet').hidden = true;
   editingId = null;
 }
+
+let editDraft = { lat: null, lng: null, cover: undefined };
+let editMap = null, editMarker = null;
+
+/* A second small Leaflet instance for the edit sheet. Created lazily
+   and reused, because building one per open leaks tiles. */
+function initEditMap(lat, lng){
+  const box = document.getElementById('editMap');
+  if (!box) return;
+  const centre = (lat != null && lng != null) ? [lat, lng] : [39.62, 2.65];
+  if (!editMap){
+    editMap = L.map('editMap', { zoomControl: false, attributionControl: false })
+      .setView(centre, lat != null ? 15 : 5);
+    L.tileLayer(TILE_URL(currentTiles().base), { subdomains: 'abcd', maxZoom: 19 }).addTo(editMap);
+    editMap.on('click', e => setEditPin(e.latlng.lat, e.latlng.lng));
+  } else {
+    editMap.setView(centre, lat != null ? 15 : 5);
+  }
+  setTimeout(() => editMap.invalidateSize(), 0);
+  if (lat != null && lng != null) setEditPin(lat, lng, true);
+}
+
+function setEditPin(lat, lng, quiet){
+  editDraft.lat = +lat; editDraft.lng = +lng;
+  if (editMarker) editMap.removeLayer(editMarker);
+  editMarker = L.marker([lat, lng], {
+    icon: L.divIcon({ className: '', html: '<div class="map-marker map-marker--single" style="width:18px;height:18px;"></div>', iconSize: [18, 18] })
+  }).addTo(editMap);
+  const el = document.getElementById('editCoords');
+  if (el) el.textContent = quiet ? 'tap the map to move it' : 'pin moved — save to keep it';
+}
+
+/* Replacing a cover reuses the same encode-and-upload path as creating
+   one, so there is a single definition of what a cover is. */
+async function replaceEditCover(file){
+  const note = document.getElementById('editNote');
+  try {
+    const bmp = await createImageBitmap(file);
+    const full = render(bmp, null, COVER_MAX_SIDE, 0.82);
+    const ext  = full.mime === 'image/webp' ? 'webp' : 'jpg';
+    const form = new FormData();
+    form.append('full', await canvasToBlob(full.canvas, full.mime, 0.82), 'full.' + ext);
+    const r = await fetch(WORKER_URL + '/upload', {
+      method: 'POST', headers: { 'X-Bich-Invite': readInvite() },
+      body: form, signal: AbortSignal.timeout(30000)
+    });
+    if (!r.ok) throw new Error('upload failed (' + r.status + ')');
+    const out = await r.json();
+    editDraft.cover = out.url;
+    const img = document.getElementById('editCoverImg');
+    img.src = out.url; img.hidden = false;
+    document.getElementById('editCoverClear').hidden = false;
+    note.hidden = true;
+  } catch(err){
+    note.hidden = false;
+    note.textContent = 'could not replace the cover: ' + err.message;
+  }
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#editCoverPick')) document.getElementById('editCoverInput').click();
+  if (e.target.closest('#editCoverClear')){
+    editDraft.cover = null;                       // null means "remove it"
+    const img = document.getElementById('editCoverImg');
+    img.hidden = true; img.removeAttribute('src');
+    document.getElementById('editCoverClear').hidden = true;
+  }
+});
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'editCoverInput' && e.target.files && e.target.files[0]){
+    replaceEditCover(e.target.files[0]);
+    e.target.value = '';
+  }
+});
 
 async function saveEdit(){
   if (!editingId) return;
@@ -2230,8 +2377,18 @@ async function saveEdit(){
     description: val('editDesc') || null,
     price_value: Math.max(0, Math.round((Number(val('editPrice')) || 0) * 100)),
     capacity: val('editCap') ? parseInt(val('editCap'), 10) : null,
-    ends_at: endsAt ? endsAt.toISOString() : null
+    ends_at: endsAt ? endsAt.toISOString() : null,
+    category: val('editCategory') || null
   };
+  /* Only send what actually changed. `?` semantics in the RPC mean a
+     key that is present is applied even when null, so sending these
+     unconditionally would wipe a cover the person never touched. */
+  if (editDraft.lat != null && editDraft.lng != null){
+    patch.venue_lat = editDraft.lat;
+    patch.venue_lng = editDraft.lng;
+    patch.venue_source = 'manual';
+  }
+  if (editDraft.cover !== undefined) patch.cover_url = editDraft.cover;
   if (startsAt && !Number.isNaN(startsAt.getTime())) patch.starts_at = startsAt.toISOString();
 
   btn.disabled = true; note.hidden = true;
@@ -2861,7 +3018,11 @@ const Store = {
     invite: '',
     pendingAttend: {},  // { shortId: {going, at} } — both directions
     home: null,         // { slug } — which community the feed centres on
-    tokens: {}          // { shortId: editToken } — proof we made it
+    tokens: {},         // { shortId: editToken } — legacy, pre-schema-13
+    secret: null,       // one per person; proves ownership of everything
+    secretClaimed: false,
+    passkey: false,          // a credential exists for this account
+    passkeyDeclined: false   // asked once, said no; do not ask again
   },
 
   load() {
@@ -2899,7 +3060,6 @@ const Store = {
     else    delete this.data.going[id];
     this.save();
   },
-  markAttended(id) { this.data.attended[id] = new Date().toISOString(); this.save(); },
   addHosting(id)   {
     if (!this.data.hosting.includes(id)) { this.data.hosting.push(id); this.save(); }
   },
@@ -3082,6 +3242,52 @@ async function sha256Hex(text){
   return Array.from(new Uint8Array(buf), x => x.toString(16).padStart(2, '0')).join('');
 }
 
+/* ── the device secret ─────────────────────────────────────────────
+   One secret per PERSON, replacing one token per event. Generated once
+   on this device, hashed into users.device_secret_hash, and it is what
+   proves an event is yours when editing or cancelling.
+
+   Why this replaced per-event tokens: those lived only in localStorage,
+   so losing browser storage lost the ability to edit or cancel your own
+   events forever — and a missing token is why "cancel event" simply
+   failed. One secret is also all a passkey has to restore later to give
+   somebody their entire history back.
+
+   Why a secret at all rather than the bare uuid: users has an open
+   select policy, so every user id is publicly listable. A uuid alone
+   would let anyone who can list users edit anyone's events. */
+function deviceSecret(){
+  let sec = Store.data.secret;
+  if (!sec){
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    sec = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    Store.set({ secret: sec });
+  }
+  return sec;
+}
+
+/* Attach it to the account. Idempotent: the RPC refuses to overwrite an
+   existing secret and returns true only when it already matches, so a
+   second device cannot silently take over an account. */
+async function claimDeviceSecret(){
+  if (!SB_READY()) return false;
+  await ensureUser();
+  if (!CURRENT_USER.id) return false;
+  if (Store.data.secretClaimed) return true;
+  try {
+    const ok = await sbRpc('claim_device_secret', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    });
+    if (ok) Store.set({ secretClaimed: true });
+    else console.warn('[bich] this account already has a different secret on another device');
+    return Boolean(ok);
+  } catch(err){
+    console.warn('[bich] could not claim device secret', err);
+    return false;
+  }
+}
+
 function tokenFor(shortId){ return (Store.data.tokens || {})[shortId] || null; }
 function rememberToken(shortId, token){
   const t = Object.assign({}, Store.data.tokens || {});
@@ -3178,6 +3384,17 @@ function canvasToBlob(canvas, mime, quality){
    this is the only way a row can change - which is what closed the
    hole where anyone could rewrite any upcoming event. */
 async function updateEvent(shortId, patch){
+  /* Ownership is now per person. Falls back to the old per-event token
+     for anything published before schema 13, so nobody's existing
+     events become uneditable on upgrade. */
+  await claimDeviceSecret();
+  if (CURRENT_USER.id && Store.data.secretClaimed){
+    const row = await sbRpc('update_event_as', {
+      p_short_id: shortId, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_patch: patch
+    });
+    return Array.isArray(row) ? row[0] : row;
+  }
   const token = tokenFor(shortId);
   if (!token) throw new Error('this device did not create that event');
   const row = await sbRpc('update_event', {
@@ -3187,10 +3404,18 @@ async function updateEvent(shortId, patch){
 }
 
 async function cancelEvent(shortId){
+  await claimDeviceSecret();
+  const usePerson = Boolean(CURRENT_USER.id && Store.data.secretClaimed);
   const token = tokenFor(shortId);
-  if (!token){ toast('this device did not create that event'); return false; }
+  if (!usePerson && !token){ toast('this device did not create that event'); return false; }
   try {
-    await sbRpc('cancel_event', { p_short_id: shortId, p_token: token });
+    if (usePerson){
+      await sbRpc('cancel_event_as', {
+        p_short_id: shortId, p_user: CURRENT_USER.id, p_secret: deviceSecret()
+      });
+    } else {
+      await sbRpc('cancel_event', { p_short_id: shortId, p_token: token });
+    }
     forgetToken(shortId);
     const i = EVENTS.findIndex(e => e.id === shortId);
     if (i > -1) EVENTS.splice(i, 1);
@@ -3363,6 +3588,9 @@ async function saveEvent(spec){
   const row = saved[0];
   rememberToken(row.short_id, token);
   Store.addHosting(row.short_id);
+  /* Bind this person's secret on first publish. From here on every
+     event they own is editable with it, including this one. */
+  claimDeviceSecret().then(() => maybeOfferPasskey()).catch(() => {});
   /* Signal three: publishing somewhere makes it your community, every
      time, not just the first time. Deliberate enough to be silent. */
   if (spec.lat != null && spec.lng != null){
@@ -3686,29 +3914,20 @@ function setFeedStatus(text, isError, offerLocation){
   el.onclick = offerLocation ? askForLocation : null;
 }
 
-/* Only ever called from a tap. The feed never prompts on load - an
-   unexplained permission dialog before you have seen the app is how
-   people decline permanently. */
+/* REMOVED — the app no longer asks for location under ANY circumstance.
+   This was the last caller of navigator.geolocation, kept behind a
+   manual "centre the map on me" tap. Removing it turns a conditional
+   promise ("only if you press this") into an unconditional one, which
+   is the stronger and simpler thing to be able to say.
+
+   Nothing is lost: the three community signals (§8) already know
+   roughly where somebody is, and the community centre does the
+   centring instead. */
 async function askForLocation(){
-  if (!navigator.geolocation){ setFeedStatus('this browser has no location', true); return; }
-  setFeedStatus('finding you…');
-  try {
-    const pos = await new Promise((ok, no) =>
-      navigator.geolocation.getCurrentPosition(ok, no, { timeout: 10000, maximumAge: 300000 }));
-    await loadCommunities();
-    const slug = communityForCoords(pos.coords.latitude, pos.coords.longitude);
-    if (!slug){
-      setFeedStatus("we're not in your area yet — showing everywhere", false, true);
-      return;
-    }
-    Store.set({ home: { slug } });
-    await loadFeed();
-  } catch(err){
-    setFeedStatus(err.code === 1
-      ? 'location declined — showing everywhere'
-      : 'could not get your location', err.code !== 1, err.code === 1 ? false : true);
-  }
+  setFeedStatus('showing everywhere');
+  await loadFeed();
 }
+
 
 /* Two ways in, on purpose. feed() is the good one: it resolves the
    crossed paths signal per viewer inside the database. It is also the
@@ -3795,15 +4014,11 @@ async function feedAnchor(){
     const c = (KNOWN_COMMUNITIES || []).find(x => x.slug === home.slug);
     if (c) return c;
   }
-  try {
-    if (!navigator.permissions || !navigator.geolocation) return null;
-    const st = await navigator.permissions.query({ name: 'geolocation' });
-    if (st.state !== 'granted') return null;
-    const pos = await new Promise((ok, no) =>
-      navigator.geolocation.getCurrentPosition(ok, no, { timeout: 8000, maximumAge: 600000 }));
-    const slug = communityForCoords(pos.coords.latitude, pos.coords.longitude);
-    return (KNOWN_COMMUNITIES || []).find(x => x.slug === slug) || null;
-  } catch(_){ return null; }
+  /* There is deliberately no fallback here. Reading the geolocation
+     permission — even only when already granted — is still touching the
+     API, and the promise is now that this app never does. Someone with
+     no community sees everywhere, which is the correct blank state. */
+  return null;
 }
 
 async function loadFeed(){
@@ -3980,6 +4195,10 @@ function exitMeList(){
 }
 
 async function renderMe(){
+  const pkState = document.getElementById('passkeyState');
+  if (pkState && !pkState.dataset.busy){
+    pkState.textContent = Store.data.passkey ? 'passkey saved' : 'no passkey saved';
+  }
   document.getElementById('meHandle').textContent = currentHandle;
   document.getElementById('meGoing').textContent    = Object.keys(Store.data.going).length;
   document.getElementById('meAttended').textContent = Object.keys(Store.data.attended).length;
@@ -5286,18 +5505,249 @@ document.getElementById('onboardContinue').addEventListener('click', async () =>
   if (SB_READY()) ensureUser(currentHandle).catch(() => {});
 });
 
-document.getElementById('handleChip').addEventListener('click', () => {
-  // Simulate showing recovery prompt
-  const rp = document.getElementById('recoveryPrompt');
-  rp.classList.add('visible');
-  setTimeout(() => rp.classList.remove('visible'), 6000);
-});
+/* ═══════════════════════════════════════════════════════════════════
+   PASSKEYS — the client half
+
+   What this restores is ONE value: the device secret. After schema 13
+   that single string grants edit and cancel rights over everything this
+   person has published, and my_hosted() fetches the list back from
+   Postgres. So there is no history blob to encrypt, no sync protocol,
+   and no dependency on the PRF extension.
+
+   No email, no password, no phone. The WebAuthn user handle is the
+   random uuid — the spec requires it to carry no personal information —
+   and the two-word handle goes in the display fields, which is what the
+   system passkey sheet shows.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const PASSKEYS_POSSIBLE = Boolean(
+  window.PublicKeyCredential && navigator.credentials && WORKER_URL
+);
+
+const b64u = {
+  toBytes(s){
+    const p = s.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(p + '==='.slice((p.length + 3) % 4));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  },
+  fromBytes(buf){
+    const b = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+};
+
+/* Links opened inside Instagram, TikTok or Facebook land in a webview
+   where WebAuthn frequently does not work at all — and shared links are
+   exactly how people arrive here. Offering a passkey there produces a
+   failure the person cannot act on, so it is not offered. */
+function inAppBrowser(){
+  return /FBAN|FBAV|Instagram|Line\/|TikTok|Twitter/i.test(navigator.userAgent);
+}
+
+async function passkeyAvailable(){
+  if (!PASSKEYS_POSSIBLE || inAppBrowser()) return false;
+  try {
+    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch(_){ return false; }
+}
+
+async function enrolPasskey(){
+  const state = document.getElementById('passkeyState');
+  const btn = document.getElementById('mePasskey');
+  const say = m => { if (state) state.textContent = m; };
+
+  if (!await passkeyAvailable()){
+    say(inAppBrowser()
+      ? 'open this in your normal browser to save a passkey'
+      : 'this device cannot save passkeys');
+    return;
+  }
+
+  btn.disabled = true;
+  try {
+    await ensureUser();
+    if (!CURRENT_USER.id) throw new Error('no account on this device yet');
+    await claimDeviceSecret();
+
+    const begin = await fetch(WORKER_URL + '/passkey/register/begin', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: CURRENT_USER.id,
+        handle: CURRENT_USER.handle || Store.data.handle,
+        secret: deviceSecret()
+      })
+    });
+    if (!begin.ok) throw new Error((await begin.json().catch(() => ({}))).error || 'could not start');
+    const opts = await begin.json();
+
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: b64u.toBytes(opts.challenge),
+        rp: opts.rp,
+        user: {
+          id: b64u.toBytes(opts.user.id),
+          name: opts.user.name,
+          displayName: opts.user.displayName
+        },
+        pubKeyCredParams: opts.pubKeyCredParams,
+        authenticatorSelection: opts.authenticatorSelection,
+        attestation: opts.attestation,
+        excludeCredentials: (opts.excludeCredentials || [])
+          .map(c => ({ type: 'public-key', id: b64u.toBytes(c.id) })),
+        timeout: opts.timeout
+      }
+    });
+    if (!cred) throw new Error('cancelled');
+
+    /* getPublicKey() hands back SPKI directly, so the worker never has
+       to parse CBOR out of the attestation object. */
+    const spki = cred.response.getPublicKey();
+    if (!spki) throw new Error('this authenticator did not return a public key');
+
+    const finish = await fetch(WORKER_URL + '/passkey/register/finish', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challenge: opts.challenge,
+        credentialId: b64u.fromBytes(cred.rawId),
+        clientDataJSON: b64u.fromBytes(cred.response.clientDataJSON),
+        publicKey: b64u.fromBytes(spki),
+        alg: cred.response.getPublicKeyAlgorithm()
+      })
+    });
+    if (!finish.ok) throw new Error((await finish.json().catch(() => ({}))).error || 'could not save it');
+
+    Store.set({ passkey: true });
+    say('passkey saved');
+    toast('passkey saved');
+  } catch(err){
+    const cancelled = err.name === 'NotAllowedError' || /cancel/i.test(err.message || '');
+    say(cancelled ? 'no passkey saved' : 'could not save a passkey');
+    if (!cancelled) console.error('[bich] passkey enrol failed', err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function restoreFromPasskey(){
+  const state = document.getElementById('passkeyState');
+  const btn = document.getElementById('meRestore');
+  const say = m => { if (state) state.textContent = m; };
+
+  if (!await passkeyAvailable()){
+    say(inAppBrowser()
+      ? 'open this in your normal browser to restore'
+      : 'this device cannot use passkeys');
+    return;
+  }
+
+  btn.disabled = true;
+  try {
+    const begin = await fetch(WORKER_URL + '/passkey/auth/begin', { method: 'POST' });
+    if (!begin.ok) throw new Error('could not start');
+    const opts = await begin.json();
+
+    /* allowCredentials is empty: the credential is discoverable, so the
+       system sheet lists the accounts itself and nothing is typed. */
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: b64u.toBytes(opts.challenge),
+        rpId: opts.rpId,
+        allowCredentials: [],
+        userVerification: opts.userVerification,
+        timeout: opts.timeout
+      }
+    });
+    if (!assertion) throw new Error('cancelled');
+
+    const finish = await fetch(WORKER_URL + '/passkey/auth/finish', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challenge: opts.challenge,
+        credentialId: b64u.fromBytes(assertion.rawId),
+        clientDataJSON: b64u.fromBytes(assertion.response.clientDataJSON),
+        authenticatorData: b64u.fromBytes(assertion.response.authenticatorData),
+        signature: b64u.fromBytes(assertion.response.signature)
+      })
+    });
+    if (!finish.ok) throw new Error((await finish.json().catch(() => ({}))).error || 'could not verify');
+    const me = await finish.json();
+
+    /* This is the whole restore. One secret, one uid, one handle — and
+       everything else is rebuilt from Postgres below. */
+    Store.set({
+      uid: me.uid, handle: me.handle,
+      secret: me.secret, secretClaimed: true, passkey: true
+    });
+    CURRENT_USER = { id: me.uid, handle: me.handle };
+
+    await rebuildFromServer();
+    say('restored — ' + me.handle);
+    toast('welcome back, ' + me.handle);
+  } catch(err){
+    const cancelled = err.name === 'NotAllowedError' || /cancel/i.test(err.message || '');
+    if (!cancelled){
+      say('could not restore');
+      console.error('[bich] passkey restore failed', err);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* Rebuild local state from what the server already knows. Nothing is
+   synced FROM this device — Postgres has been the record all along,
+   the browser just could not prove which rows were its own. */
+async function rebuildFromServer(){
+  if (!SB_READY() || !CURRENT_USER.id) return;
+  try {
+    const mine = await sbRpc('my_hosted', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    });
+    const hosting = (mine || []).map(r => r.short_id).filter(Boolean);
+    if (hosting.length) Store.set({ hosting });
+    console.info('[bich] restored', hosting.length, 'hosted events');
+  } catch(err){
+    console.warn('[bich] could not restore hosted events', err);
+  }
+  try {
+    const going = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
+    if (Array.isArray(going) && going.length){
+      const map = {};
+      going.forEach(g => { if (g && g.short_id) map[g.short_id] = new Date().toISOString(); });
+      Store.set({ going: map });
+    }
+  } catch(_){ /* my_going has an older signature in some schema versions */ }
+  await loadFeed();
+  renderMe();
+}
+
+document.getElementById('mePasskey')?.addEventListener('click', enrolPasskey);
+document.getElementById('meRestore')?.addEventListener('click', restoreFromPasskey);
+
 document.getElementById('acceptPasskey')?.addEventListener('click', () => {
   document.getElementById('recoveryPrompt').classList.remove('visible');
+  enrolPasskey();
 });
 document.getElementById('dismissPasskey')?.addEventListener('click', () => {
   document.getElementById('recoveryPrompt').classList.remove('visible');
+  Store.set({ passkeyDeclined: true });
 });
+
+/* Offered once, after somebody has something worth keeping — never on
+   arrival, where an unexplained prompt gets refused permanently. */
+async function maybeOfferPasskey(){
+  if (Store.data.passkey || Store.data.passkeyDeclined) return;
+  const worthKeeping = (Store.data.hosting || []).length > 0
+    || Object.keys(Store.data.going || {}).length >= 2;
+  if (!worthKeeping) return;
+  if (!await passkeyAvailable()) return;
+  const rp = document.getElementById('recoveryPrompt');
+  if (rp) rp.classList.add('visible');
+}
 
 /* Both bars use the same .map-chip class, so a global querySelectorAll
    bound the date handler to the CATEGORY chips too: tapping "wellness"
