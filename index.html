@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-09" />
+  <meta name="app-version" content="2026-07-26-11" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -708,6 +708,12 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 .magic-btn[aria-pressed="true"] .magic-btn__spark { opacity: 1; }
 .magic-btn[aria-pressed="true"] .magic-btn__hint { color: var(--accent); }
+
+.detail-stats {
+  font-family: var(--font-mono); font-size: 0.6rem;
+  letter-spacing: 0.05em; color: var(--muted);
+  margin: 0 0 10px; line-height: 1.5;
+}
 
 .detail-owner { display: flex; gap: 8px; margin-top: 24px; }
 .detail-owner__btn {
@@ -1801,6 +1807,9 @@ if ('serviceWorker' in navigator) {
       </div>
     </div>
 
+    <!-- Host only. Counts, never names — see event_stats in schema 14. -->
+    <p class="detail-stats" id="detailStats" hidden></p>
+
     <div class="detail-owner" id="detailOwner" hidden>
       <button type="button" class="detail-owner__btn" id="editEventBtn">edit this event</button>
       <button type="button" class="detail-owner__btn detail-owner__btn--bad" id="cancelEventBtn">cancel it</button>
@@ -2432,13 +2441,255 @@ function openDetail(id) {
   // remember what is open so the attend button knows what it acts on
   window._openEventId = e.id;
   paintAttendButton(Store.isGoing(e.id));
-  document.getElementById('detailOwner').hidden = !iOwn(e.id);
+
+  const mine = iOwn(e.id);
+  document.getElementById('detailOwner').hidden = !mine;
+  document.getElementById('detailStats').hidden = !mine;
   document.getElementById('detailScreen').classList.add('visible');
+
+  /* Deduped server side, so opening the same event four times is one
+     interested person rather than four. Never blocks the paint and
+     never surfaces an error — a failed count is not worth a toast. */
+  recordVisit(e.id);
+  if (mine) loadEventStats(e.id);
 
   // then fill in what the lean feed row did not carry
   enrichEvent(e).then(full => {
     if (window._openEventId === full.id) paintDetail(full);
   });
+}
+
+/* Postgres is the record for who is going; localStorage was only ever a
+   guess at it. Reading the truth back on launch is what stops a lit
+   "you're going" button sitting beside a count of zero — the two halves
+   have never been reconciled until now, because my_going() was written
+   in schema 5 and called from nowhere. */
+async function syncGoingFromServer(){
+  if (!SB_READY() || !CURRENT_USER.id) return false;
+  try {
+    const rows = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
+    if (!Array.isArray(rows)) return false;
+    const map = {};
+    rows.forEach(r => {
+      if (r && r.short_id) map[r.short_id] = (Store.data.going || {})[r.short_id] || new Date().toISOString();
+    });
+    Store.set({ going: map });
+    if (window._openEventId) paintAttendButton(Boolean(map[window._openEventId]));
+    console.info('[bich] going list synced:', Object.keys(map).length);
+    return true;
+  } catch(err){
+    console.warn('[bich] could not sync going list', err);
+    return false;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   THE COVER QUEUE
+
+   The problem it solves:
+
+     Publishing does two network calls — the photo to R2, the row to
+     Supabase. If the first fails and the second succeeds, the event
+     goes live permanently without its photo, and the encoded image is
+     thrown away when the create sheet resets. The person is told, and
+     there is nothing they can do about it.
+
+     That is not rare. Cloudflare having a bad minute, a phone dropping
+     to one bar in a basement venue, a captive-portal wifi that answers
+     every request with a login page — all produce it.
+
+   How it works:
+
+     Publish never waits for R2 to be healthy. If the upload fails, the
+     encoded bytes go into IndexedDB against the event's short id, the
+     event publishes anyway, and the queue drains on the next launch
+     with a working connection — patching cover_url through
+     update_event_as, which is exactly what ownership-by-person made
+     possible.
+
+   Why IndexedDB and not localStorage:
+
+     localStorage holds strings, caps out around 5MB, and is
+     synchronous — writing a 180KB image to it means base64 (a third
+     bigger again) and a blocked main thread. IndexedDB stores Blobs
+     natively, has room, and is async.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const COVER_DB = 'bich-covers';
+const COVER_STORE = 'pending';
+
+function coverDb(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(COVER_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(COVER_STORE)){
+        db.createObjectStore(COVER_STORE, { keyPath: 'shortId' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror  = () => reject(req.error);
+  });
+}
+
+async function coverTx(mode, fn){
+  const db = await coverDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(COVER_STORE, mode);
+    const store = tx.objectStore(COVER_STORE);
+    let out;
+    try { out = fn(store); } catch(err){ reject(err); return; }
+    tx.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+    tx.onerror    = () => reject(tx.error);
+  });
+}
+
+/* Called when an upload failed but the event saved. Holds the actual
+   Blob, so nothing has to be re-encoded later. */
+async function queueCover(shortId, blob, filename){
+  try {
+    await coverTx('readwrite', store => store.put({
+      shortId, blob, filename,
+      queuedAt: new Date().toISOString(),
+      attempts: 0
+    }));
+    console.info('[bich] cover queued for', shortId);
+    return true;
+  } catch(err){
+    console.warn('[bich] could not queue the cover', err);
+    return false;
+  }
+}
+
+async function pendingCovers(){
+  try {
+    return await new Promise((resolve, reject) => {
+      coverDb().then(db => {
+        const tx = db.transaction(COVER_STORE, 'readonly');
+        const req = tx.objectStore(COVER_STORE).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror   = () => reject(req.error);
+      }).catch(reject);
+    });
+  } catch(_){ return []; }
+}
+
+async function dropCover(shortId){
+  try { await coverTx('readwrite', store => store.delete(shortId)); } catch(_){}
+}
+
+/* Drains the queue. Called on launch and whenever the browser says the
+   connection came back. Silent on failure — this runs in the
+   background and a person who is offline does not need telling twice. */
+async function syncPendingCovers(){
+  if (!navigator.onLine || !SB_READY() || !WORKER_URL) return;
+
+  const queued = await pendingCovers();
+  if (!queued.length) return;
+
+  await claimDeviceSecret();
+  if (!CURRENT_USER.id || !Store.data.secretClaimed){
+    console.warn('[bich] cannot patch covers without an owned account yet');
+    return;
+  }
+
+  for (const item of queued){
+    /* Give up eventually. A blob that has failed ten times is failing
+       for a reason that retrying will not fix, and keeping it forever
+       just fills the person's storage quota. */
+    if (item.attempts >= 10){
+      console.warn('[bich] giving up on the cover for', item.shortId);
+      await dropCover(item.shortId);
+      continue;
+    }
+
+    try {
+      const form = new FormData();
+      form.append('full', item.blob, item.filename || 'full.webp');
+
+      const r = await fetch(WORKER_URL + '/upload', {
+        method: 'POST',
+        headers: { 'X-Bich-Invite': readInvite() },
+        body: form,
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!r.ok) throw new Error('upload failed (' + r.status + ')');
+      const out = await r.json();
+      if (!out || !out.url) throw new Error('worker replied without a url');
+
+      await sbRpc('update_event_as', {
+        p_short_id: item.shortId,
+        p_user: CURRENT_USER.id,
+        p_secret: deviceSecret(),
+        p_patch: { cover_url: out.url }
+      });
+
+      await dropCover(item.shortId);
+      console.info('[bich] cover caught up for', item.shortId);
+
+      // repaint if that event is on screen
+      const ev = EVENTS.find(e => e.id === item.shortId);
+      if (ev){
+        ev.cover = out.url;
+        renderBundles();
+        if (window._openEventId === item.shortId) openDetail(item.shortId);
+      }
+    } catch(err){
+      item.attempts = (item.attempts || 0) + 1;
+      await coverTx('readwrite', store => store.put(item)).catch(() => {});
+      console.warn('[bich] cover retry', item.attempts, 'failed for', item.shortId, err.message);
+      /* One failure means the network or the bucket is unhappy right
+         now; hammering the rest of the queue will not go better. */
+      break;
+    }
+  }
+}
+
+window.addEventListener('online', () => { syncPendingCovers(); });
+
+
+/* ── visits ────────────────────────────────────────────────────────
+   "Going" and "visited" answer different questions, and until now the
+   app could only answer the first — so a host with a quiet event could
+   not tell whether nobody was interested or nobody had seen it. Same
+   zero, opposite meanings. */
+async function recordVisit(shortId){
+  if (!SB_READY() || !shortId) return;
+  try {
+    await ensureUser();
+    if (!CURRENT_USER.id) return;
+    await sbRpc('record_visit', { p_short_id: shortId, p_user: CURRENT_USER.id });
+  } catch(_){ /* a missed count is not worth interrupting anyone for */ }
+}
+
+/* Counts, never names — and "never" includes the host. Somebody who can
+   see exactly which handles are coming to a six person dinner knows who
+   each of them is, so event_stats returns five integers and no
+   identifiers at all. */
+async function loadEventStats(shortId){
+  const box = document.getElementById('detailStats');
+  if (!box) return;
+  box.textContent = '';
+  if (!SB_READY()) return;
+  try {
+    await claimDeviceSecret();
+    if (!CURRENT_USER.id || !Store.data.secretClaimed) return;
+    const rows = await sbRpc('event_stats', {
+      p_short_id: shortId, p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    });
+    const st = Array.isArray(rows) ? rows[0] : rows;
+    if (!st) return;
+    const bits = [
+      `${st.visitors} ${st.visitors === 1 ? 'person has' : 'people have'} looked`,
+      `${st.going} going`
+    ];
+    if (st.attended)  bits.push(`${st.attended} attended`);
+    if (st.cancelled) bits.push(`${st.cancelled} changed their mind`);
+    if (st.repeat_visits) bits.push(`${st.repeat_visits} came back for another look`);
+    box.textContent = bits.join(' · ');
+  } catch(err){
+    console.warn('[bich] could not load stats', err);
+  }
 }
 
 /* The going state lives in the local store, so it survives a refresh,
@@ -3299,7 +3550,21 @@ function forgetToken(shortId){
   delete t[shortId];
   Store.set({ tokens: t });
 }
-function iOwn(shortId){ return Boolean(tokenFor(shortId)); }
+/* THE cancel bug. This used to be `Boolean(tokenFor(shortId))` — a
+   check for a per-event token. But ownership moved to the person in
+   schema 13, and tokens are exactly the thing that cannot be recovered:
+   a device restored from a passkey gets its hosting list back and no
+   tokens at all.
+
+   Because detailOwner is hidden when this returns false, the effect was
+   not "cancel fails" but "the cancel and edit buttons are not on the
+   screen" — which is why cancelling appeared to do nothing rather than
+   to error. The hosting list is the real answer; the token stays as a
+   fallback for events published before schema 13. */
+function iOwn(shortId){
+  if ((Store.data.hosting || []).includes(shortId)) return true;
+  return Boolean(tokenFor(shortId));
+}
 
 async function sbInsert(table, row){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
@@ -3417,6 +3682,9 @@ async function cancelEvent(shortId){
       await sbRpc('cancel_event', { p_short_id: shortId, p_token: token });
     }
     forgetToken(shortId);
+    /* iOwn() now reads the hosting list, so leaving the id there would
+       keep showing owner controls for an event that no longer exists. */
+    Store.set({ hosting: (Store.data.hosting || []).filter(x => x !== shortId) });
     const i = EVENTS.findIndex(e => e.id === shortId);
     if (i > -1) EVENTS.splice(i, 1);
     renderBundles();
@@ -3649,8 +3917,13 @@ async function uploadCover(){
   try {
     const full = render(sourceBitmap, draft.crop, COVER_MAX_SIDE, 0.82);
     const ext  = full.mime === 'image/webp' ? 'webp' : 'jpg';
+    const blob = await canvasToBlob(full.canvas, full.mime, 0.82);
+    /* Kept so publish can queue these exact bytes if the upload fails.
+       Re-encoding later is not an option: sourceBitmap is closed and
+       the original file is long gone by then. */
+    window._lastCoverBlob = { blob, filename: 'full.' + ext };
     form = new FormData();
-    form.append('full', await canvasToBlob(full.canvas, full.mime, 0.82), 'full.' + ext);
+    form.append('full', blob, 'full.' + ext);
   } catch(err){
     window._lastUploadError = 'could not encode the image: ' + err.message;
     console.error('[bich] cover not uploaded:', window._lastUploadError);
@@ -5408,15 +5681,23 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
 
       if (img) ev.cover = img.url;      // one size, so one field
       else if (draft.cover) {
-        // The bucket is not reachable. Say so rather than showing a
-        // picture that will vanish on the next refresh.
-        coverNotice.className = 'cover-notice show err';
-        coverNotice.textContent = 'published, but the cover did not upload — '
-          + (window._lastUploadError || 'reason unknown, see the console');
-        /* The sheet used to close 900ms later and wipe this message,
-           so nobody ever read it. Hold the sheet open instead and let
-           them dismiss it themselves. */
-        coverFailed = true;
+        /* The bucket is unreachable, but the event is live and the
+           bytes are still in memory. Keep them rather than throwing
+           the photo away — the queue uploads it on the next launch
+           with a working connection and patches cover_url in. */
+        const held = window._lastCoverBlob;
+        const queued = held
+          ? await queueCover(ev.id, held.blob, held.filename)
+          : false;
+
+        coverNotice.className = queued ? 'cover-notice show' : 'cover-notice show err';
+        coverNotice.textContent = queued
+          ? 'published. the photo will upload by itself once the connection is back.'
+          : 'published, but the cover did not upload — '
+            + (window._lastUploadError || 'reason unknown, see the console');
+        /* Only hold the sheet open when the photo is genuinely lost.
+           A queued cover needs no decision from anybody. */
+        coverFailed = !queued;
       }
     } catch(err){
       btn.disabled = false;
@@ -5714,13 +5995,8 @@ async function rebuildFromServer(){
     console.warn('[bich] could not restore hosted events', err);
   }
   try {
-    const going = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
-    if (Array.isArray(going) && going.length){
-      const map = {};
-      going.forEach(g => { if (g && g.short_id) map[g.short_id] = new Date().toISOString(); });
-      Store.set({ going: map });
-    }
-  } catch(_){ /* my_going has an older signature in some schema versions */ }
+    await syncGoingFromServer();
+  } catch(_){ /* older schema, no my_going with this signature */ }
   await loadFeed();
   renderMe();
 }
@@ -5846,6 +6122,12 @@ wireVenueSearch();
   await ensureUser().catch(err => console.warn('[bich] user setup failed', err));
   await loadFeed();
   await syncAttendance();
+  /* Push anything pending FIRST, then read the truth back — the other
+     order would overwrite an offline tap with a stale server answer. */
+  await syncGoingFromServer();
+  /* Anything whose photo never made it to R2 gets another go now.
+     Runs unawaited: a slow bucket must not delay the first paint. */
+  syncPendingCovers();
   await openDeepLink();
 })();
 </script>
