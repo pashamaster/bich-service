@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-17" />
+  <meta name="app-version" content="2026-07-26-18" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1194,12 +1194,79 @@ body { display: flex; align-items: center; justify-content: center; }
   display: flex; gap: var(--space-sm);
   z-index: 10;
 }
+/* ── keeping overlays inside the phone frame on a desktop ──────────
+   .phone-stage caps the app at 420px, but every full-screen overlay is
+   `position: fixed; inset: 0`, and fixed positions resolve against the
+   VIEWPORT, not that container. So on a wide monitor they all escaped
+   the frame and spanned the whole window.
+
+   The detail hero made it obvious: it is `aspect-ratio: 4 / 3`, so at
+   1920px wide it rendered 1440px tall — a cover photo taller than the
+   screen, with the title somewhere below the fold.
+
+   Everything fixed is pinned to the same 420px column, centred the same
+   way .phone-stage is. .detail-actions already had this treatment;
+   nothing else did. */
 @media (min-width: 480px) {
+  .detail-screen,
+  .modal,
+  .modal-overlay,
+  .edit-sheet,
+  .cropper,
+  .onboard,
+  .pin-list,
+  .bulk-result,
+  .recovery-prompt,
   .detail-actions {
+    left: 50%;
+    right: auto;
+    width: 100%;
     max-width: 420px;
-    margin: 0 auto;
-    position: absolute;
+    transform: translateX(-50%);
+    margin: 0;
   }
+
+  /* The frame has rounded corners and a 20px margin; an overlay sitting
+     square against the viewport edge breaks the illusion. */
+  .detail-screen,
+  .modal,
+  .cropper,
+  .onboard {
+    top: 20px;
+    bottom: 20px;
+    height: auto;
+    max-height: 920px;
+    border-radius: 36px;
+    overflow: hidden;
+  }
+
+  /* Bottom sheets stay at the bottom of the COLUMN, not the window. */
+  .pin-list,
+  .bulk-result,
+  .detail-actions {
+    bottom: 20px;
+  }
+
+  /* The scrim is the one thing that SHOULD cover everything — dimming
+     only a 420px strip while the rest of the page stays bright looks
+     like a rendering fault. */
+  .modal-overlay,
+  .edit-sheet {
+    left: 0; right: 0;
+    width: auto; max-width: none;
+    transform: none;
+  }
+
+  /* A hero taller than it is wide is a phone shape. Given a fixed
+     column width, cap the height so the title is always visible
+     without scrolling. */
+  .detail-hero { max-height: 46vh; }
+
+  /* The fab is already centred on the viewport, which is where the
+     frame is too — so its horizontal position needs no help. It does
+     need to clear the frame's 20px bottom margin, or it floats over
+     the rounded corner instead of inside it. */
+  .fab { bottom: 110px; }
 }
 .btn--attend {
   flex: 1;
@@ -1967,6 +2034,9 @@ if ('serviceWorker' in navigator) {
 const WORDS_A = ['slide','oak','wisp','bram','linen','clove','flint','moss','rye','sage','vale','dusk','reed','dune','ivy','silk','wren','plume','tide','cove','elm','fawn','glen','heath','jade','lark','marsh','nook','onyx','pine'];
 const WORDS_B = ['tem','fern','toad','lin','star','blue','hum','low','dim','spar','tune','wave','rest','glow','flow','cast','tide','hush','arc','vow','peak','calm','wild','soft','near','far','quill','myrrh','seam','flax'];
 
+/* Kept only as an offline / older-database fallback. The real
+   vocabulary is public.handle_words, which grows with an INSERT
+   instead of a redeploy — see schema 17. */
 function genHandle() {
   return WORDS_A[Math.floor(Math.random()*WORDS_A.length)] + ' ' +
          WORDS_B[Math.floor(Math.random()*WORDS_B.length)];
@@ -3590,19 +3660,43 @@ async function ensureUser(handle){
   }
   if (CURRENT_USER.id) return CURRENT_USER;
   if (!SB_READY()) return CURRENT_USER;
-  let name = handle || currentHandle;
-  for (let attempt = 0; attempt < 4; attempt++){
-    try {
-      const rows = await sbInsert('users', { handle: name });
-      CURRENT_USER = { id: rows[0].id, handle: rows[0].handle };
-      Store.set({ uid: CURRENT_USER.id, handle: CURRENT_USER.handle });
+
+  /* The DATABASE names the account now. It is the only party that knows
+     which handles are taken, so collision handling belongs there rather
+     than in a retry loop on a phone — the old version tried four times
+     against a 900-name pool and then gave up SILENTLY, leaving
+     CURRENT_USER.id null. Every attendance write, community signal and
+     ownership claim is skipped when that happens, with no error
+     anywhere. That was the worst failure mode in the app. */
+  try {
+    const rows = await sbRpc('create_account', {});
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    if (row && row.id){
+      CURRENT_USER = { id: row.id, handle: row.handle };
+      Store.set({ uid: row.id, handle: row.handle });
       return CURRENT_USER;
-    } catch(err){
-      if (err.status !== 409) throw err;    // 409 = handle taken
-      name = genHandle();
     }
+    throw new Error('create_account returned nothing');
+  } catch(err){
+    /* Older database without schema 17, or the words table is empty.
+       Fall back to the built-in list so a deploy-order mismatch cannot
+       stop somebody using the app. */
+    console.warn('[bich] create_account unavailable, using the local word list', err.message);
+    let name = handle || currentHandle;
+    for (let attempt = 0; attempt < 6; attempt++){
+      try {
+        const rows = await sbInsert('users', { handle: name });
+        CURRENT_USER = { id: rows[0].id, handle: rows[0].handle };
+        Store.set({ uid: CURRENT_USER.id, handle: CURRENT_USER.handle });
+        return CURRENT_USER;
+      } catch(e2){
+        if (e2.status !== 409) { console.error('[bich] could not create an account', e2); return CURRENT_USER; }
+        name = genHandle();
+      }
+    }
+    console.error('[bich] every handle attempt collided — nothing will save until this is fixed');
+    return CURRENT_USER;
   }
-  return CURRENT_USER;
 }
 
 /* Insert straight into Supabase with the publishable key. The row
