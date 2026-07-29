@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-11" />
+  <meta name="app-version" content="2026-07-26-12" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3886,6 +3886,12 @@ function explainWriteError(err){
 
 async function uploadCover(){
   window._lastUploadError = null;
+  /* Cleared FIRST, every time. This holds the encoded bytes so publish
+     can queue them when the upload fails — but left over from a
+     previous publish it would queue the WRONG photo against the new
+     event, and every early return below skips the point where it gets
+     set. */
+  window._lastCoverBlob = null;
 
   if (!WORKER_URL){
     window._lastUploadError = 'no worker url configured (check /config.js)';
@@ -5693,8 +5699,17 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         coverNotice.className = queued ? 'cover-notice show' : 'cover-notice show err';
         coverNotice.textContent = queued
           ? 'published. the photo will upload by itself once the connection is back.'
-          : 'published, but the cover did not upload — '
+          : 'published, but the photo could not be kept — '
             + (window._lastUploadError || 'reason unknown, see the console');
+        if (!queued){
+          /* Distinguish the two failures in the console, because they
+             have completely different causes: no bytes to keep means
+             uploadCover bailed before encoding, a queue refusal means
+             IndexedDB is unavailable (private mode on some browsers). */
+          console.error('[bich] cover lost.', held
+            ? 'IndexedDB refused the queue write'
+            : 'nothing was encoded — uploadCover returned early: ' + window._lastUploadError);
+        }
         /* Only hold the sheet open when the photo is genuinely lost.
            A queued cover needs no decision from anybody. */
         coverFailed = !queued;
