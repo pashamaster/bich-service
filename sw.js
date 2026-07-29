@@ -16,7 +16,7 @@
    Bump CACHE_VERSION on every release. That is the whole ritual.
    ══════════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = '2026-07-26-15';
+const CACHE_VERSION = '2026-07-26-17';
 const CACHE = `bich-${CACHE_VERSION}`;
 
 self.addEventListener('install', (e) => {

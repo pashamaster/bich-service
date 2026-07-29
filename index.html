@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-15" />
+  <meta name="app-version" content="2026-07-26-17" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2316,14 +2316,15 @@ let editMap = null, editMarker = null;
 function initEditMap(lat, lng){
   const box = document.getElementById('editMap');
   if (!box) return;
-  const centre = (lat != null && lng != null) ? [lat, lng] : [39.62, 2.65];
+  const h = mapHome();
+  const centre = (lat != null && lng != null) ? [lat, lng] : [h.lat, h.lng];
   if (!editMap){
     editMap = L.map('editMap', { zoomControl: false, attributionControl: false })
-      .setView(centre, lat != null ? 15 : 5);
+      .setView(centre, lat != null ? 15 : h.zoom);
     L.tileLayer(TILE_URL(currentTiles().base), { subdomains: 'abcd', maxZoom: 19 }).addTo(editMap);
     editMap.on('click', e => setEditPin(e.latlng.lat, e.latlng.lng));
   } else {
-    editMap.setView(centre, lat != null ? 15 : 5);
+    editMap.setView(centre, lat != null ? 15 : h.zoom);
   }
   setTimeout(() => editMap.invalidateSize(), 0);
   if (lat != null && lng != null) setEditPin(lat, lng, true);
@@ -3000,17 +3001,22 @@ function initMap() {
      world got the Mediterranean. fitBounds in paintMap() takes over
      as soon as there is anything to frame; this is only what shows
      during the first paint. */
-  const home = (KNOWN_COMMUNITIES || []).find(c =>
-    c.slug === (Store.data.home && Store.data.home.slug));
+  const h = mapHome();
   /* Leaflet's +/- overlaps the first filter chip on a narrow screen,
      and pinch already does the job on touch. Keep it for a mouse. */
   const wantsZoomControl = !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches);
   const map = L.map('map', {
-    center: home && home.centre_lat != null ? [home.centre_lat, home.centre_lng] : [39.62, 2.65],
-    zoom: 10,
+    center: [h.lat, h.lng],
+    zoom: h.zoom,
     zoomControl: wantsZoomControl,
     attributionControl: true
   });
+  window._map = map;
+
+  /* Once somebody moves the map themselves, stop moving it for them.
+     A view that jumps back the moment communities finish loading feels
+     like the app fighting you. */
+  map.on('dragstart zoomstart', () => { map._userHasPanned = true; });
 
   // NOTE: For production, swap to Protomaps self-hosted or Stadia per spec.
   // This is dev-only use of OSM public tiles for the prototype.
@@ -3197,13 +3203,84 @@ function paintMap(){
   const shape = [...byPin.keys()].sort().join('|');
   const moved = shape !== window._mapShape;
   window._mapShape = shape;
-  if (rows.length && moved){
-    map.fitBounds(rows.map(e => [e.lat, e.lng]), { padding: [40, 40], maxZoom: 14 });
-  } else {
-    const home = (KNOWN_COMMUNITIES || []).find(c =>
-      c.slug === (Store.data.home && Store.data.home.slug));
-    if (home && home.centre_lat != null) map.setView([home.centre_lat, home.centre_lng], 10);
+  const h = mapHome();
+
+  /* Frame the events — but only the ones near home. Without this a
+     single event on another continent drags the whole view out to
+     ocean, and somebody in Canggu opens the map to see the Pacific.
+     Home always wins when the two disagree. */
+  const nearHome = rows.filter(e =>
+    Math.abs(e.lat - h.lat) < 3 && Math.abs(e.lng - h.lng) < 3);
+
+  if (nearHome.length && moved){
+    map.fitBounds(nearHome.map(e => [e.lat, e.lng]), { padding: [40, 40], maxZoom: 14 });
+  } else if (!map._userHasPanned){
+    map.setView([h.lat, h.lng], h.zoom);
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   WHERE THE MAP OPENS
+
+   Three rules, in order:
+
+     1. the person's community, if they have one
+     2. otherwise Bali, the app's starting ground
+     3. events currently loaded can override 1 and 2 by fitting bounds,
+        but only when they are actually near home — see paintMap()
+
+   The old fallback was 39.62, 2.65, which is Mallorca. Everyone
+   without a community — every brand new visitor, on their very first
+   screen — was dropped in the western Mediterranean.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const HOME_FALLBACK = {
+  name: 'bali',
+  lat: -8.4095, lng: 115.1889,   // centre of the island
+  radius_km: 60
+};
+
+function homeCommunity(){
+  const slug = Store.data.home && Store.data.home.slug;
+  if (!slug) return null;
+  return (KNOWN_COMMUNITIES || []).find(c => c.slug === slug) || null;
+}
+
+/* A single hardcoded zoom cannot serve both a village and an island.
+   At 10 a hamlet is a green field with one dot in it, and an island is
+   half off the screen. Derived from the community's own radius, which
+   default_radius_for() already sets by place type. */
+function zoomForRadius(km){
+  const r = Math.max(Number(km) || 15, 1);
+  return Math.min(14, Math.max(8, Math.round(15 - Math.log2(r))));
+}
+
+/* Where a map should open right now. Always returns something. */
+function mapHome(){
+  const c = homeCommunity();
+  if (c && c.centre_lat != null && c.centre_lng != null){
+    return {
+      lat: c.centre_lat, lng: c.centre_lng,
+      zoom: zoomForRadius(c.radius_km),
+      name: c.name, known: true
+    };
+  }
+  return {
+    lat: HOME_FALLBACK.lat, lng: HOME_FALLBACK.lng,
+    zoom: zoomForRadius(HOME_FALLBACK.radius_km),
+    name: HOME_FALLBACK.name, known: false
+  };
+}
+
+/* Communities load asynchronously, so the map can be built before the
+   person's own community is known. Rather than leave them looking at
+   the wrong island, recentre once it arrives — but only if they have
+   not already panned somewhere themselves. */
+function recentreMapOnHome(){
+  const map = window._map;
+  if (!map || map._userHasPanned) return;
+  const h = mapHome();
+  map.setView([h.lat, h.lng], h.zoom);
 }
 
 /* ─── CREATE EVENT MODAL ─── */
@@ -3230,7 +3307,9 @@ let miniMarker = null;
 function initMiniMap() {
   if (window._miniReady) return;
   const m = L.map('miniMap', {
-    center: [39.62, 2.65], zoom: 10,
+    /* Same home as the main map. Opening the pin picker on the wrong
+       island means every single event starts with a pan. */
+    center: [mapHome().lat, mapHome().lng], zoom: mapHome().zoom,
     zoomControl: false, attributionControl: false
   });
   window._miniBase = L.tileLayer(TILE_URL(currentTiles().base), {
@@ -3673,7 +3752,19 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
       name: name.slice(0, 200), lat, lng,
       city: city || null,
       community_slug: communitySlug || null,
-      source: fromPhoto ? 'photo' : 'manual'
+      address: draft.venueAddress || null,
+      /* Keep the provenance. A venue picked off the map is a different
+         record from one somebody typed, and the OSM id is what makes
+         unique(source, source_id) deduplicate — without it Postgres
+         allows unlimited nulls and the same bar gets a row per publish.
+         The insert policy in schema 16 requires the id for source
+         'osm', so falling back to 'manual' without one is not a
+         cosmetic choice: it is the difference between saving and being
+         refused. */
+      source: (draft.venueSource === 'osm' && draft.venueOsmId)
+                ? 'osm' : (fromPhoto ? 'photo' : 'manual'),
+      source_id: (draft.venueSource === 'osm' && draft.venueOsmId)
+                ? draft.venueOsmId : null
     });
     return (rows && rows[0] && rows[0].id) || null;
   } catch(err){
@@ -4703,6 +4794,7 @@ async function adoptCommunity(lat, lng, signal){
 
   Store.set({ home: { slug, name: place.name, via: signal } });
   KNOWN_COMMUNITIES = null;                               // refetch, it may be new
+  loadCommunities().then(() => recentreMapOnHome()).catch(() => {});
   console.info(`[bich] community → ${slug} (${COMMUNITY_SIGNALS[signal] || signal})`);
 
   /* Moving somebody's whole feed because a friend sent them a link is
@@ -4784,6 +4876,57 @@ async function searchVenues(q){
   } catch(_){ return []; }
 }
 
+/* Venue names come from OpenStreetMap now, which means they are
+   arbitrary strings from a public wiki going straight into innerHTML.
+   Escape them. */
+function escapeAttr(v){
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* OpenStreetMap, via the worker. Suggestions only — the venue book is
+   still the app's own, and publishing writes to it, so a place somebody
+   here has used before always outranks a stranger from OSM. */
+async function searchPlaces(q){
+  if (!WORKER_URL || q.trim().length < 2) return [];
+  const lat = draft.lat ?? draft.photoLat ?? null;
+  const lng = draft.lng ?? draft.photoLng ?? null;
+  const near = (lat != null && lng != null) ? `&lat=${lat}&lng=${lng}` : '';
+  try {
+    const r = await fetch(`${WORKER_URL}/places?q=${encodeURIComponent(q.trim())}${near}`);
+    if (!r.ok) return [];
+    const out = await r.json();
+    return (out && out.places) || [];
+  } catch(_){ return []; }
+}
+
+/* Local first, always. A place three people here have published to is a
+   better answer than whatever OSM ranks highest, and the two lists
+   overlap constantly — the same bar under a slightly different name and
+   a few metres away. Matching on name AND proximity catches that
+   without merging two genuinely different places that share a name. */
+function mergeVenueHits(local, remote){
+  const seen = (local || []).map(v => ({
+    id: v.id, name: v.name, address: v.city || null,
+    lat: v.lat, lng: v.lng, uses: v.use_count || 0, source: 'local'
+  }));
+
+  const isDuplicate = (p) => seen.some(v =>
+    v.name.trim().toLowerCase() === p.name.trim().toLowerCase() &&
+    Math.abs(v.lat - p.lat) < 0.003 &&      // ~300m
+    Math.abs(v.lng - p.lng) < 0.003);
+
+  const extra = (remote || [])
+    .filter(p => !isDuplicate(p))
+    .map(p => ({
+      id: null, name: p.name, address: p.address,
+      lat: p.lat, lng: p.lng, uses: 0, source: 'osm', osm_id: p.osm_id
+    }));
+
+  return seen.concat(extra).slice(0, 8);
+}
+
 function wireVenueSearch(){
   const input = document.getElementById('inputVenue');
   if (!input) return;
@@ -4795,13 +4938,23 @@ function wireVenueSearch(){
     clearTimeout(venueTimer);
     const q = input.value;
     venueTimer = setTimeout(async () => {
-      const hits = await searchVenues(q);
+      /* Both at once. The local book usually answers first and OSM
+         fills the gap in a town nobody has published to yet. */
+      const [local, remote] = await Promise.all([searchVenues(q), searchPlaces(q)]);
+      const hits = mergeVenueHits(local, remote);
       if (!hits.length){ list.innerHTML = ''; return; }
-      list.innerHTML = hits.map(v =>
-        `<button type="button" class="venue-hit" data-id="${v.id}" data-lat="${v.lat}" data-lng="${v.lng}">
-           <span class="venue-hit__name">${v.name}</span>
-           <span class="venue-hit__meta">${v.city || ''}${v.use_count ? ' · ' + v.use_count + ' events' : ''}</span>
-         </button>`).join('');
+      list.innerHTML = hits.map(v => {
+        const meta = v.source === 'local'
+          ? (v.address || '') + (v.uses ? ' · ' + v.uses + ' events' : '')
+          : (v.address || 'from the map');
+        return `<button type="button" class="venue-hit" data-id="${v.id || ''}"
+                   data-lat="${v.lat}" data-lng="${v.lng}"
+                   data-source="${v.source}" data-address="${escapeAttr(v.address || '')}"
+                   data-osm="${escapeAttr(v.osm_id || '')}">
+           <span class="venue-hit__name">${escapeAttr(v.name)}</span>
+           <span class="venue-hit__meta">${escapeAttr(meta)}</span>
+         </button>`;
+      }).join('');
     }, 220);
   });
 
@@ -4809,7 +4962,13 @@ function wireVenueSearch(){
     const hit = e.target.closest('.venue-hit');
     if (!hit) return;
     input.value = hit.querySelector('.venue-hit__name').textContent;
-    draft.venueId = hit.dataset.id;
+    /* A local pick carries its venue id, so the event links straight to
+       the existing row. An OSM pick has none — ensureVenue() creates
+       one on publish, which is how a new town's book starts filling. */
+    draft.venueId = hit.dataset.id || null;
+    draft.venueAddress = hit.dataset.address || draft.venueAddress;
+    draft.venueSource = hit.dataset.source === 'osm' ? 'osm' : 'venue_book';
+    draft.venueOsmId  = hit.dataset.osm || null;
     setEventLocation(parseFloat(hit.dataset.lat), parseFloat(hit.dataset.lng), false);
     list.innerHTML = '';
   });
@@ -5725,7 +5884,7 @@ function resetCreateForm(){
      survived a cancelled crop. */
   Object.assign(draft, {
     cover:null, crop:null, lat:null, lng:null, city:'', community:'',
-    timeFinish:'', mapsLink:'', venueId:null, venueSource:null,
+    timeFinish:'', mapsLink:'', venueId:null, venueSource:null, venueOsmId:null,
     lineup:null, recurrence:'', contact:'', currency:'', category:'',
     venueAddress:'',
     photoLat:null, photoLng:null
@@ -6298,6 +6457,7 @@ wireVenueSearch();
   await syncGoingFromServer();
   /* Anything whose photo never made it to R2 gets another go now.
      Runs unawaited: a slow bucket must not delay the first paint. */
+  recentreMapOnHome();            // communities are loaded by now
   await refreshMagicAccess();     // decides whether the magic button exists at all
   await restoreLocalCovers();     // show queued photos before retrying them
   syncPendingCovers();
