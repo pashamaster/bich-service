@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-12" />
+  <meta name="app-version" content="2026-07-26-13" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2088,7 +2088,7 @@ function renderEventCard(e) {
 
   return `
     <article class="event-card" data-event-id="${e.id}">
-      <div class="event-card__media${e.cover ? '' : ' event-card__media--nocover'}"${e.cover ? ` style="background-image:url('${e.cover}')"` : ''}>
+      <div class="event-card__media${(e.cover || localCover(e.id)) ? '' : ' event-card__media--nocover'}"${(e.cover || localCover(e.id)) ? ` style="background-image:url('${e.cover || localCover(e.id)}')"` : ''}>
         <div class="event-card__overlay">
           <div class="event-card__overlay-top">
             ${crossed}
@@ -2419,8 +2419,11 @@ function openDetail(id) {
   const e = EVENTS.find(x => x.id === id);
   if (!e) return;
   const hero = document.getElementById('detailHero');
-  hero.style.backgroundImage = e.cover ? `url('${e.cover}')` : '';
-  hero.classList.toggle('detail-hero--nocover', !e.cover);
+  /* A cover held locally because the upload has not happened yet counts
+     as a cover for the person who took it. */
+  const shown = e.cover || localCover(e.id);
+  hero.style.backgroundImage = shown ? `url('${shown}')` : '';
+  hero.classList.toggle('detail-hero--nocover', !shown);
   document.getElementById('detailTitle').textContent = e.title;
   document.getElementById('detailDesc').textContent = e.desc;
   document.getElementById('detailWhen').textContent = e.when;
@@ -2546,6 +2549,40 @@ async function coverTx(mode, fn){
 
 /* Called when an upload failed but the event saved. Holds the actual
    Blob, so nothing has to be re-encoded later. */
+/* Covers that exist on this device but not yet in R2. The queue was
+   built to stop the photo being LOST; it did not make the photo
+   VISIBLE, so publishing with the bucket down still showed an empty
+   card and looked exactly like the old failure. These object URLs
+   close that gap for the person who took the picture — everyone else
+   sees it once it uploads. */
+const LOCAL_COVERS = {};
+
+function localCover(shortId){ return LOCAL_COVERS[shortId] || null; }
+
+function holdLocalCover(shortId, blob){
+  try {
+    if (LOCAL_COVERS[shortId]) URL.revokeObjectURL(LOCAL_COVERS[shortId]);
+    LOCAL_COVERS[shortId] = URL.createObjectURL(blob);
+  } catch(_){}
+}
+
+function releaseLocalCover(shortId){
+  if (!LOCAL_COVERS[shortId]) return;
+  try { URL.revokeObjectURL(LOCAL_COVERS[shortId]); } catch(_){}
+  delete LOCAL_COVERS[shortId];
+}
+
+/* Rebuild those URLs on launch, so a queued cover survives a restart
+   rather than reappearing as a blank card. */
+async function restoreLocalCovers(){
+  const queued = await pendingCovers();
+  queued.forEach(item => { if (item.blob) holdLocalCover(item.shortId, item.blob); });
+  if (queued.length){
+    console.info('[bich]', queued.length, 'cover(s) waiting to upload');
+    renderBundles();
+  }
+}
+
 async function queueCover(shortId, blob, filename){
   try {
     await coverTx('readwrite', store => store.put({
@@ -2553,6 +2590,7 @@ async function queueCover(shortId, blob, filename){
       queuedAt: new Date().toISOString(),
       attempts: 0
     }));
+    holdLocalCover(shortId, blob);
     console.info('[bich] cover queued for', shortId);
     return true;
   } catch(err){
@@ -2600,6 +2638,7 @@ async function syncPendingCovers(){
     if (item.attempts >= 10){
       console.warn('[bich] giving up on the cover for', item.shortId);
       await dropCover(item.shortId);
+      releaseLocalCover(item.shortId);
       continue;
     }
 
@@ -2625,6 +2664,7 @@ async function syncPendingCovers(){
       });
 
       await dropCover(item.shortId);
+      releaseLocalCover(item.shortId);
       console.info('[bich] cover caught up for', item.shortId);
 
       // repaint if that event is on screen
@@ -6142,6 +6182,7 @@ wireVenueSearch();
   await syncGoingFromServer();
   /* Anything whose photo never made it to R2 gets another go now.
      Runs unawaited: a slow bucket must not delay the first paint. */
+  await restoreLocalCovers();     // show queued photos before retrying them
   syncPendingCovers();
   await openDeepLink();
 })();
