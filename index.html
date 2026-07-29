@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-13" />
+  <meta name="app-version" content="2026-07-26-15" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -190,6 +190,10 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-serif); font-style: italic; font-size: 1.9rem;
   color: var(--accent); line-height: 1.1;
 }
+#magicCodeRow { display: flex; gap: var(--space-sm); align-items: center; }
+#magicCodeRow .input { flex: 1; min-height: 44px; }
+#magicCodeRow .btn { min-height: 44px; white-space: nowrap; }
+
 .me-note { font-size: 0.72rem; line-height: 1.55; color: var(--muted); margin-top: var(--space-sm); }
 .me-list-bar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1578,6 +1582,16 @@ if ('serviceWorker' in navigator) {
           <button type="button" data-theme="night" aria-pressed="false">night</button>
         </div>
         <p class="me-note">paper reads best outside. night is easier on the eyes indoors.</p>
+      </div>
+
+      <div class="me-block">
+        <span class="text-label">magic</span>
+        <p class="me-note" id="magicState">magic is invite only right now.</p>
+        <div class="me-row" id="magicCodeRow">
+          <input class="input" id="magicCode" placeholder="invite code"
+                 autocapitalize="none" autocorrect="off" spellcheck="false" />
+          <button class="btn" id="magicRedeem">use it</button>
+        </div>
       </div>
 
       <div class="me-block">
@@ -3312,6 +3326,7 @@ const Store = {
     tokens: {},         // { shortId: editToken } — legacy, pre-schema-13
     secret: null,       // one per person; proves ownership of everything
     secretClaimed: false,
+    magic: false,            // this account may use magic
     passkey: false,          // a credential exists for this account
     passkeyDeclined: false   // asked once, said no; do not ask again
   },
@@ -4514,6 +4529,7 @@ function exitMeList(){
 }
 
 async function renderMe(){
+  refreshMagicAccess();          // cheap, cached server side, keeps the row honest
   const pkState = document.getElementById('passkeyState');
   if (pkState && !pkState.dataset.busy){
     pkState.textContent = Store.data.passkey ? 'passkey saved' : 'no passkey saved';
@@ -5287,13 +5303,27 @@ async function extractEvent(base64, exif, knownVenues){
     const r = await fetch(PHOTO_ENDPOINT, {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'X-Bich-Invite': readInvite() },
+      /* uid + secret let the worker ask Postgres whether this account
+         is inside the magic cohort. The secret is what makes the check
+         meaningful: user ids are publicly listable, so a uid alone
+         could simply be borrowed from an early account. */
       body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif,
-                             known_venues: knownVenues || [] })
+                             known_venues: knownVenues || [],
+                             uid: CURRENT_USER.id || null,
+                             secret: Store.data.secretClaimed ? deviceSecret() : null })
     });
     if (!r.ok) {
       const msg = await r.json().catch(() => ({}));
       const err = new Error(msg.error || 'extract failed');
       err.soft = (r.status === 403 || r.status === 429);   // show the reason, not a generic failure
+      /* The account lost magic, or never had it. Put the button away
+         rather than letting somebody arm it again and be refused. */
+      if (msg && msg.magic_locked){
+        MAGIC_AVAILABLE = false;
+        setMagic(false);
+        if (magicBtn) magicBtn.hidden = true;
+        Store.set({ magic: false });
+      }
       throw err;
     }
     const out = await r.json();
@@ -5428,10 +5458,86 @@ const coverPicker = document.getElementById('coverPicker');
    404 for /extract-event — because a switch in the browser is a
    suggestion and a switch on the server is a wall. */
 let MAGIC_ARMED = false;
-const MAGIC_AVAILABLE = Boolean(_CFG.magic && _CFG.magic.enabled && WORKER_URL);
-
 const magicBtn = document.getElementById('magicBtn');
-if (magicBtn && MAGIC_AVAILABLE) magicBtn.hidden = false;
+if (magicBtn) magicBtn.hidden = true;      // shown only once the account is known
+
+/* config.magic.enabled says this BUILD has magic; the account flag says
+   this PERSON does. Both are needed, and the account half is the one
+   that decides — the worker refuses anyone without it, so showing the
+   button to somebody who would only be turned away is worse than not
+   showing it at all. */
+let MAGIC_AVAILABLE = false;
+const MAGIC_IN_BUILD = Boolean(_CFG.magic && _CFG.magic.enabled && WORKER_URL);
+
+async function refreshMagicAccess(){
+  const note = document.getElementById('magicState');
+  const row  = document.getElementById('magicCodeRow');
+
+  if (!MAGIC_IN_BUILD){
+    MAGIC_AVAILABLE = false;
+    if (note) note.textContent = 'magic is not switched on in this build.';
+    if (row) row.hidden = true;
+    if (magicBtn) magicBtn.hidden = true;
+    return false;
+  }
+
+  let on = false;
+  try {
+    if (SB_READY() && CURRENT_USER.id && Store.data.secretClaimed){
+      on = Boolean(await sbRpc('my_magic', {
+        p_user: CURRENT_USER.id, p_secret: deviceSecret()
+      }));
+    }
+  } catch(err){
+    console.warn('[bich] could not check magic access', err);
+  }
+
+  MAGIC_AVAILABLE = on;
+  Store.set({ magic: on });
+  if (magicBtn) magicBtn.hidden = !on;
+  if (note) note.textContent = on
+    ? 'magic is on for this account. it reads a photo and posts what it finds.'
+    : 'magic is invite only right now. got a code?';
+  if (row) row.hidden = on;
+  return on;
+}
+
+async function redeemMagicCode(){
+  const input = document.getElementById('magicCode');
+  const note  = document.getElementById('magicState');
+  const btn   = document.getElementById('magicRedeem');
+  const code  = (input.value || '').trim();
+  if (!code) return;
+
+  btn.disabled = true;
+  try {
+    await ensureUser();
+    await claimDeviceSecret();
+    if (!CURRENT_USER.id || !Store.data.secretClaimed){
+      note.textContent = 'this device has no account yet — publish something first.';
+      return;
+    }
+    const rows = await sbRpc('redeem_magic_code', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret(), p_code: code
+    });
+    const res = Array.isArray(rows) ? rows[0] : rows;
+    if (res && res.ok){
+      input.value = '';
+      await refreshMagicAccess();
+      toast('magic is on');
+    } else {
+      /* Deliberately the same message for a wrong code and a wrong
+         account, so this cannot be used to work out which is which. */
+      note.textContent = (res && res.reason) || 'that code did not work';
+    }
+  } catch(err){
+    console.warn('[bich] redeem failed', err);
+    note.textContent = 'could not check that code — try again in a moment';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 
 function setMagic(on){
   MAGIC_ARMED = Boolean(on) && MAGIC_AVAILABLE;
@@ -5507,6 +5613,12 @@ async function readPhoto(crop){
     coverNotice.textContent = 'photo added as the cover. fill in the rest.';
     return;
   }
+
+  /* Magic needs a claimed account before the worker can check it
+     against the cohort. Done here rather than at publish, so somebody
+     who only ever uses magic still has an identity to verify. */
+  await ensureUser().catch(() => {});
+  await claimDeviceSecret().catch(() => {});
 
   const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.85);
   coverBusy.classList.add('show');
@@ -6056,6 +6168,10 @@ async function rebuildFromServer(){
   renderMe();
 }
 
+document.getElementById('magicRedeem')?.addEventListener('click', redeemMagicCode);
+document.getElementById('magicCode')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') redeemMagicCode();
+});
 document.getElementById('mePasskey')?.addEventListener('click', enrolPasskey);
 document.getElementById('meRestore')?.addEventListener('click', restoreFromPasskey);
 
@@ -6182,6 +6298,7 @@ wireVenueSearch();
   await syncGoingFromServer();
   /* Anything whose photo never made it to R2 gets another go now.
      Runs unawaited: a slow bucket must not delay the first paint. */
+  await refreshMagicAccess();     // decides whether the magic button exists at all
   await restoreLocalCovers();     // show queued photos before retrying them
   syncPendingCovers();
   await openDeepLink();
