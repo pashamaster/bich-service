@@ -14,6 +14,22 @@ custom_domain = true
 binding = "COVERS"
 bucket_name = "bich-covers"
 
+# ─────────────────────────────────────────────────────────────────────
+# KV. Three separate things depend on this:
+#   · passkey challenges and credentials  (routes return 503 without it)
+#   · the reverse-geocode cache           (falls back to hitting OSM
+#     every single time, which their rate limit will not tolerate)
+#   · the daily Gemini spend cap
+#
+# ⚠️  REPLACE THE id BELOW. Run this first:
+#        npx wrangler kv namespace create BICH_KV
+#     then paste the id it prints over PASTE_YOUR_ID_HERE.
+#     Deploying with the placeholder still there will fail.
+# ─────────────────────────────────────────────────────────────────────
+[[kv_namespaces]]
+binding = "BICH_KV"
+id = "b70349f207d04dcc916055cf299ea329"
+
 [vars]
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
@@ -23,30 +39,53 @@ ALLOWED_ORIGINS = "https://bich.app,https://www.bich.app"
 
 # Covers served straight from R2's own custom domain: no worker
 # invocation per image, and the edge cache does the work.
+# If img.bich.app is NOT attached to the bucket in R2 > Settings >
+# Custom Domains, delete this line entirely. The worker then serves
+# images itself, which always works. A wrong value is worse than none,
+# because the fallback only applies when this is unset.
 PUBLIC_IMG_BASE = "https://img.bich.app"
 
 # Empty = open. Add comma separated codes to gate the photo feature.
 BICH_INVITE_CODES = ""
 
+# Hard ceiling on Gemini calls per day, counted in KV. This is the real
+# spend protection - the first-100-users rule is a product decision and
+# a cleared browser walks straight through it.
 DAILY_CAP = "180"
 
-# The core/magic wall. "false" makes /extract-event return 404 and no
-# request can reach Gemini. Set to "true" only on the magic deployment.
-MAGIC_ENABLED = "false"
+# Magic access is a flag on the account now, not a number here. Grant
+# it in Supabase:
+#   update public.users set magic_enabled = true where handle = 'pine tem';
+# or hand somebody a code from public.magic_codes, which they redeem in
+# the app once and keep permanently.
 
-# Passkeys. The RP id must be the apex domain and must never change:
-# every existing passkey is cryptographically bound to it and would be
-# orphaned by an edit.
+# Needed for the cohort check. This is the SAME anon key the browser
+# already holds and publishes in config.js, so nothing new is trusted
+# to this worker - row level security is what protects the data, not
+# the secrecy of this string. There is still no service-role key here.
+SUPABASE_URL = "https://ibdqherxuolymstcqmsw.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliZHFoZXJ4dW9seW1zdGNxbXN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MjE3OTEsImV4cCI6MjEwMDM5Nzc5MX0.iKR24FW26CsZdbJ6s4y-s9UPztYfujwIiitpX4btAvU"
+
+# The core/magic wall. "false" makes /extract-event return 404 and no
+# request can reach Gemini at all.
+#
+# This is now "true" because config.js has magic.enabled = true. BOTH
+# switches must agree: with only the browser one on, the magic button
+# appears, arms, and then every photo fails with a 404.
+MAGIC_ENABLED = "true"
+
+# Passkeys. The RP id must be the apex domain and must NEVER change:
+# every passkey ever created is cryptographically bound to it, and
+# editing this orphans all of them with no way back.
 WEBAUTHN_RP_ID = "bich.app"
 WEBAUTHN_RP_NAME = "bich.service"
 
-# Secrets, never vars:
-#   wrangler secret put GEMINI_API_KEY
-#   wrangler secret put SUPABASE_JWT_SECRET   # mints the recovery session
-# There is deliberately NO Supabase service role key here.
-
-# Required for passkeys (challenges + credentials) and the daily quota:
-#   wrangler kv namespace create BICH_KV
-# [[kv_namespaces]]
-# binding = "BICH_KV"
-# id = "paste-id-here"
+# ─────────────────────────────────────────────────────────────────────
+# Secrets are NOT in this file and must never be. They are encrypted on
+# Cloudflare's side and survive every deploy, so you set them once:
+#
+#   npx wrangler secret put GEMINI_API_KEY
+#
+# There is deliberately no Supabase key of any kind here. The worker
+# cannot read or write your database, and that is the design.
+# ─────────────────────────────────────────────────────────────────────

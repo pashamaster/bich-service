@@ -27,6 +27,8 @@ import {
   passkeyAuthBegin, passkeyAuthFinish
 } from './passkey.js';
 
+const MAGIC_LOCKED = 'magic is invite only right now';
+
 const EVENT_SCHEMA = {
   type: 'object',
   propertyOrdering: ['events', 'read_quality'],
@@ -133,6 +135,16 @@ export default {
        job is telling you when the gate is misconfigured. */
     if (request.method === 'GET' && path.endsWith('/health')) return health(request, env, origin);
 
+    /* Reverse geocoding is a GET, and it has to be matched BEFORE the
+       POST-only guard below or it never runs. It sat underneath, so
+       every /geocode call returned 405 and no community was ever
+       created — which is why the communities table stayed empty while
+       the request showed up in the logs looking fine.
+
+       It also sits above the invite gate deliberately: it costs
+       nothing, core needs it, and it never touches Gemini. */
+    if (path.endsWith('/geocode')) return reverseGeocode(request, env, origin);
+
     if (request.method !== 'POST') return json({ error: 'nothing here' }, 405, origin);
 
     /* Passkeys sit ABOVE the invite gate. That gate exists to ration
@@ -143,10 +155,6 @@ export default {
     if (path.endsWith('/passkey/register/finish')) return passkeyRegisterFinish(request, env, json, origin);
     if (path.endsWith('/passkey/auth/begin'))      return passkeyAuthBegin(request, env, json, origin);
     if (path.endsWith('/passkey/auth/finish'))     return passkeyAuthFinish(request, env, json, origin);
-
-    /* Reverse geocoding sits above the invite gate: it costs nothing,
-       it is needed by core, and it never touches Gemini. */
-    if (path.endsWith('/geocode')) return reverseGeocode(request, env, origin);
 
     /* Invite gate. An invite code is an opaque string mapping to a
        quota bucket, not a person, so the zero PII model holds.
@@ -408,6 +416,22 @@ async function extractEvent(request, env, origin) {
   if (!image || typeof image !== 'string') return json({ error: 'no image' }, 400, origin);
   if (image.length > 8 * 1024 * 1024) return json({ error: 'image too large' }, 413, origin);
 
+  /* ── the cohort gate ─────────────────────────────────────────────
+     Magic is for the first N accounts. The check happens HERE, before
+     a single token is spent, and not in the browser — whoever controls
+     the browser controls the answer, so a client-side check would be
+     theatre.
+
+     It demands the device secret alongside the uid. uid alone proves
+     nothing: public.users has an open select policy, so every user id
+     is listable by anyone with the anon key, and somebody outside the
+     cohort could simply borrow an early one. */
+  const access = await checkMagicAccess(body, env);
+  if (!access.allowed) return json({ error: access.reason, magic_locked: true }, 403, origin);
+
+  /* The daily cap is the REAL spend protection and stays regardless.
+     The cohort rule is a product decision that a cleared browser walks
+     straight through; this is the one that bounds the bill. */
   if (env.BICH_KV) {
     const day = new Date().toISOString().slice(0, 10);
     const used = parseInt((await env.BICH_KV.get(`count:${day}`)) || '0', 10);
@@ -674,4 +698,83 @@ async function reverseGeocode(request, env, origin) {
   }
 
   return json(out, 200, origin);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   MAGIC ACCESS CHECK
+
+   Asks Postgres whether this account has the magic flag, using the ANON
+   key — the same public key the browser already holds, so nothing new
+   is trusted to this worker and no service-role key exists anywhere in
+   this system. Row level security still applies; the RPC is SECURITY
+   DEFINER and verifies the device secret itself.
+
+   Access is a boolean on the account, granted by hand or by redeeming
+   a code. It replaced a "first 100 by signup order" rule that was
+   arbitrary in both directions and, worse, failed in the wrong one:
+   clearing browser storage made a NEW account with a HIGHER index, so
+   the people most likely to lose access were the ones already using it.
+
+   Cached in KV for ten minutes. Long enough to spare the database a
+   round trip before every photo, short enough that granting somebody
+   access in the table editor takes effect while they are still in the
+   room with you.
+   ═══════════════════════════════════════════════════════════════════ */
+async function checkMagicAccess(body, env) {
+  // Not configured to check: fall back to the daily cap alone rather
+  // than locking everybody out of a feature that used to work.
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+    console.warn('[bich] magic check skipped: no SUPABASE_URL / SUPABASE_ANON_KEY');
+    return { allowed: true, reason: null };
+  }
+
+  const uid = body && body.uid;
+  const secret = body && body.secret;
+  if (!uid || !secret) {
+    return { allowed: false, reason: 'magic needs an account on this device' };
+  }
+
+  const cacheKey = `magic:${uid}`;
+  if (env.BICH_KV) {
+    const hit = await env.BICH_KV.get(cacheKey).catch(() => null);
+    if (hit === 'yes') return { allowed: true, reason: null };
+    if (hit === 'no') return { allowed: false, reason: MAGIC_LOCKED };
+  }
+
+  let row;
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/may_use_magic_as`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_ANON_KEY,
+        Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ p_user: uid, p_secret: secret }),
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!r.ok) throw new Error('rpc said ' + r.status);
+    const rows = await r.json();
+    row = Array.isArray(rows) ? rows[0] : rows;
+  } catch (err) {
+    /* The database being briefly unreachable should not take a working
+       feature down for people who are entitled to it. The daily cap
+       still bounds the damage. */
+    console.warn('[bich] magic check failed, allowing:', err.message);
+    return { allowed: true, reason: null };
+  }
+
+  const allowed = Boolean(row && row.allowed);
+  if (env.BICH_KV) {
+    /* Ten minutes, not an hour. Long enough to spare the database a
+       round trip before every photo, short enough that ticking the box
+       in the table editor takes effect while that person is still
+       standing in front of you. */
+    await env.BICH_KV.put(cacheKey, allowed ? 'yes' : 'no', { expirationTtl: 600 }).catch(() => {});
+  }
+
+  return allowed
+    ? { allowed: true, reason: null }
+    : { allowed: false, reason: MAGIC_LOCKED };
 }
