@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-26" />
+  <meta name="app-version" content="2026-07-26-28" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -190,9 +190,7 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-serif); font-style: italic; font-size: 1.9rem;
   color: var(--accent); line-height: 1.1;
 }
-#magicCodeRow, #displayNameRow { display: flex; gap: var(--space-sm); align-items: center; }
-#displayNameRow .input { flex: 1; min-height: 44px; }
-#displayNameRow .btn { min-height: 44px; white-space: nowrap; }
+#magicCodeRow { display: flex; gap: var(--space-sm); align-items: center; }
 #magicCodeRow .input { flex: 1; min-height: 44px; }
 #magicCodeRow .btn { min-height: 44px; white-space: nowrap; }
 
@@ -912,7 +910,6 @@ body.is-admin .detail-owner::before {
   text-align: center; padding: var(--space-md);
 }
 .feed-status.err { color: var(--red); }
-.feed-status.tap { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .cover-picker {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -1663,10 +1660,13 @@ if ('serviceWorker' in navigator) {
       <button type="button" id="meListExit">back to the feed</button>
     </div>
 
-    <!-- Bundle: For you -->
+    <!-- Everything that is not today and not this weekend. It was
+         labelled "for you", which promised a personalisation that does
+         not exist: bundleFor() returns this bucket as its FALLBACK, so
+         "for you" was really "everything else". -->
     <div class="bundle-divider" id="dividerPersonal">
       <div class="bundle-divider__line"></div>
-      <div class="bundle-divider__text">for you</div>
+      <div class="bundle-divider__text">coming up</div>
       <div class="bundle-divider__line"></div>
     </div>
 
@@ -1746,16 +1746,6 @@ if ('serviceWorker' in navigator) {
           <button type="button" data-theme="night" aria-pressed="false">night</button>
         </div>
         <p class="me-note">paper reads best outside. night is easier on the eyes indoors.</p>
-      </div>
-
-      <div class="me-block">
-        <span class="text-label">name</span>
-        <div class="me-row" id="displayNameRow">
-          <input class="input" id="displayName" maxlength="24"
-                 placeholder="optional" autocomplete="off" />
-          <button class="btn" id="displayNameSave">save</button>
-        </div>
-        <p class="me-note" id="displayNameNote">optional. your handle stays either way — this is just what you would rather be called.</p>
       </div>
 
       <div class="me-block">
@@ -3052,33 +3042,68 @@ document.querySelector('.detail-actions').addEventListener('click', async (e) =>
    how an event ended up showing a lit "you're going" button beside a
    count of zero — the button was read from localStorage, the count
    from Postgres, and nothing reconciled them. */
-async function writeAttendance(eventUuid, going){
-  if (!SB_READY() || !eventUuid) return 'queued';
+/* ── writeAttendance ───────────────────────────────────────────────
+   Goes through the set_attendance RPC now, not a direct table upsert.
+   Three things change because of that:
+
+     · it takes a SHORT id, not a uuid — the RPC looks the event up
+       itself, so the client no longer has to carry a second identifier
+       whose absence silently skipped the write;
+     · it proves the account is ours with the device secret, so nobody
+       can mark a stranger as going;
+     · it returns the CANONICAL count, which the caller uses instead of
+       assuming its own arithmetic was right.
+
+   Returns { state, count } where state is 'saved', 'queued' or
+   'failed'. Queued means retry later and the optimistic number stands;
+   failed means the server refused and the number is a lie. */
+/* Every mutation gets one of these. Nothing consumes it yet —
+   client_operations arrives with publish_event, where a retry can
+   genuinely duplicate a row. Attendance is naturally idempotent
+   (setting the same status twice is the same row), so the id is passed
+   for the contract's sake, not for correctness. Sending it from the
+   start means the client does not change when the table lands. */
+function newOperationId(){
+  return (crypto.randomUUID && crypto.randomUUID()) ||
+    'op-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+async function writeAttendance(shortId, going){
+  if (!SB_READY() || !shortId) return { state: 'queued', count: null };
   try {
     await ensureUser();
     if (!CURRENT_USER.id){
-      /* Used to fall straight through and write nothing at all, with
-         no error anywhere. ensureUser() returns an empty user when
-         the stored uuid points at a deleted row, or when the users
-         insert was refused. Both are worth seeing. */
-      console.warn('[bich] no user row on this device, attendance queued');
-      return 'queued';
+      console.warn('[bich] no account on this device yet, attendance queued');
+      return { state: 'queued', count: null };
     }
-    await sbUpsert('attendances', {
-      event_id: eventUuid, user_id: CURRENT_USER.id,
-      status: going ? 'going' : 'cancelled'
-    }, 'event_id,user_id');
-    return 'saved';
+    await claimDeviceSecret();
+    if (!Store.data.secretClaimed){
+      console.warn('[bich] device secret not claimed, attendance queued');
+      return { state: 'queued', count: null };
+    }
+
+    const rows = await sbRpc('set_attendance', {
+      p_short_id: shortId,
+      p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(),
+      p_status: going ? 'going' : 'cancelled',
+      p_operation_id: newOperationId()
+    });
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    return { state: 'saved', count: row ? row.going_count : null };
+
   } catch (err){
-    const offline = /failed to fetch|load failed|networkerror/i.test(err.message || '');
-    if (offline){
+    /* Transient failures keep the optimistic state and retry; permanent
+       ones must not, or the app quietly retries something the server
+       will refuse forever. */
+    const offline = /failed to fetch|load failed|networkerror|timed out/i.test(err.message || '');
+    if (offline || err.status === 503 || err.status === 504){
       console.warn('[bich] offline, attendance queued');
-      return 'queued';
+      return { state: 'queued', count: null };
     }
     window._lastAttendError = explainWriteError(err);
-    console.error('[bich] attendance refused —', err.status || '', err.message || err);
-    console.error('[bich] run bichCheck() for a full trace');
-    return 'failed';
+    console.error('[bich] set_attendance refused —', err.status || '', err.message || err);
+    return { state: 'failed', count: null };
   }
 }
 
@@ -3108,9 +3133,18 @@ document.getElementById('attendBtn').addEventListener('click', async () => {
     renderBundles();
   }
 
-  const result = await writeAttendance(ev && ev.uuid, nowGoing);
+  const result = await writeAttendance(id, nowGoing);
 
-  if (result === 'failed'){
+  /* The server's count replaces the optimistic one. Guessing was how
+     the screen and the database drifted apart: two people tapping at
+     once each added 1 to their own stale number and both were wrong. */
+  if (result.state === 'saved' && result.count != null && ev){
+    ev.going = result.count;
+    paintCount();
+    renderBundles();
+  }
+
+  if (result.state === 'failed'){
     /* Put everything back. Leaving the optimistic state up after a
        refusal is what produced the screen this fix exists for. */
     Store.setGoing(id, wasGoing);
@@ -3123,7 +3157,7 @@ document.getElementById('attendBtn').addEventListener('click', async () => {
     /* The generic message hid the answer for three rounds of debugging.
        Postgres always says why; show it. */
     toast(window._lastAttendError || "couldn't save that — try again");
-  } else if (result === 'queued'){
+  } else if (result.state === 'queued'){
     queuePendingAttendance(id, nowGoing);
   }
   btn.dataset.busy = '0';
@@ -3153,35 +3187,47 @@ async function syncAttendance(){
   const ids = Object.keys(pending);
   if (!ids.length) return;
 
-  let sent = 0, stuck = 0;
-  for (const shortId of ids) {
-    let ev = EVENTS.find(x => x.id === shortId);
+  await claimDeviceSecret();
+  if (!Store.data.secretClaimed){
+    console.warn('[bich] cannot sync attendance without a claimed account');
+    return;
+  }
 
-    /* The event may not be in the current feed - it can be in another
-       community, or already past. Look it up rather than dropping the
-       change on the floor, which is what silently lost cancellations. */
-    if (!ev || !ev.uuid) {
-      try {
-        const rows = await sbGet(
-          `events_public?select=id,short_id&short_id=eq.${encodeURIComponent(shortId)}&limit=1`);
-        if (rows && rows[0]) ev = { id: rows[0].short_id, uuid: rows[0].id };
-      } catch(_){}
-    }
-    if (!ev || !ev.uuid){ stuck++; continue; }
-
+  /* No uuid lookup any more. set_attendance takes the short id and
+     resolves the event itself, so a queued change for an event that
+     has scrolled out of the feed no longer needs a round trip to
+     events_public first — and can no longer be dropped because that
+     lookup failed. */
+  let sent = 0, stuck = 0, dead = 0;
+  for (const shortId of ids){
     try {
-      await sbUpsert('attendances', {
-        event_id: ev.uuid, user_id: CURRENT_USER.id,
-        status: pending[shortId].going ? 'going' : 'cancelled'
+      await sbRpc('set_attendance', {
+        p_short_id: shortId,
+        p_user: CURRENT_USER.id,
+        p_secret: deviceSecret(),
+        p_status: pending[shortId].going ? 'going' : 'cancelled',
+        p_operation_id: newOperationId()
       });
       clearPendingAttendance(shortId);
       sent++;
-    } catch (err) {
-      console.warn('[bich] could not sync attendance for', shortId, err.message);
-      stuck++;
+    } catch (err){
+      const permanent = err.status === 400 || err.status === 403 ||
+                        /no such event|not yours|status must be/i.test(err.message || '');
+      if (permanent){
+        /* The event was deleted, or this account cannot act on it.
+           Retrying forever would mean the queue never drains and the
+           real failures are buried under one that can never succeed. */
+        console.warn('[bich] dropping unqueueable attendance for', shortId, '—', err.message);
+        clearPendingAttendance(shortId);
+        dead++;
+      } else {
+        console.warn('[bich] could not sync attendance for', shortId, err.message);
+        stuck++;
+      }
     }
   }
-  if (sent || stuck) console.info(`[bich] attendance sync: ${sent} sent, ${stuck} still queued`);
+  if (sent || stuck || dead)
+    console.info(`[bich] attendance sync: ${sent} sent, ${stuck} queued, ${dead} dropped`);
 }
 
 /* onConflict names the columns that make a row unique. PostgREST will
@@ -4803,27 +4849,18 @@ async function venuesNear(lat, lng, slug){
   }
 }
 
-function setFeedStatus(text, isError, offerLocation){
+/* The third argument used to be `offerLocation`, which made the status
+   line tappable and called askForLocation(). Both are gone: the app no
+   longer requests location under any circumstance, so an invitation to
+   "centre on your area" promised something it could not do — the three
+   community signals set the centre now, with nothing to tap. */
+function setFeedStatus(text, isError){
   const el = document.getElementById('feedStatus');
   if (!el) return;
   el.hidden = !text;
   el.textContent = text || '';
-  el.className = 'feed-status' + (isError ? ' err' : '') + (offerLocation ? ' tap' : '');
-  el.onclick = offerLocation ? askForLocation : null;
-}
-
-/* REMOVED — the app no longer asks for location under ANY circumstance.
-   This was the last caller of navigator.geolocation, kept behind a
-   manual "centre the map on me" tap. Removing it turns a conditional
-   promise ("only if you press this") into an unconditional one, which
-   is the stronger and simpler thing to be able to say.
-
-   Nothing is lost: the three community signals (§8) already know
-   roughly where somebody is, and the community centre does the
-   centring instead. */
-async function askForLocation(){
-  setFeedStatus('showing everywhere');
-  await loadFeed();
+  el.className = 'feed-status' + (isError ? ' err' : '');
+  el.onclick = null;
 }
 
 
@@ -5004,9 +5041,7 @@ async function loadFeed(){
     EVENTS.length = 0;
     rows.forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
-    setFeedStatus(EVENTS.length
-      ? 'showing everywhere · tap to centre on your area'
-      : 'nothing published yet', false, true);
+    setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
     return true;
   } catch(err){
     console.warn('[bich] feed() rpc failed, falling back to events_public', err);
@@ -5195,7 +5230,6 @@ async function refreshMeCounts(){
 async function renderMe(){
   refreshMagicAccess();          // cheap, cached server side, keeps the row honest
   refreshAdmin();
-  loadProfile();
   const pkState = document.getElementById('passkeyState');
   if (pkState && !pkState.dataset.busy){
     pkState.textContent = Store.data.passkey ? 'passkey saved' : 'no passkey saved';
@@ -6611,9 +6645,15 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
          wrote this row before, so every event opened its life reading
          "0 people" while its own host was looking at it. Best effort:
          a refused attendance must not undo a published event. */
-      if (await writeAttendance(ev.uuid, true) === 'saved'){
+      const hostGoing = await writeAttendance(ev.id, true);
+      if (hostGoing.state === 'saved'){
         Store.setGoing(ev.id, true);
-        ev.going = 1;
+        ev.going = hostGoing.count != null ? hostGoing.count : 1;
+      } else if (hostGoing.state === 'queued'){
+        /* The event is live but the host is not marked going yet. Queue
+           it rather than leaving them absent from their own event. */
+        Store.setGoing(ev.id, true);
+        queuePendingAttendance(ev.id, true);
       }
 
       if (img) ev.cover = img.url;      // one size, so one field
@@ -6972,28 +7012,46 @@ window.bichCheck = async function(){
   line('device secret claimed', claimed,
        claimed ? 'ownership + magic checks will work' : 'claim_device_secret refused — check schema 15 ran');
 
-  const ev = EVENTS.find(e => e.uuid) || EVENTS[0];
-  line('an event with a uuid', Boolean(ev && ev.uuid),
-       ev ? `${ev.id} → ${ev.uuid || 'NO UUID — feed_near is not returning id'}` : 'feed is empty');
-  if (!ev || !ev.uuid) return console.log('stop: no event to test against');
+  const ev = EVENTS[0];
+  line('an event to test against', Boolean(ev), ev ? ev.id : 'feed is empty');
+  if (!ev) return console.log('stop: no event to test against');
 
-  // the actual write, with the actual helper
+  /* The real call the going button makes. No uuid needed any more —
+     set_attendance resolves the short id itself. */
+  try {
+    const rows = await sbRpc('set_attendance', {
+      p_short_id: ev.id, p_user: CURRENT_USER.id, p_secret: deviceSecret(),
+      p_status: 'going', p_operation_id: newOperationId()
+    });
+    const r = Array.isArray(rows) ? rows[0] : rows;
+    line('set_attendance', true, `saved — ${r ? r.going_count : '?'} going`);
+  } catch(err){
+    line('set_attendance', false, `${err.status || ''} ${err.message}`);
+    const m = String(err.message || '');
+    if (m.includes('Could not find the function'))
+      console.log('%c→ schema 24 has not been run.', 'color:#c33');
+    if (m.includes('not yours'))
+      console.log('%c→ the device secret does not match this account. Check claim_device_secret.', 'color:#c33');
+    if (m.includes('no such event'))
+      console.log('%c→ that event is not live, or the short id is wrong.', 'color:#c33');
+    if (m.includes('permission denied'))
+      console.log('%c→ execute was not granted on set_attendance to anon.', 'color:#c33');
+    return;
+  }
+
+  /* The direct path must now be closed. If this SUCCEEDS the revoke in
+     schema 24 did not take, and anyone can still write attendance rows
+     for anyone. */
   try {
     await sbUpsert('attendances', {
-      event_id: ev.uuid, user_id: CURRENT_USER.id, status: 'going'
+      event_id: '00000000-0000-0000-0000-000000000000',
+      user_id: CURRENT_USER.id, status: 'going'
     }, 'event_id,user_id');
-    line('write to attendances', true, 'the row is in Postgres');
+    line('direct table write is blocked', false, 'IT IS NOT — revoke did not apply');
+    console.log('%c→ run the revoke statements in schema 24.', 'color:#c33');
   } catch(err){
-    line('write to attendances', false, `${err.status || ''} ${err.message}`);
-    if (String(err.message).includes('permission denied'))
-      console.log('%c→ anon has no GRANT on attendances. Run schema 19.', 'color:#c33');
-    if (String(err.message).includes('row-level security'))
-      console.log('%c→ the RLS policy refused it. Check schema 4 ran.', 'color:#c33');
-    if (String(err.message).includes('foreign key'))
-      console.log('%c→ the user or event id does not exist in its table.', 'color:#c33');
-    if (String(err.message).includes('ON CONFLICT'))
-      console.log('%c→ no unique constraint on (event_id, user_id).', 'color:#c33');
-    return;
+    const blocked = /permission denied|not find the table|42501/i.test(err.message || '') || err.status === 401 || err.status === 403;
+    line('direct table write is blocked', blocked, blocked ? 'anon cannot touch attendances' : err.message);
   }
 
   try {
@@ -7025,46 +7083,6 @@ window.bichCheck = async function(){
   console.log('  uuid  ', CURRENT_USER.id);
   console.log('  secret', Store.data.secret || '(none claimed on this device)');
 };
-
-/* ── the display name ──────────────────────────────────────────────
-   Optional, and never a replacement for the handle. Requires the device
-   secret like every other write that changes an account. */
-async function loadProfile(){
-  const input = document.getElementById('displayName');
-  if (!input || !SB_READY() || !CURRENT_USER.id || !Store.data.secretClaimed) return;
-  try {
-    const rows = await sbRpc('my_profile', {
-      p_user: CURRENT_USER.id, p_secret: deviceSecret()
-    });
-    const p = Array.isArray(rows) ? rows[0] : rows;
-    if (p && !input.matches(':focus')) input.value = p.display_name || '';
-  } catch(_){}
-}
-
-async function saveDisplayName(){
-  const input = document.getElementById('displayName');
-  const note  = document.getElementById('displayNameNote');
-  const btn   = document.getElementById('displayNameSave');
-  btn.disabled = true;
-  try {
-    await ensureUser();
-    await claimDeviceSecret();
-    if (!CURRENT_USER.id || !Store.data.secretClaimed){
-      note.textContent = 'publish something first, so this device has an account.';
-      return;
-    }
-    const out = await sbRpc('set_display_name', {
-      p_user: CURRENT_USER.id, p_secret: deviceSecret(), p_name: input.value
-    });
-    note.textContent = out
-      ? `saved. people will see "${out}".`
-      : 'cleared. back to your handle.';
-  } catch(err){
-    note.textContent = explainWriteError(err);
-  } finally {
-    btn.disabled = false;
-  }
-}
 
 /* ── "were you there?" ─────────────────────────────────────────────
    promote_attendance() has to guess: it turns 'going' into 'attended' a
@@ -7142,10 +7160,6 @@ function markReviewed(shortId){
   Store.set({ reviewedAttendance: done });
 }
 
-document.getElementById('displayNameSave')?.addEventListener('click', saveDisplayName);
-document.getElementById('displayName')?.addEventListener('keydown', e => {
-  if (e.key === 'Enter') saveDisplayName();
-});
 document.getElementById('magicRedeem')?.addEventListener('click', redeemMagicCode);
 document.getElementById('magicCode')?.addEventListener('keydown', e => {
   if (e.key === 'Enter') redeemMagicCode();
