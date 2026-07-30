@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-21" />
+  <meta name="app-version" content="2026-07-26-23" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -218,6 +218,18 @@ body { display: flex; align-items: center; justify-content: center; }
 }
 .confirm-sheet .btn { min-height: 48px; width: 100%; }
 .btn--bad { background: var(--surface); border-color: var(--border); color: #d9534f; }
+
+/* An admin sees edit and cancel on everybody's events. Without a visible
+   difference there is nothing distinguishing "my event" from "anyone's
+   event", which is how somebody deletes a stranger's gathering while
+   meaning to tidy their own. */
+body.is-admin .detail-owner::before {
+  content: 'admin — this may not be your event';
+  display: block; width: 100%;
+  font-family: var(--font-mono); font-size: 0.55rem;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: #d9534f; margin-bottom: 8px;
+}
 
 .review-card {
   margin: 0 var(--space-md) var(--space-md);
@@ -3231,7 +3243,19 @@ function mappableEvents(){
        LatLng" and takes the whole map down with it, and plenty of
        events publish without coordinates. */
     if (e.lat == null || e.lng == null) return false;
-    const when = e.when instanceof Date ? e.when : new Date(e.when);
+
+    /* THE map bug. This read e.when — which rowToEvent sets to a
+       DISPLAY string, "mon 27 jul · 19:00". new Date() of that is
+       Invalid, Number.isNaN was therefore true for every event that
+       came from the database, and every one of them was filtered out
+       before it could be drawn.
+
+       So the map was empty and the date chips appeared broken, when in
+       fact the chips were fine and there was simply nothing to filter.
+       e.starts_at is the ISO timestamp and has been on the object the
+       whole time. */
+    const when = e.starts_at ? new Date(e.starts_at)
+               : (e.when instanceof Date ? e.when : new Date(e.when));
     if (Number.isNaN(when.getTime())) return false;
     if (to && when >= to) return false;
 
@@ -3403,6 +3427,16 @@ function zoomForRadius(km){
 }
 
 /* Where a map should open right now. Always returns something. */
+/* Somebody arriving on a shared link has no community yet — resolving
+   one needs a round trip to the geocoder and then to Postgres, and the
+   map is on screen long before that finishes. Showing them Bali while
+   they are reading about an event in Ericeira is the wrong answer for
+   the several seconds it takes.
+
+   The event they opened is a better guess than the global default, so
+   it stands in until a real community lands. */
+let PROVISIONAL_HOME = null;
+
 function mapHome(){
   const c = homeCommunity();
   if (c && c.centre_lat != null && c.centre_lng != null){
@@ -3410,6 +3444,12 @@ function mapHome(){
       lat: c.centre_lat, lng: c.centre_lng,
       zoom: zoomForRadius(c.radius_km),
       name: c.name, known: true
+    };
+  }
+  if (PROVISIONAL_HOME){
+    return {
+      lat: PROVISIONAL_HOME.lat, lng: PROVISIONAL_HOME.lng,
+      zoom: 12, name: PROVISIONAL_HOME.name || 'here', known: false
     };
   }
   return {
@@ -3557,6 +3597,7 @@ const Store = {
     secret: null,       // one per person; proves ownership of everything
     secretClaimed: false,
     magic: false,            // this account may use magic
+    admin: false,            // may correct and remove anyone's event
     reviewedAttendance: {},  // { shortId: iso } — asked once, never again
     passkey: false,          // a credential exists for this account
     passkeyDeclined: false   // asked once, said no; do not ask again
@@ -3872,6 +3913,7 @@ function forgetToken(shortId){
    to error. The hosting list is the real answer; the token stays as a
    fallback for events published before schema 13. */
 function iOwn(shortId){
+  if (IS_ADMIN) return true;                 // an admin may correct anything
   if ((Store.data.hosting || []).includes(shortId)) return true;
   return Boolean(tokenFor(shortId));
 }
@@ -3975,6 +4017,19 @@ async function updateEvent(shortId, patch){
      for anything published before schema 13, so nobody's existing
      events become uneditable on upgrade. */
   await claimDeviceSecret();
+
+  /* An admin editing somebody else's event needs the admin RPC — the
+     owner one checks host_id and would refuse. Hosts keep using their
+     own path even when they are admins, so the ordinary case is never
+     routed through elevated rights. */
+  if (IS_ADMIN && !(Store.data.hosting || []).includes(shortId)){
+    const row = await sbRpc('admin_update_event', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret(),
+      p_short_id: shortId, p_patch: patch
+    });
+    return Array.isArray(row) ? row[0] : row;
+  }
+
   if (CURRENT_USER.id && Store.data.secretClaimed){
     const row = await sbRpc('update_event_as', {
       p_short_id: shortId, p_user: CURRENT_USER.id,
@@ -3992,6 +4047,26 @@ async function updateEvent(shortId, patch){
 
 async function cancelEvent(shortId){
   await claimDeviceSecret();
+  const mine = (Store.data.hosting || []).includes(shortId);
+
+  if (IS_ADMIN && !mine){
+    try {
+      await sbRpc('admin_cancel_event', {
+        p_user: CURRENT_USER.id, p_secret: deviceSecret(),
+        p_short_id: shortId, p_hard: false
+      });
+      const k = EVENTS.findIndex(e => e.id === shortId);
+      if (k > -1) EVENTS.splice(k, 1);
+      renderBundles();
+      toast('event removed');
+      return true;
+    } catch(err){
+      console.error('[bich] admin cancel failed —', err.status || '', err.message || err);
+      toast(explainWriteError(err));
+      return false;
+    }
+  }
+
   const usePerson = Boolean(CURRENT_USER.id && Store.data.secretClaimed);
   const token = tokenFor(shortId);
   if (!usePerson && !token){ toast('this device did not create that event'); return false; }
@@ -4014,6 +4089,31 @@ async function cancelEvent(shortId){
     toast('event removed');
     return true;
   } catch(err){
+    /* Two RPCs, two entirely different reasons for refusing, and one
+       generic toast for both. Say which path failed and why — the
+       device-secret path and the legacy-token path fail for opposite
+       reasons and the fix differs completely. */
+    console.error('[bich] cancel failed via', usePerson ? 'cancel_event_as' : 'cancel_event',
+                  '—', err.status || '', err.message || err);
+
+    /* An event created before schema 13, or on a device whose secret
+       never claimed, still has its token. Try that before giving up. */
+    if (usePerson && token){
+      try {
+        console.warn('[bich] retrying cancel with the legacy token');
+        await sbRpc('cancel_event', { p_short_id: shortId, p_token: token });
+        forgetToken(shortId);
+        Store.set({ hosting: (Store.data.hosting || []).filter(x => x !== shortId) });
+        refreshMeCounts();
+        const j = EVENTS.findIndex(e => e.id === shortId);
+        if (j > -1) EVENTS.splice(j, 1);
+        renderBundles();
+        toast('event removed');
+        return true;
+      } catch(err2){
+        console.error('[bich] token cancel also failed —', err2.status || '', err2.message || err2);
+      }
+    }
     toast(explainWriteError(err));
     return false;
   }
@@ -4920,6 +5020,7 @@ async function refreshMeCounts(){
 
 async function renderMe(){
   refreshMagicAccess();          // cheap, cached server side, keeps the row honest
+  refreshAdmin();
   loadProfile();
   const pkState = document.getElementById('passkeyState');
   if (pkState && !pkState.dataset.busy){
@@ -5166,7 +5267,18 @@ async function openDeepLink(){
   /* Signal one: the link itself. Fires on first paint, before any
      other interaction, using the event's own venue coordinates. */
   if (ev && ev.lat != null && ev.lng != null){
-    adoptCommunity(ev.lat, ev.lng, 'link').then(changed => { if (changed) loadFeed(); });
+    /* Immediately, before the geocoder is even asked: a visitor who
+       has never been here should not be looking at Bali while reading
+       about something in Ericeira. */
+    if (!homeCommunity()){
+      PROVISIONAL_HOME = { lat: ev.lat, lng: ev.lng, name: ev.address || null };
+      recentreMapOnHome();
+    }
+    adoptCommunity(ev.lat, ev.lng, 'link').then(changed => {
+      PROVISIONAL_HOME = null;      // a real community supersedes the guess
+      recentreMapOnHome();
+      if (changed) loadFeed();
+    });
   } else if (adoptCommunityFrom(ev, slug)) loadFeed();
 }
 
@@ -5939,6 +6051,26 @@ if (magicBtn) magicBtn.hidden = true;      // shown only once the account is kno
    that decides — the worker refuses anyone without it, so showing the
    button to somebody who would only be turned away is worse than not
    showing it at all. */
+let IS_ADMIN = false;
+
+/* Admin is deliberately narrow: correct an event, remove an event, see
+   every event including deleted ones. It grants NO ability to read
+   attendee lists or anyone's history — those stay impossible for
+   everybody, which is the promise the app rests on, and an admin flag
+   is not a reason to put a door in it. */
+async function refreshAdmin(){
+  IS_ADMIN = false;
+  if (!SB_READY() || !CURRENT_USER.id || !Store.data.secretClaimed) return false;
+  try {
+    IS_ADMIN = Boolean(await sbRpc('is_admin', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    }));
+  } catch(_){}
+  Store.set({ admin: IS_ADMIN });
+  document.body.classList.toggle('is-admin', IS_ADMIN);
+  return IS_ADMIN;
+}
+
 let MAGIC_AVAILABLE = false;
 const MAGIC_IN_BUILD = Boolean(_CFG.magic && _CFG.magic.enabled && WORKER_URL);
 
@@ -6699,6 +6831,23 @@ window.bichCheck = async function(){
   } catch(err){
     line('read it back via my_going', false, err.message);
   }
+
+  /* Ownership, without actually cancelling anything: ask my_hosted
+     what this device owns and compare it with the local list. */
+  const mineLocal = (Store.data.hosting || []).length;
+  try {
+    const mine = await sbRpc('my_hosted', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    });
+    const n = Array.isArray(mine) ? mine.length : -1;
+    line('my_hosted (cancel + edit rights)', n >= 0,
+         n >= 0 ? `${n} owned on the server, ${mineLocal} known locally` : 'unexpected shape');
+    if (n === 0 && mineLocal > 0)
+      console.log('%c→ the device secret does not match this account. Cancel will fall back to tokens.', 'color:#c33');
+  } catch(err){
+    line('my_hosted (cancel + edit rights)', false, err.message);
+    console.log('%c→ cancel and edit will not work. Check schema 15 ran.', 'color:#c33');
+  }
   console.log('%cdone — if every line is OK, the going button works.', 'color:#2a7');
 };
 
@@ -6955,6 +7104,7 @@ wireVenueSearch();
   recentreMapOnHome();            // communities are loaded by now
   loadAttendanceReview();         // only shows if the job guessed something
   await refreshMagicAccess();     // decides whether the magic button exists at all
+  await refreshAdmin();
   await restoreLocalCovers();     // show queued photos before retrying them
   syncPendingCovers();
   await openDeepLink();
