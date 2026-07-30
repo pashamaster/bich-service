@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-19" />
+  <meta name="app-version" content="2026-07-26-21" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -195,6 +195,29 @@ body { display: flex; align-items: center; justify-content: center; }
 #displayNameRow .btn { min-height: 44px; white-space: nowrap; }
 #magicCodeRow .input { flex: 1; min-height: 44px; }
 #magicCodeRow .btn { min-height: 44px; white-space: nowrap; }
+
+.confirm-sheet {
+  position: fixed; inset: 0; z-index: 2000;
+  background: var(--scrim-strong);
+  display: flex; align-items: flex-end; justify-content: center;
+  opacity: 0; transition: opacity 0.18s ease;
+}
+.confirm-sheet.visible { opacity: 1; }
+.confirm-sheet__panel {
+  width: 100%; max-width: 420px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: var(--space-lg) var(--space-md)
+           calc(var(--space-lg) + max(env(safe-area-inset-bottom, 0px), 0px));
+  display: flex; flex-direction: column; gap: var(--space-sm);
+}
+.confirm-sheet__text {
+  font-family: var(--font-serif); font-size: 1rem;
+  color: var(--text); margin: 0 0 var(--space-sm); line-height: 1.4;
+}
+.confirm-sheet .btn { min-height: 48px; width: 100%; }
+.btn--bad { background: var(--surface); border-color: var(--border); color: #d9534f; }
 
 .review-card {
   margin: 0 var(--space-md) var(--space-md);
@@ -2943,7 +2966,9 @@ async function writeAttendance(eventUuid, going){
       console.warn('[bich] offline, attendance queued');
       return 'queued';
     }
-    console.error('[bich] attendance refused', err.status || '', err);
+    window._lastAttendError = explainWriteError(err);
+    console.error('[bich] attendance refused —', err.status || '', err.message || err);
+    console.error('[bich] run bichCheck() for a full trace');
     return 'failed';
   }
 }
@@ -2986,7 +3011,9 @@ document.getElementById('attendBtn').addEventListener('click', async () => {
       paintCount();
       renderBundles();
     }
-    toast("couldn't save that — try again");
+    /* The generic message hid the answer for three rounds of debugging.
+       Postgres always says why; show it. */
+    toast(window._lastAttendError || "couldn't save that — try again");
   } else if (result === 'queued'){
     queuePendingAttendance(id, nowGoing);
   }
@@ -3980,6 +4007,7 @@ async function cancelEvent(shortId){
     /* iOwn() now reads the hosting list, so leaving the id there would
        keep showing owner controls for an event that no longer exists. */
     Store.set({ hosting: (Store.data.hosting || []).filter(x => x !== shortId) });
+    refreshMeCounts();       // the hosting number is now one lower
     const i = EVENTS.findIndex(e => e.id === shortId);
     if (i > -1) EVENTS.splice(i, 1);
     renderBundles();
@@ -4175,6 +4203,7 @@ async function saveEvent(spec){
   /* Bind this person's secret on first publish. From here on every
      event they own is editable with it, including this one. */
   claimDeviceSecret().then(() => maybeOfferPasskey()).catch(() => {});
+  refreshMeCounts();         // one more hosted, and the host is going
   /* Signal three: publishing somewhere makes it your community, every
      time, not just the first time. Deliberate enough to be silent. */
   if (spec.lat != null && spec.lng != null){
@@ -4533,6 +4562,47 @@ async function askForLocation(){
    grant beyond select. If the RPC is misconfigured the events still
    show, just without the social number - which is far better than
    silently falling back to seven fake events that look real. */
+/* ── askConfirm ────────────────────────────────────────────────────
+   window.confirm() is suppressed in an iOS standalone PWA. Launched
+   from the home screen, it returns immediately without ever showing a
+   dialog — so `if (!confirm(...)) return;` simply returns, every time,
+   and the button does nothing at all.
+
+   That is why cancelling an event "did not work on iPhone": the cancel
+   itself was fine, the question in front of it never appeared.
+
+   An in-app sheet also gets to look like the rest of the app and
+   respects the safe area, which a native dialog never did. */
+function askConfirm(message, confirmLabel){
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.className = 'confirm-sheet';
+    wrap.innerHTML = `
+      <div class="confirm-sheet__panel" role="alertdialog" aria-modal="true">
+        <p class="confirm-sheet__text"></p>
+        <button type="button" class="btn btn--bad" data-yes>${escapeAttr(confirmLabel || 'yes')}</button>
+        <button type="button" class="btn btn--ghost" data-no>keep it</button>
+      </div>`;
+    wrap.querySelector('.confirm-sheet__text').textContent = message;
+
+    const done = (answer) => {
+      wrap.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(answer);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
+
+    wrap.addEventListener('click', (e) => {
+      if (e.target.closest('[data-yes]')) return done(true);
+      if (e.target.closest('[data-no]')) return done(false);
+      if (e.target === wrap) return done(false);      // tap the scrim
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(wrap);
+    requestAnimationFrame(() => wrap.classList.add('visible'));
+  });
+}
+
 /* ── bichCheck() ───────────────────────────────────────────────────
    One command that proves, or disproves, every link in the chain:
    config file, Supabase reachability, each table's policies, the
@@ -4739,10 +4809,24 @@ function initThemes(){
 let meListMode = null;
 
 async function openMeList(kind){
-  const wanted =
-    kind === 'going'    ? Object.keys(Store.data.going || {}) :
-    kind === 'attended' ? Object.keys(Store.data.attended || {}) :
-                          (Store.data.hosting || []);
+  /* Tapping "attended" used to open an empty list every time, because
+     Store.data.attended has had nothing writing to it since promotion
+     moved server side. Ask Postgres, which is the only place that
+     knows. */
+  let wanted = [];
+  if (kind === 'hosting'){
+    wanted = Store.data.hosting || [];
+  } else if (SB_READY() && CURRENT_USER.id){
+    try {
+      const rows = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
+      wanted = (rows || []).filter(r => r.status === kind).map(r => r.short_id).filter(Boolean);
+    } catch(_){
+      wanted = kind === 'going' ? Object.keys(Store.data.going || {}) : [];
+    }
+  } else {
+    wanted = kind === 'going' ? Object.keys(Store.data.going || {}) : [];
+  }
+
   if (!wanted.length){ toast(`nothing ${kind} yet`); return; }
 
   meListMode = kind;
@@ -4789,6 +4873,51 @@ function exitMeList(){
   loadFeed();
 }
 
+function paintMeCounts(c){
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  };
+  set('meGoing', c.going);
+  set('meAttended', c.attended);
+  set('meHosting', c.hosting);
+}
+
+/* The truth lives in Postgres. my_going() reports both statuses, so
+   "going" and "attended" come from one call — and attended is the one
+   the browser cannot know, because promote_attendance() sets it hours
+   after the event on a schedule nobody here sees. */
+async function refreshMeCounts(){
+  if (!SB_READY() || !CURRENT_USER.id) return;
+  try {
+    const rows = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
+    if (!Array.isArray(rows)) return;
+
+    const going    = rows.filter(r => r.status === 'going').length;
+    const attended = rows.filter(r => r.status === 'attended').length;
+
+    let hosting = (Store.data.hosting || []).length;
+    if (Store.data.secretClaimed){
+      try {
+        const mine = await sbRpc('my_hosted', {
+          p_user: CURRENT_USER.id, p_secret: deviceSecret()
+        });
+        if (Array.isArray(mine)){
+          hosting = mine.length;
+          /* Keep the local list in step. It is what iOwn() reads, so a
+             stale copy means the edit and cancel buttons are missing on
+             events the person does own. */
+          Store.set({ hosting: mine.map(r => r.short_id).filter(Boolean) });
+        }
+      } catch(_){}
+    }
+
+    paintMeCounts({ going, attended, hosting });
+  } catch(err){
+    console.warn('[bich] could not refresh counts', err);   // local numbers stand
+  }
+}
+
 async function renderMe(){
   refreshMagicAccess();          // cheap, cached server side, keeps the row honest
   loadProfile();
@@ -4797,9 +4926,19 @@ async function renderMe(){
     pkState.textContent = Store.data.passkey ? 'passkey saved' : 'no passkey saved';
   }
   document.getElementById('meHandle').textContent = currentHandle;
-  document.getElementById('meGoing').textContent    = Object.keys(Store.data.going).length;
-  document.getElementById('meAttended').textContent = Object.keys(Store.data.attended).length;
-  document.getElementById('meHosting').textContent  = Store.data.hosting.length;
+
+  /* Local counts first, so the numbers are there instantly, then the
+     real ones from Postgres. The old code read all three from local
+     storage, and one of them could never be right: Store.data.attended
+     has had nothing writing to it since markAttended() was removed —
+     promotion happens server side now — so "attended" showed 0 forever
+     no matter how many events somebody had been to. */
+  paintMeCounts({
+    going:    Object.keys(Store.data.going || {}).length,
+    attended: 0,
+    hosting:  (Store.data.hosting || []).length
+  });
+  refreshMeCounts();
 
   const persisted = (navigator.storage && navigator.storage.persisted)
     ? await navigator.storage.persisted().catch(() => false) : false;
@@ -4865,7 +5004,10 @@ async function shareEvent(ev){
   }
 
   toast(await copyLink(url) ? 'link copied' : 'could not copy — long press the link');
-  if (!(await copyLink(url))) prompt('copy this link', url);
+  /* prompt() is suppressed in a standalone PWA exactly like confirm(),
+     so this fallback used to fail silently. A toast at least puts the
+     link on screen to be read. */
+  if (!(await copyLink(url))) toast(url);
 }
 
 /* A toast with one undo. Used where the app changed something on the
@@ -6501,6 +6643,65 @@ async function rebuildFromServer(){
   renderMe();
 }
 
+/* ── bichCheck() ───────────────────────────────────────────────────
+   Type bichCheck() in the console. It walks the same path a tap on
+   "i'm going" takes and prints where it stops, because a rolled-back
+   counter tells you something failed and nothing about what.
+
+   Every step is the real call, not a simulation — a diagnostic that
+   tests a different code path than the bug is worse than none. */
+window.bichCheck = async function(){
+  const line = (label, ok, detail) =>
+    console.log(`%c${ok ? 'OK  ' : 'FAIL'}%c ${label}${detail ? ' — ' + detail : ''}`,
+      `color:${ok ? '#2a7' : '#c33'};font-weight:600`, 'color:inherit');
+
+  console.log('%cbich diagnostic', 'font-weight:700;font-size:13px');
+  line('supabase configured', SB_READY(), SUPABASE_URL || 'no url');
+  line('worker url', Boolean(WORKER_URL), WORKER_URL);
+
+  await ensureUser().catch(e => console.warn(e));
+  line('account on this device', Boolean(CURRENT_USER.id),
+       CURRENT_USER.id ? `${CURRENT_USER.handle} (${CURRENT_USER.id})` : 'ensureUser produced nothing');
+  if (!CURRENT_USER.id) return console.log('stop: nothing can be written without an account');
+
+  const claimed = await claimDeviceSecret().catch(() => false);
+  line('device secret claimed', claimed,
+       claimed ? 'ownership + magic checks will work' : 'claim_device_secret refused — check schema 15 ran');
+
+  const ev = EVENTS.find(e => e.uuid) || EVENTS[0];
+  line('an event with a uuid', Boolean(ev && ev.uuid),
+       ev ? `${ev.id} → ${ev.uuid || 'NO UUID — feed_near is not returning id'}` : 'feed is empty');
+  if (!ev || !ev.uuid) return console.log('stop: no event to test against');
+
+  // the actual write, with the actual helper
+  try {
+    await sbUpsert('attendances', {
+      event_id: ev.uuid, user_id: CURRENT_USER.id, status: 'going'
+    }, 'event_id,user_id');
+    line('write to attendances', true, 'the row is in Postgres');
+  } catch(err){
+    line('write to attendances', false, `${err.status || ''} ${err.message}`);
+    if (String(err.message).includes('permission denied'))
+      console.log('%c→ anon has no GRANT on attendances. Run schema 19.', 'color:#c33');
+    if (String(err.message).includes('row-level security'))
+      console.log('%c→ the RLS policy refused it. Check schema 4 ran.', 'color:#c33');
+    if (String(err.message).includes('foreign key'))
+      console.log('%c→ the user or event id does not exist in its table.', 'color:#c33');
+    if (String(err.message).includes('ON CONFLICT'))
+      console.log('%c→ no unique constraint on (event_id, user_id).', 'color:#c33');
+    return;
+  }
+
+  try {
+    const rows = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
+    line('read it back via my_going', Array.isArray(rows),
+         Array.isArray(rows) ? `${rows.length} going` : 'unexpected shape');
+  } catch(err){
+    line('read it back via my_going', false, err.message);
+  }
+  console.log('%cdone — if every line is OK, the going button works.', 'color:#2a7');
+};
+
 /* ── the display name ──────────────────────────────────────────────
    Optional, and never a replacement for the handle. Requires the device
    secret like every other write that changes an account. */
@@ -6688,7 +6889,7 @@ document.getElementById('cancelEventBtn').addEventListener('click', async () => 
   const warn = e && e.going > 0
     ? `${e.going} ${e.going === 1 ? 'person has' : 'people have'} marked going. cancel anyway?`
     : 'cancel this event?';
-  if (!confirm(warn)) return;
+  if (!(await askConfirm(warn, 'cancel it'))) return;
   if (await cancelEvent(id)) document.getElementById('closeDetail').click();
 });
 document.getElementById('editClose').addEventListener('click', closeEditSheet);
