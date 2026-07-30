@@ -145,6 +145,10 @@ export default {
        nothing, core needs it, and it never touches Gemini. */
     if (path.endsWith('/geocode')) return reverseGeocode(request, env, origin);
 
+    /* Venue search. Also a GET, also above the POST guard, also free
+       and never near Gemini. */
+    if (path.endsWith('/places')) return searchPlaces(request, env, origin);
+
     if (request.method !== 'POST') return json({ error: 'nothing here' }, 405, origin);
 
     /* Passkeys sit ABOVE the invite gate. That gate exists to ration
@@ -777,4 +781,107 @@ async function checkMagicAccess(body, env) {
   return allowed
     ? { allowed: true, reason: null }
     : { allowed: false, reason: MAGIC_LOCKED };
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   VENUE SEARCH
+
+   The venue book only contains places somebody has already published
+   to, so the first person in a new town types a name and gets nothing —
+   the emptiest possible moment for a discovery app to be empty.
+
+   This asks OpenStreetMap instead. Results are SUGGESTIONS: the app
+   still writes its own venues row on publish, so the local book keeps
+   growing and keeps winning, and a place somebody has used before
+   always outranks a stranger from OSM.
+
+   Same reasons as /geocode for living here rather than in the browser:
+   Nominatim wants an identifying User-Agent and roughly one request a
+   second, KV caching makes that achievable, and nobody's search text
+   leaves their device for a third party.
+   ═══════════════════════════════════════════════════════════════════ */
+async function searchPlaces(request, env, origin) {
+  const url = new URL(request.url);
+  const q = (url.searchParams.get('q') || '').trim();
+  const lat = Number(url.searchParams.get('lat'));
+  const lng = Number(url.searchParams.get('lng'));
+
+  if (q.length < 2) return json({ places: [] }, 200, origin);
+  if (q.length > 120) return json({ error: 'query too long' }, 400, origin);
+
+  const hasBias = Number.isFinite(lat) && Number.isFinite(lng);
+
+  /* Cache key includes a coarse location, because "the mill" means a
+     different building in Ericeira than in Lisbon. Rounded to ~11km so
+     a whole town shares one cache entry. */
+  const near = hasBias ? `${lat.toFixed(1)},${lng.toFixed(1)}` : 'any';
+  const key = `places:${near}:${q.toLowerCase().replace(/\s+/g, ' ')}`;
+
+  if (env.BICH_KV) {
+    const hit = await env.BICH_KV.get(key, 'json').catch(() => null);
+    if (hit) return json({ places: hit, cached: true }, 200, origin);
+  }
+
+  const search = new URL('https://nominatim.openstreetmap.org/search');
+  search.searchParams.set('q', q);
+  search.searchParams.set('format', 'jsonv2');
+  search.searchParams.set('addressdetails', '1');
+  search.searchParams.set('limit', '8');
+  if (hasBias) {
+    /* A box roughly 60km across, and NOT bounded — a venue just outside
+       it should still be findable, it just ranks lower. */
+    const d = 0.3;
+    search.searchParams.set('viewbox', `${lng - d},${lat + d},${lng + d},${lat - d}`);
+    search.searchParams.set('bounded', '0');
+  }
+
+  let rows;
+  try {
+    const r = await fetch(search.toString(), {
+      headers: {
+        'User-Agent': 'bich.service/1.0 (https://bich.app)',
+        'Accept': 'application/json'
+      },
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!r.ok) return json({ places: [], error: `geocoder said ${r.status}` }, 200, origin);
+    rows = await r.json();
+  } catch (err) {
+    // A dead search box is better than a broken form. The person can
+    // always type a name and drop a pin themselves.
+    return json({ places: [], error: 'search unavailable' }, 200, origin);
+  }
+
+  const places = (Array.isArray(rows) ? rows : [])
+    .filter(r => r.lat && r.lon && r.name)
+    .map(r => {
+      const a = r.address || {};
+      /* Nominatim's display_name is the full postal chain and far too
+         long for a list row. Two or three parts is what somebody needs
+         to tell two places with the same name apart. */
+      const where = [
+        a.road || a.pedestrian || a.suburb || null,
+        a.village || a.town || a.city || a.municipality || null
+      ].filter(Boolean).join(', ');
+
+      return {
+        name: String(r.name).slice(0, 200),
+        address: where || null,
+        lat: Number(r.lat),
+        lng: Number(r.lon),
+        osm_id: `${r.osm_type || 'x'}/${r.osm_id}`,
+        kind: r.type || r.category || null
+      };
+    })
+    .slice(0, 6);
+
+  if (env.BICH_KV) {
+    // Buildings do not move. A day is conservative and keeps us well
+    // inside Nominatim's usage policy.
+    await env.BICH_KV.put(key, JSON.stringify(places), { expirationTtl: 86400 })
+      .catch(() => {});
+  }
+
+  return json({ places }, 200, origin);
 }
