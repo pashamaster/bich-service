@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-25" />
+  <meta name="app-version" content="2026-07-26-26" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -573,6 +573,28 @@ body.is-admin .detail-owner::before {
   font-weight: 500;
   box-shadow: 0 4px 12px var(--border-accent);
 }
+/* A pin plus its time. The label is positioned off the dot rather than
+   inside the icon box, so the dot itself stays exactly on the
+   coordinate and the text hangs beside it. */
+.map-pin { position: relative; width: 14px; height: 14px; }
+.map-pin__label {
+  position: absolute; left: 20px; top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  font-family: var(--font-mono); font-size: 0.56rem;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: var(--bg);
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  pointer-events: none;
+  opacity: 0.94;
+}
+/* Below a certain zoom the labels collide into an unreadable mess, so
+   the map falls back to plain dots and the count in the footer. */
+.leaflet-container.zoomed-out .map-pin__label { display: none; }
+
 .map-marker--single { width: 14px; height: 14px; }
 
 .map-filter-bar {
@@ -2414,6 +2436,41 @@ function paintDetail(e){
 /* ── the edit sheet ────────────────────────────────────────────────
    Only reachable when this device holds the token, so there is no
    path here for someone who did not create the event. */
+/* ── whenLabel ─────────────────────────────────────────────────────
+   ONE way to write a date and time, everywhere: feed cards, the detail
+   screen, map pins, pin lists, share text.
+
+     fri 31 jul · 7:00 pm
+
+   Before this there were four different renderings in four places —
+   24-hour here, a dot separator there, day-of-week sometimes — which
+   made the same event look like different events depending on where
+   you saw it. Lowercase throughout, because the whole app is. */
+function whenLabel(d, opts){
+  const date = (d instanceof Date) ? d : new Date(d);
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const o = opts || {};
+
+  const day = date.toLocaleDateString('en-GB', {
+    weekday: o.weekday === false ? undefined : 'short',
+    day: 'numeric',
+    month: 'short'
+  }).toLowerCase().replace(',', '');
+
+  if (o.timeOnly === true) return timeLabel(date);
+  if (o.dateOnly === true) return day;
+  return `${day} · ${timeLabel(date)}`;
+}
+
+/* 7:00 pm, not 19:00 and not 7:00 PM. */
+function timeLabel(d){
+  const date = (d instanceof Date) ? d : new Date(d);
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('en-GB', {
+    hour: 'numeric', minute: '2-digit', hour12: true
+  }).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 /* ── eventDate ─────────────────────────────────────────────────────
    rowToEvent stores TWO date fields and they are not interchangeable:
 
@@ -2445,13 +2502,21 @@ function openEditSheet(ev){
      NaN, the fields were set to "NaN-NaN-NaN" which the inputs reject,
      and the edit sheet opened with an empty date and time. Saving then
      sent ends_at: null and wiped the finish time. */
-  const at = eventDate(ev) || new Date();
+  const at = eventDate(ev);
+  if (!at){
+    /* If this ever happens the date and time boxes open blank and the
+       person cannot tell whether the event has no time or the app lost
+       it. Say so rather than quietly showing empty inputs. */
+    console.error('[bich] no readable date on this event —',
+                  { starts_at: ev.starts_at, when: ev.when, id: ev.id });
+  }
+  const at2 = at || new Date();
   const pad = n => String(n).padStart(2, '0');
   const set = (id, v) => { document.getElementById(id).value = v == null ? '' : v; };
   set('editTitle', ev.title);
   set('editVenue', ev.venue || '');
-  set('editDate', `${at.getFullYear()}-${pad(at.getMonth()+1)}-${pad(at.getDate())}`);
-  set('editTime', `${pad(at.getHours())}:${pad(at.getMinutes())}`);
+  set('editDate', `${at2.getFullYear()}-${pad(at2.getMonth()+1)}-${pad(at2.getDate())}`);
+  set('editTime', `${pad(at2.getHours())}:${pad(at2.getMinutes())}`);
   set('editFinish', ev.ends_at
       ? (d => `${pad(d.getHours())}:${pad(d.getMinutes())}`)(new Date(ev.ends_at)) : '');
   set('editPrice', ev.price || '');
@@ -3229,6 +3294,13 @@ function initMap() {
      like the app fighting you. */
   map.on('dragstart zoomstart', () => { map._userHasPanned = true; });
 
+  const zoomClass = () => {
+    const el = map.getContainer();
+    el.classList.toggle('zoomed-out', map.getZoom() < 12);
+  };
+  map.on('zoomend', zoomClass);
+  zoomClass();
+
   // NOTE: For production, swap to Protomaps self-hosted or Stadia per spec.
   // This is dev-only use of OSM public tiles for the prototype.
   const tiles = currentTiles();
@@ -3338,8 +3410,7 @@ function openPinList(group){
   body.innerHTML = sorted.map(e => {
     const d = eventDate(e) || new Date();
     return `<button type="button" class="pin-row" data-id="${escapeHtml(e.id)}">
-      <span class="pin-row__when">${d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})}
-        ${String(d.getHours()).padStart(2,'0')}.${String(d.getMinutes()).padStart(2,'0')}</span>
+      <span class="pin-row__when">${escapeHtml(whenLabel(d))}</span>
       <span class="pin-row__t">${escapeHtml(e.title)}</span>
       ${e.category ? `<span class="pin-row__c">${escapeHtml(e.category)}</span>` : ''}
     </button>`;
@@ -3393,13 +3464,26 @@ function paintMap(){
   byPin.forEach(group => {
     const first = group[0];
     const n = group.length;
+
+    /* A bare dot tells you something is somewhere and nothing else, so
+       reading the map meant tapping every pin to find out what and
+       when. The label carries the same wording as everywhere else in
+       the app, so a pin and a feed card describe an event identically.
+
+       Stacked pins show a count instead: five labels on one spot would
+       be unreadable, and the pin list already handles that case. */
+    const label = n === 1
+      ? `<span class="map-pin__label">${escapeHtml(whenLabel(eventDate(first)))}</span>`
+      : '';
+
     const m = L.marker([first.lat, first.lng], {
       icon: L.divIcon({
         className: '',
         html: n > 1
           ? `<div class="map-marker">${n > 99 ? '99+' : n}</div>`
-          : '<div class="map-marker map-marker--single"></div>',
-        iconSize: n > 1 ? [32, 32] : [14, 14]
+          : `<div class="map-pin"><div class="map-marker map-marker--single"></div>${label}</div>`,
+        iconSize: n > 1 ? [32, 32] : [14, 14],
+        iconAnchor: n > 1 ? [16, 16] : [7, 7]
       })
     }).addTo(map);
     m.on('click', () => n === 1 ? openDetail(first.id) : openPinList(group));
@@ -4548,8 +4632,7 @@ function rowToEvent(r){
     venue: r.venue_name || '',
     address: r.city || '',
     lat: r.venue_lat, lng: r.venue_lng,
-    when: when.toLocaleDateString('en-GB', { weekday:'short', month:'short', day:'numeric' }).toLowerCase()
-          + ' · ' + when.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }),
+    when: whenLabel(when),
     starts_at: r.starts_at,
     price: (r.price_value || 0) / 100,
     currency: r.price_currency || 'EUR',
@@ -5178,8 +5261,7 @@ async function copyLink(url){
 async function shareEvent(ev){
   const url = shareUrl(ev);
   const when = eventDate(ev) || new Date();
-  const text = `${String(ev.title || '').toLowerCase()} · ${
-    when.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' })}`;
+  const text = `${String(ev.title || '').toLowerCase()} · ${whenLabel(when)}`;
 
   if (navigator.share){
     try {
@@ -6439,10 +6521,9 @@ function resetCreateForm(){
 
 function formatWhen(dateStr, timeStr){
   if (!dateStr) return timeStr || '';
-  const d = new Date(`${dateStr}T${timeStr||'00:00'}`);
+  const d = new Date(`${dateStr}T${timeStr || '00:00'}`);
   if (Number.isNaN(d.getTime())) return [dateStr, timeStr].filter(Boolean).join(' · ');
-  const day = d.toLocaleDateString('en-GB', { weekday:'short', month:'short', day:'numeric' });
-  return `${day}${timeStr ? ' · ' + timeStr : ''}`;
+  return whenLabel(d);            // one renderer, no second opinion
 }
 
 /* ── publish: build the event, save it, show it in the feed ── */
