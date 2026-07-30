@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-23" />
+  <meta name="app-version" content="2026-07-26-24" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2413,11 +2413,38 @@ function paintDetail(e){
 /* ── the edit sheet ────────────────────────────────────────────────
    Only reachable when this device holds the token, so there is no
    path here for someone who did not create the event. */
+/* ── eventDate ─────────────────────────────────────────────────────
+   rowToEvent stores TWO date fields and they are not interchangeable:
+
+     e.starts_at  the ISO timestamp — the actual instant
+     e.when       "mon 27 jul · 19:00" — a string for humans to read
+
+   Four separate places were calling new Date(e.when), which is an
+   Invalid Date every time. It silently broke the map (every event
+   filtered out), the edit sheet (date and time fields blanked, and the
+   finish time wiped on every save), the pin list ordering, and the
+   share text.
+
+   One helper, so there is nowhere left to get this wrong. */
+function eventDate(e){
+  if (!e) return null;
+  if (e.starts_at){
+    const d = new Date(e.starts_at);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  if (e.when instanceof Date && !Number.isNaN(e.when.getTime())) return e.when;
+  return null;
+}
+
 let editingId = null;
 
 function openEditSheet(ev){
   editingId = ev.id;
-  const at = new Date(ev.when);
+  /* Was new Date(ev.when) — an Invalid Date, so getFullYear() returned
+     NaN, the fields were set to "NaN-NaN-NaN" which the inputs reject,
+     and the edit sheet opened with an empty date and time. Saving then
+     sent ends_at: null and wiped the finish time. */
+  const at = eventDate(ev) || new Date();
   const pad = n => String(n).padStart(2, '0');
   const set = (id, v) => { document.getElementById(id).value = v == null ? '' : v; };
   set('editTitle', ev.title);
@@ -2556,9 +2583,12 @@ async function saveEdit(){
     description: val('editDesc') || null,
     price_value: Math.max(0, Math.round((Number(val('editPrice')) || 0) * 100)),
     capacity: val('editCap') ? parseInt(val('editCap'), 10) : null,
-    ends_at: endsAt ? endsAt.toISOString() : null,
     category: val('editCategory') || null
   };
+  /* Only touch the finish time when there is one to set, or clearing
+     the field is indistinguishable from never having opened it — which
+     is how every save used to erase it. */
+  if (val('editFinish')) patch.ends_at = endsAt ? endsAt.toISOString() : null;
   /* Only send what actually changed. `?` semantics in the RPC mean a
      key that is present is applied even when null, so sending these
      unconditionally would wipe a cover the person never touched. */
@@ -3254,9 +3284,8 @@ function mappableEvents(){
        fact the chips were fine and there was simply nothing to filter.
        e.starts_at is the ISO timestamp and has been on the object the
        whole time. */
-    const when = e.starts_at ? new Date(e.starts_at)
-               : (e.when instanceof Date ? e.when : new Date(e.when));
-    if (Number.isNaN(when.getTime())) return false;
+    const when = eventDate(e);
+    if (!when) return false;
     if (to && when >= to) return false;
 
     /* Still on counts as on. An event with a finish time is live until
@@ -3282,10 +3311,10 @@ function openPinList(group){
   const body  = document.getElementById('pinListBody');
   const head  = document.getElementById('pinListHead');
   if (!panel) return;
-  const sorted = group.slice().sort((a, b) => new Date(a.when) - new Date(b.when));
+  const sorted = group.slice().sort((a, b) => (eventDate(a) || 0) - (eventDate(b) || 0));
   head.textContent = `${sorted.length} at ${sorted[0].venue || 'this pin'}`;
   body.innerHTML = sorted.map(e => {
-    const d = new Date(e.when);
+    const d = eventDate(e) || new Date();
     return `<button type="button" class="pin-row" data-id="${escapeHtml(e.id)}">
       <span class="pin-row__when">${d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})}
         ${String(d.getHours()).padStart(2,'0')}.${String(d.getMinutes()).padStart(2,'0')}</span>
@@ -4030,14 +4059,28 @@ async function updateEvent(shortId, patch){
     return Array.isArray(row) ? row[0] : row;
   }
 
-  if (CURRENT_USER.id && Store.data.secretClaimed){
-    const row = await sbRpc('update_event_as', {
-      p_short_id: shortId, p_user: CURRENT_USER.id,
-      p_secret: deviceSecret(), p_patch: patch
-    });
-    return Array.isArray(row) ? row[0] : row;
-  }
   const token = tokenFor(shortId);
+
+  if (CURRENT_USER.id && Store.data.secretClaimed){
+    try {
+      const row = await sbRpc('update_event_as', {
+        p_short_id: shortId, p_user: CURRENT_USER.id,
+        p_secret: deviceSecret(), p_patch: patch
+      });
+      return Array.isArray(row) ? row[0] : row;
+    } catch(err){
+      /* owns_event() checks host_id = your uuid. Events published while
+         ensureUser() was failing have host_id NULL, so they belong to
+         nobody and this refuses — even though the device that made them
+         still holds their token. Cancel already had this fallback;
+         editing did not, which is why one worked and the other did not
+         on the same event. */
+      console.error('[bich] update_event_as refused —', err.status || '', err.message || err);
+      if (!token) throw err;
+      console.warn('[bich] retrying the edit with the legacy token');
+    }
+  }
+
   if (!token) throw new Error('this device did not create that event');
   const row = await sbRpc('update_event', {
     p_short_id: shortId, p_token: token, p_patch: patch
@@ -4252,8 +4295,19 @@ async function saveEvent(spec){
   const token = newEditToken();
   const hash  = await sha256Hex(token);
 
+  /* An event with no host cannot be edited or cancelled by anybody,
+     ever — owns_event() matches on host_id and null matches nobody.
+     Publishing anyway used to create a permanently orphaned event and
+     say nothing. Fail here instead, where the person can see it. */
+  if (!CURRENT_USER.id){
+    await ensureUser().catch(() => {});
+    if (!CURRENT_USER.id){
+      throw new Error('this device has no account yet — check the connection and try again');
+    }
+  }
+
   const saved = await sbInsert('events', {
-    host_id: CURRENT_USER.id || null,
+    host_id: CURRENT_USER.id,
     title: String(spec.title || '').slice(0, 200),
     description: withLineup(spec.description, renderLineup(spec.lineup)) || null,
     venue_id: venueId,
@@ -4949,7 +5003,7 @@ async function openMeList(kind){
     } catch(err){ console.warn('[bich] could not load your list', err.message); }
   }
 
-  const rows = [...have.values()].sort((a, b) => new Date(b.when) - new Date(a.when));
+  const rows = [...have.values()].sort((a, b) => (eventDate(b) || 0) - (eventDate(a) || 0));
   EVENTS.length = 0;
   rows.forEach(e => EVENTS.push(Object.assign(e, { bundle: 'personal' })));
   renderBundles();
@@ -5086,7 +5140,7 @@ async function copyLink(url){
 
 async function shareEvent(ev){
   const url = shareUrl(ev);
-  const when = ev.when instanceof Date ? ev.when : new Date(ev.when);
+  const when = eventDate(ev) || new Date();
   const text = `${String(ev.title || '').toLowerCase()} · ${
     when.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' })}`;
 
@@ -6849,6 +6903,9 @@ window.bichCheck = async function(){
     console.log('%c→ cancel and edit will not work. Check schema 15 ran.', 'color:#c33');
   }
   console.log('%cdone — if every line is OK, the going button works.', 'color:#2a7');
+  console.log('%cids for SQL repairs:', 'font-weight:600');
+  console.log('  uuid  ', CURRENT_USER.id);
+  console.log('  secret', Store.data.secret || '(none claimed on this device)');
 };
 
 /* ── the display name ──────────────────────────────────────────────
