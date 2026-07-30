@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-28" />
+  <meta name="app-version" content="2026-07-26-30" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -228,6 +228,19 @@ body.is-admin .detail-owner::before {
   letter-spacing: 0.14em; text-transform: uppercase;
   color: #d9534f; margin-bottom: 8px;
 }
+
+.outbox-state {
+  margin: 0 var(--space-md) var(--space-sm);
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 0.58rem;
+  letter-spacing: 0.06em; color: var(--muted);
+  cursor: pointer; min-height: 44px;
+  display: flex; align-items: center;
+}
+.outbox-state.err { border-color: #d9534f; color: #d9534f; }
 
 .review-card {
   margin: 0 var(--space-md) var(--space-md);
@@ -1652,6 +1665,9 @@ if ('serviceWorker' in navigator) {
 
     </div>
 
+    <!-- Only ever visible when something is genuinely waiting. -->
+    <p class="outbox-state" id="outboxState" hidden></p>
+
     <!-- Asked once, only about what the promotion job guessed. -->
     <div class="review-card" id="attendReview" hidden></div>
 
@@ -2139,116 +2155,16 @@ function genHandle() {
          WORDS_B[Math.floor(Math.random()*WORDS_B.length)];
 }
 
-/* ─── MOCK DATA ─── */
-const HOSTS = ['oak fern','wisp toad','linen hum','clove low','sage glow','marsh wild'];
+/* No seed data. There used to be seven hardcoded events here, with
+   Unsplash covers and invented hosts, sitting in EVENTS until loadFeed()
+   replaced them. If Supabase was slow, paused (the free tier sleeps
+   after seven days idle), or unreachable, a visitor saw seven events
+   that do not exist, in a place they are not, and could tap into them.
 
-const EVENTS = [
-  {
-    id: 'e1',
-    title: 'Tea ceremony at dawn',
-    desc: 'A slow morning of gongfu cha. Bring nothing but yourself and an empty stomach. We brew, we sit, we leave when the light is high.',
-    cover: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=800&q=80',
-    venue: 'Casa del Té',
-    address: 'Carrer Major 14, Sóller',
-    lat: 39.766, lng: 2.715,
-    when: 'Sat · Nov 22 · 07:30',
-    price: 15,
-    going: 9,
-    crossed: 5,
-    host: 'oak fern',
-    bundle: 'personal'
-  },
-  {
-    id: 'e2',
-    title: 'Sunset cliff yoga',
-    desc: 'Vinyasa above the cliffs of Banyalbufar. Mats provided. Stay for the silence after.',
-    cover: 'https://images.unsplash.com/photo-1545389336-cf090694435e?w=800&q=80',
-    venue: 'Mirador de ses Ànimes',
-    address: 'Banyalbufar',
-    lat: 39.703, lng: 2.514,
-    when: 'Tonight · 18:15',
-    price: 0,
-    going: 22,
-    crossed: 8,
-    host: 'sage glow',
-    bundle: 'nearby'
-  },
-  {
-    id: 'e3',
-    title: 'Night swim & bonfire',
-    desc: 'Cove. Fire. Quiet conversation. Bring a towel and one thing to share — a bottle, a story, a song.',
-    cover: 'https://images.unsplash.com/photo-1517462964-21fdcec3f25b?w=800&q=80',
-    venue: 'Cala Deià',
-    address: 'Deià, Mallorca',
-    lat: 39.751, lng: 2.652,
-    when: 'Tonight · 22:00',
-    price: 0,
-    going: 14,
-    crossed: 3,
-    host: 'wisp toad',
-    bundle: 'nearby'
-  },
-  {
-    id: 'e4',
-    title: 'Vinyl listening · ambient sets',
-    desc: 'Two records, beginning to end, in near-dark. No phones, no talking. Tea served between sides.',
-    cover: 'https://images.unsplash.com/photo-1593697821252-0c9137d9fc45?w=800&q=80',
-    venue: 'Estudio Bich',
-    address: 'Palma · Santa Catalina',
-    lat: 39.572, lng: 2.633,
-    when: 'Sun · Nov 23 · 20:00',
-    price: 10,
-    going: 18,
-    crossed: 11,
-    host: 'linen hum',
-    bundle: 'weekend'
-  },
-  {
-    id: 'e5',
-    title: 'Slow run + breakfast',
-    desc: '8km along the bay at conversation pace. Coffee and tostada after. Beginners welcome.',
-    cover: 'https://images.unsplash.com/photo-1552674605-db6ffd4facb5?w=800&q=80',
-    venue: 'Parc de la Mar',
-    address: 'Palma',
-    lat: 39.566, lng: 2.652,
-    when: 'Sun · 08:00',
-    price: 0,
-    going: 31,
-    crossed: 4,
-    host: 'clove low',
-    bundle: 'weekend'
-  },
-  {
-    id: 'e6',
-    title: 'Kitchen experiments · fermentation',
-    desc: 'We open last month\'s jars, taste, and start new ones. Salt, time, and a few opinions.',
-    cover: 'https://images.unsplash.com/photo-1532634922-8fe0b757fb13?w=800&q=80',
-    venue: 'Mercat de l\'Olivar',
-    address: 'Palma',
-    lat: 39.574, lng: 2.654,
-    when: 'Sat · 11:00',
-    price: 20,
-    going: 12,
-    crossed: 6,
-    host: 'marsh wild',
-    bundle: 'personal'
-  },
-  {
-    id: 'e7',
-    title: 'Bali — full moon walk',
-    desc: 'Slow walk through the rice fields under the November full moon. No phones, no music. Bring a light if you want one.',
-    cover: 'https://images.unsplash.com/photo-1537956965359-7573183d1f57?w=800&q=80',
-    venue: 'Tegallalang',
-    address: 'Ubud · Bali',
-    lat: -8.430, lng: 115.276,
-    when: 'Wed · 19:30',
-    price: 5,
-    going: 27,
-    crossed: 0,
-    host: 'dune calm',
-    bundle: 'weekend'
-  }
-];
+   PROJECT.md §3: the app must not silently replace a failed production
+   connection with fake event data. An empty feed that says it could not
+   reach the service is honest; a full feed of fiction is not. */
+const EVENTS = [];
 
 /* ─── ICONS (inline) ─── */
 const icon = {
@@ -2775,14 +2691,46 @@ async function syncGoingFromServer(){
      natively, has room, and is async.
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════
+   THE OUTBOX
+
+   Supabase is the only authority. Local state is a cache plus a queue
+   of writes it has not accepted yet — that is the whole model, and
+   everything below follows from it.
+
+   Before this, a failed write meant a toast and a lost intention.
+   Publish an event on a train and it was gone; tap "going" in a
+   basement and it lived in localStorage until the next launch; edit
+   something with no signal and the changes vanished with the sheet.
+
+   Four states, and the difference between them is visible:
+
+     pending    ours alone, not sent
+     sending    in flight right now
+     acknowledged  Supabase said yes — the only state that means published
+     failed     refused for a reason retrying will not fix
+
+   IndexedDB rather than localStorage because localStorage is 5MB of
+   synchronous strings, and a queued cover is a 180KB Blob.
+   ═══════════════════════════════════════════════════════════════════ */
+
 const COVER_DB = 'bich-covers';
 const COVER_STORE = 'pending';
+const OUTBOX_STORE = 'outbox';
+const OUTBOX_DB_VERSION = 2;
 
 function coverDb(){
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(COVER_DB, 1);
+    const req = indexedDB.open(COVER_DB, OUTBOX_DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
+      /* Added in version 2 alongside the existing cover store. Anyone
+         upgrading keeps their queued covers. */
+      if (!db.objectStoreNames.contains(OUTBOX_STORE)){
+        const st = db.createObjectStore(OUTBOX_STORE, { keyPath: 'operation_id' });
+        st.createIndex('status', 'status');
+        st.createIndex('created_at', 'created_at');
+      }
       if (!db.objectStoreNames.contains(COVER_STORE)){
         db.createObjectStore(COVER_STORE, { keyPath: 'shortId' });
       }
@@ -2791,6 +2739,205 @@ function coverDb(){
     req.onerror  = () => reject(req.error);
   });
 }
+
+async function outboxTx(mode, fn){
+  const db = await coverDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, mode);
+    let out;
+    try { out = fn(tx.objectStore(OUTBOX_STORE)); } catch(err){ reject(err); return; }
+    tx.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+    tx.onerror    = () => reject(tx.error);
+  });
+}
+
+/* One intention, one id, generated once and reused on every attempt.
+   That id is what makes a retry safe: the database records it the
+   first time and hands back the same answer afterwards instead of
+   doing the work twice. */
+async function outboxAdd(type, payload){
+  const item = {
+    operation_id: newOperationId(),
+    operation_type: type,
+    payload,
+    created_at: new Date().toISOString(),
+    attempts: 0,
+    last_error: null,
+    status: 'pending'
+  };
+  try {
+    await outboxTx('readwrite', st => st.put(item));
+    console.info('[bich] queued', type, item.operation_id.slice(0, 8));
+    paintOutboxState();
+    return item;
+  } catch(err){
+    console.error('[bich] could not queue', type, err);
+    return null;
+  }
+}
+
+async function outboxAll(){
+  try {
+    return await new Promise((resolve, reject) => {
+      coverDb().then(db => {
+        const req = db.transaction(OUTBOX_STORE, 'readonly')
+                      .objectStore(OUTBOX_STORE).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror   = () => reject(req.error);
+      }).catch(reject);
+    });
+  } catch(_){ return []; }
+}
+
+async function outboxUpdate(item){
+  try { await outboxTx('readwrite', st => st.put(item)); } catch(_){}
+}
+async function outboxDrop(id){
+  try { await outboxTx('readwrite', st => st.delete(id)); } catch(_){}
+  paintOutboxState();
+}
+
+/* Which failures are worth trying again.
+
+   Getting this wrong in either direction is expensive: retrying a
+   validation error forever means the queue never drains and real
+   failures are buried underneath one that can never succeed; giving up
+   on a timeout means losing somebody's event because a tunnel. */
+function isTransient(err){
+  const msg = String((err && err.message) || '');
+  if (/failed to fetch|load failed|networkerror|timed out|aborted/i.test(msg)) return true;
+  const s = err && err.status;
+  return s === 408 || s === 425 || s === 429 || s === 500 || s === 502 || s === 503 || s === 504;
+}
+
+/* Exponential backoff with jitter. The jitter matters more than it
+   looks: without it every queued item on every device retries on the
+   same schedule after an outage, and the service comes back up into a
+   synchronised stampede. */
+function backoffMs(attempts){
+  const base = Math.min(1000 * Math.pow(2, attempts), 5 * 60 * 1000);
+  return base * (0.5 + Math.random() * 0.5);
+}
+
+function outboxDue(item){
+  if (item.status === 'failed') return false;          // needs a person
+  if (!item.attempts) return true;
+  const last = item.last_attempt_at ? new Date(item.last_attempt_at).getTime() : 0;
+  return Date.now() - last >= backoffMs(item.attempts);
+}
+
+/* What each operation type actually does when its turn comes. Adding a
+   new queued mutation means adding one entry here and nothing else. */
+const OUTBOX_HANDLERS = {
+  'event.create': async (payload, opId) => {
+    const res = await sbRpc('publish_event', {
+      p_payload: payload, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_operation_id: opId
+    });
+    if (res && res.replayed) console.info('[bich] publish replayed, not duplicated');
+    return res;
+  },
+  'attendance.set': async (payload, opId) => sbRpc('set_attendance', {
+    p_short_id: payload.short_id, p_user: CURRENT_USER.id,
+    p_secret: deviceSecret(), p_status: payload.status, p_operation_id: opId
+  }),
+  'event.patch': async (payload, opId) => sbRpc('update_event_as', {
+    p_short_id: payload.short_id, p_user: CURRENT_USER.id,
+    p_secret: deviceSecret(), p_patch: payload.patch
+  }),
+  'event.cancel': async (payload, opId) => sbRpc('cancel_event_as', {
+    p_short_id: payload.short_id, p_user: CURRENT_USER.id, p_secret: deviceSecret()
+  }),
+  'community.set': async (payload, opId) => sbRpc('set_my_community', {
+    p_user: CURRENT_USER.id, p_secret: deviceSecret(),
+    p_slug: payload.slug, p_via: payload.via
+  })
+};
+
+let outboxRunning = false;
+
+async function outboxFlush(){
+  if (outboxRunning || !navigator.onLine || !SB_READY()) return;
+  const items = (await outboxAll()).filter(outboxDue);
+  if (!items.length) return;
+
+  await ensureUser().catch(() => {});
+  await claimDeviceSecret().catch(() => {});
+  if (!CURRENT_USER.id || !Store.data.secretClaimed){
+    console.warn('[bich] outbox waiting for an account');
+    return;
+  }
+
+  outboxRunning = true;
+  try {
+    for (const item of items.sort((a, b) => a.created_at.localeCompare(b.created_at))){
+      const run = OUTBOX_HANDLERS[item.operation_type];
+      if (!run){
+        console.error('[bich] no handler for', item.operation_type, '— dropping');
+        await outboxDrop(item.operation_id);
+        continue;
+      }
+
+      item.status = 'sending';
+      item.attempts = (item.attempts || 0) + 1;
+      item.last_attempt_at = new Date().toISOString();
+      await outboxUpdate(item);
+
+      try {
+        const result = await run(item.payload, item.operation_id);
+        /* Acknowledged only on the server's word. Anything less and the
+           four states collapse back into "probably fine". */
+        await outboxDrop(item.operation_id);
+        console.info('[bich] sent', item.operation_type, item.operation_id.slice(0, 8));
+        if (item.operation_type === 'event.create') await loadFeed();
+      } catch(err){
+        if (isTransient(err)){
+          item.status = 'pending';
+          item.last_error = err.message;
+          await outboxUpdate(item);
+          console.warn('[bich] will retry', item.operation_type, '—', err.message);
+          break;      // the network is unhappy; the rest will fare no better
+        }
+        item.status = 'failed';
+        item.last_error = explainWriteError(err);
+        await outboxUpdate(item);
+        console.error('[bich] permanently refused', item.operation_type, '—', err.message);
+      }
+    }
+  } finally {
+    outboxRunning = false;
+    paintOutboxState();
+  }
+}
+
+/* One line, only when there is something to say. Silence when the
+   queue is empty is the point — a permanent "all synced" badge is
+   noise, and noise is what people stop reading. */
+async function paintOutboxState(){
+  const el = document.getElementById('outboxState');
+  if (!el) return;
+  const items = await outboxAll();
+  if (!items.length){ el.hidden = true; return; }
+
+  const failed  = items.filter(i => i.status === 'failed');
+  const waiting = items.length - failed.length;
+
+  el.hidden = false;
+  el.className = 'outbox-state' + (failed.length ? ' err' : '');
+  el.textContent = failed.length
+    ? `${failed.length} ${failed.length === 1 ? 'change' : 'changes'} could not be saved — tap for details`
+    : `${waiting} ${waiting === 1 ? 'change' : 'changes'} waiting to send`;
+  el.onclick = failed.length
+    ? () => toast(failed[0].last_error || 'the server refused it')
+    : () => outboxFlush();
+}
+
+/* Retry on every occasion the spec names: startup, coming online, and
+   returning to the foreground. */
+window.addEventListener('online', () => outboxFlush());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') outboxFlush();
+});
 
 async function coverTx(mode, fn){
   const db = await coverDb();
@@ -3158,7 +3305,10 @@ document.getElementById('attendBtn').addEventListener('click', async () => {
        Postgres always says why; show it. */
     toast(window._lastAttendError || "couldn't save that — try again");
   } else if (result.state === 'queued'){
-    queuePendingAttendance(id, nowGoing);
+    /* The outbox, not localStorage. Same intention, but it now survives
+       a restart with a retry schedule attached instead of waiting for
+       someone to happen to reopen the app. */
+    await outboxAdd('attendance.set', { short_id: id, status: nowGoing ? 'going' : 'cancelled' });
   }
   btn.dataset.busy = '0';
 });
@@ -3180,6 +3330,22 @@ function clearPendingAttendance(shortId){
 
 /* Push anything the local store knows that the database might not.
    Runs on launch, costs nothing when everything already agrees. */
+/* One-time migration. pendingAttend lived in localStorage; anything
+   still there when this build lands would otherwise be stranded, since
+   nothing reads that key any more. */
+async function migratePendingAttendance(){
+  const pending = Store.data.pendingAttend || {};
+  const ids = Object.keys(pending);
+  if (!ids.length) return;
+  for (const shortId of ids){
+    await outboxAdd('attendance.set', {
+      short_id: shortId, status: pending[shortId].going ? 'going' : 'cancelled'
+    });
+  }
+  Store.set({ pendingAttend: {} });
+  console.info('[bich] moved', ids.length, 'queued attendance change(s) into the outbox');
+}
+
 async function syncAttendance(){
   if (!SB_READY() || !CURRENT_USER.id) return;
 
@@ -3956,11 +4122,16 @@ async function ensureUser(handle){
      would then fail the user_id foreign key, silently. Check once. */
   if (CURRENT_USER.id && !CURRENT_USER._checked){
     try {
-      const rows = await sbGet(`users?id=eq.${CURRENT_USER.id}&select=id&limit=1`);
-      if (rows && rows.length){ CURRENT_USER._checked = true; return CURRENT_USER; }
+      /* Was a direct read of the users table. That table is no longer
+         readable by the browser at all — every uuid and handle in the
+         database used to be one query away for anyone holding the anon
+         key. account_exists() answers the same question with a boolean
+         and reveals nothing about anybody. */
+      const alive = await sbRpc('account_exists', { p_user: CURRENT_USER.id });
+      if (alive){ CURRENT_USER._checked = true; return CURRENT_USER; }
       console.warn('[bich] stored user id no longer exists, claiming a new handle');
       CURRENT_USER = { id: null, handle: null };
-      Store.set({ uid: null });
+      Store.set({ uid: null, secretClaimed: false });
     } catch(_){ return CURRENT_USER; }   // offline: trust it
   }
   if (CURRENT_USER.id) return CURRENT_USER;
@@ -3987,19 +4158,12 @@ async function ensureUser(handle){
        Fall back to the built-in list so a deploy-order mismatch cannot
        stop somebody using the app. */
     console.warn('[bich] create_account unavailable, using the local word list', err.message);
-    let name = handle || currentHandle;
-    for (let attempt = 0; attempt < 6; attempt++){
-      try {
-        const rows = await sbInsert('users', { handle: name });
-        CURRENT_USER = { id: rows[0].id, handle: rows[0].handle };
-        Store.set({ uid: CURRENT_USER.id, handle: CURRENT_USER.handle });
-        return CURRENT_USER;
-      } catch(e2){
-        if (e2.status !== 409) { console.error('[bich] could not create an account', e2); return CURRENT_USER; }
-        name = genHandle();
-      }
-    }
-    console.error('[bich] every handle attempt collided — nothing will save until this is fixed');
+    /* The direct-insert fallback is gone with the table privileges.
+       It only ever existed for a database without create_account(),
+       and it is exactly the write path that let anything claim a row
+       in users. If create_account() is missing, that is a deploy
+       problem to fix, not one to route around. */
+    console.error('[bich] create_account() is unavailable — check schema 17 was applied');
     return CURRENT_USER;
   }
 }
@@ -4932,8 +5096,7 @@ async function bichCheck(){
     for (const [label, path] of [
       ['read communities', 'communities?select=slug&limit=1'],
       ['read venues',      'venues?select=id&limit=1'],
-      ['read events_public','events_public?select=short_id&limit=1'],
-      ['read users',       'users?select=id&limit=1']
+      ['read events_public','events_public?select=short_id&limit=1']
     ]){
       try { await sbGet(path); add(label, true); }
       catch(e){ add(label, false, `${e.status || ''} ${e.message}`.trim()); }
@@ -4945,6 +5108,12 @@ async function bichCheck(){
       add('feed() rpc', false, `${e.status || ''} ${e.message}`.trim() +
           ' - schema part 3 grants execute on feed() to anon');
     }
+    /* users is deliberately unreadable now, so this asserts the
+       OPPOSITE of the others: a successful read here is the failure. */
+    try {
+      await sbGet('users?select=id&limit=1');
+      add('users table is private', false, 'it is readable by anon — run schema 25');
+    } catch(_){ add('users table is private', true, 'anon cannot list accounts'); }
     add('identity', Boolean(CURRENT_USER.id), CURRENT_USER.id ? currentHandle : 'no user row yet');
   }
 
@@ -5041,7 +5210,7 @@ async function loadFeed(){
     EVENTS.length = 0;
     rows.forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
-    setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
+    setFeedStatus(EVENTS.length ? '' : 'nothing published near you yet');
     return true;
   } catch(err){
     console.warn('[bich] feed() rpc failed, falling back to events_public', err);
@@ -5414,6 +5583,10 @@ async function adoptCommunity(lat, lng, signal){
   if (previous === slug) return false;                    // already there
 
   Store.set({ home: { slug, name: place.name, via: signal } });
+  /* Also on the account, so a passkey restore does not land somebody
+     nowhere. Queued rather than awaited: community is a nicety, and it
+     must never delay or fail the thing that triggered it. */
+  outboxAdd('community.set', { slug, via: signal });
   KNOWN_COMMUNITIES = null;                               // refetch, it may be new
   loadCommunities().then(() => recentreMapOnHome()).catch(() => {});
   console.info(`[bich] community → ${slug} (${COMMUNITY_SIGNALS[signal] || signal})`);
@@ -5441,6 +5614,28 @@ function adoptCommunityFrom(ev, slug){
   return true;
 }
 
+/* A link to an event that was called off. Says so plainly, names it,
+   and offers the way onward — rather than a dead screen or a toast
+   that vanishes before it is read. */
+function showCancelledEvent(e){
+  const when = e && e.starts_at ? whenLabel(e.starts_at) : '';
+  const box = document.getElementById('attendReview');
+  if (box){
+    box.hidden = false;
+    box.innerHTML =
+      `<div class="review-card__head">this event was cancelled</div>
+       <div class="review-card__row">
+         <span class="review-card__title">${escapeHtml(String((e && e.title) || 'the event'))}</span>
+       </div>
+       ${when ? `<p class="detail-stats">it was going to be ${escapeHtml(when)}</p>` : ''}
+       <button type="button" class="review-card__done" id="cancelledDismiss">see what else is on</button>`;
+    document.getElementById('cancelledDismiss')?.addEventListener('click', () => {
+      box.hidden = true;
+    }, { once: true });
+  }
+  toast('that event was cancelled');
+}
+
 async function openDeepLink(){
   const params = new URLSearchParams(location.search);
   const short = params.get('e');
@@ -5454,12 +5649,24 @@ async function openDeepLink(){
   let slug = ev ? ev.communitySlug : null;
   if (!ev && SB_READY()){
     try {
-      const rows = await sbGet(`events_public?short_id=eq.${encodeURIComponent(short)}&limit=1`);
-      if (rows && rows.length){
-        slug = rows[0].community_slug || null;
-        ev = rowToEvent(rows[0]);
+      /* public_event() instead of reading events_public directly,
+         because that view filters status = 'live' — so a cancelled
+         event's link resolved to nothing at all. Somebody standing
+         outside a venue holding that link got a blank screen, which is
+         the single worst moment for the app to say nothing. */
+      const res = await sbRpc('public_event', { p_short_id: short });
+
+      if (res && res.found && res.status === 'live' && res.event){
+        slug = res.event.community_slug || null;
+        ev = rowToEvent(res.event);
         EVENTS.unshift(ev);
         renderBundles();
+      } else if (res && res.found){
+        /* Cancelled. The RPC returns the title and the time and
+           nothing else — no venue, no pin, no host, no counts. This
+           event is not happening and nobody needs directions to it. */
+        showCancelledEvent(res.event);
+        return;
       }
     } catch(err){ console.warn('[bich] deep link lookup failed', err.message); }
   }
@@ -6650,10 +6857,8 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         Store.setGoing(ev.id, true);
         ev.going = hostGoing.count != null ? hostGoing.count : 1;
       } else if (hostGoing.state === 'queued'){
-        /* The event is live but the host is not marked going yet. Queue
-           it rather than leaving them absent from their own event. */
         Store.setGoing(ev.id, true);
-        queuePendingAttendance(ev.id, true);
+        await outboxAdd('attendance.set', { short_id: ev.id, status: 'going' });
       }
 
       if (img) ev.cover = img.url;      // one size, so one field
@@ -7284,6 +7489,9 @@ wireVenueSearch();
   await loadCommunities();
   await ensureUser().catch(err => console.warn('[bich] user setup failed', err));
   await loadFeed();
+  await migratePendingAttendance();
+  paintOutboxState();
+  await outboxFlush();
   await syncAttendance();
   /* Push anything pending FIRST, then read the truth back — the other
      order would overwrite an offline tap with a stale server answer. */

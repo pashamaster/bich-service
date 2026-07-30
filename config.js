@@ -67,7 +67,7 @@ window.BICH_CONFIG = {
 
   /* Bump on every release. Shown in the me screen so you can tell at
      a glance which build a phone is actually running. */
-  version: '2026-07-26-28'
+  version: '2026-07-26-30'
 };
 
 /* ──────────────────────────────────────────────────────────────────
