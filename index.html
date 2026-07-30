@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-24" />
+  <meta name="app-version" content="2026-07-26-25" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2397,6 +2397,7 @@ function paintDetail(e){
       window._detailBase = L.tileLayer(TILE_URL(currentTiles().base), {
         subdomains: 'abcd', maxZoom: 19
       }).addTo(window._detailMap);
+      addLabels(window._detailMap);      // after the base, so it sits on top
     }
     const m = window._detailMap;
     if (window._detailMarker) m.removeLayer(window._detailMarker);
@@ -2504,6 +2505,7 @@ function initEditMap(lat, lng){
     editMap = L.map('editMap', { zoomControl: false, attributionControl: false })
       .setView(centre, lat != null ? 15 : h.zoom);
     L.tileLayer(TILE_URL(currentTiles().base), { subdomains: 'abcd', maxZoom: 19 }).addTo(editMap);
+    addLabels(editMap);
     editMap.on('click', e => setEditPin(e.latlng.lat, e.latlng.lng));
   } else {
     editMap.setView(centre, lat != null ? 15 : h.zoom);
@@ -3173,6 +3175,23 @@ const MAP_TILES = {
 };
 const TILE_URL = name => `https://{s}.basemaps.cartocdn.com/${name}/{z}/{x}/{y}{r}.png`;
 
+/* ── addLabels ─────────────────────────────────────────────────────
+   The CARTO base tiles are "_nolabels" — deliberately quiet, and with
+   no town names at all. The main map adds a matching "_only_labels"
+   overlay on top; the three SMALL maps never did.
+
+   That is why the pin picker shows a coastline and some roads and
+   nothing you can name. Dropping a pin accurately on an unlabelled
+   map means recognising the shape of a bay, which is a lot to ask. */
+function addLabels(map){
+  if (!map) return null;
+  const layer = L.tileLayer(TILE_URL(currentTiles().labels), {
+    subdomains: 'abcd', maxZoom: 19, pane: 'shadowPane'
+  }).addTo(map);
+  (window._labelLayers = window._labelLayers || []).push(layer);
+  return layer;
+}
+
 function currentTiles(){
   return MAP_TILES[document.documentElement.dataset.theme] || MAP_TILES.night;
 }
@@ -3183,6 +3202,9 @@ function applyMapTheme(){
   [window._mapBase, window._miniBase, window._detailBase]
     .forEach(l => l && l.setUrl(TILE_URL(t.base)));
   if (window._mapLabels) window._mapLabels.setUrl(TILE_URL(t.labels));
+  /* Every label layer, or the small maps keep dark labels on a paper
+     background after a theme switch. */
+  (window._labelLayers || []).forEach(l => l && l.setUrl(TILE_URL(t.labels)));
 }
 
 function initMap() {
@@ -3531,6 +3553,7 @@ function initMiniMap() {
   window._miniBase = L.tileLayer(TILE_URL(currentTiles().base), {
     subdomains: 'abcd', maxZoom: 19
   }).addTo(m);
+  addLabels(m);
   m.on('click', (e) => setEventLocation(e.latlng.lat, e.latlng.lng, false));
   window._miniMap = m;
   window._miniReady = true;
@@ -4042,50 +4065,64 @@ function canvasToBlob(canvas, mime, quality){
    this is the only way a row can change - which is what closed the
    hole where anyone could rewrite any upcoming event. */
 async function updateEvent(shortId, patch){
-  /* Ownership is now per person. Falls back to the old per-event token
-     for anything published before schema 13, so nobody's existing
-     events become uneditable on upgrade. */
   await claimDeviceSecret();
 
-  /* An admin editing somebody else's event needs the admin RPC — the
-     owner one checks host_id and would refuse. Hosts keep using their
-     own path even when they are admins, so the ordinary case is never
-     routed through elevated rights. */
-  if (IS_ADMIN && !(Store.data.hosting || []).includes(shortId)){
-    const row = await sbRpc('admin_update_event', {
+  const mine  = (Store.data.hosting || []).includes(shortId);
+  const token = tokenFor(shortId);
+  const tried = [];
+
+  /* Three ways in, tried in order of least privilege. The FIRST error
+     is the real one — the fallbacks fail for their own unrelated
+     reasons, and reporting the last one is what produced "could not
+     find public.update_event" when the actual problem was somewhere
+     else entirely. */
+  const attempt = async (label, fn) => {
+    try { return { ok: true, row: await fn() }; }
+    catch(err){
+      tried.push(`${label}: ${err.message}`);
+      console.error(`[bich] ${label} refused —`, err.status || '', err.message || err);
+      return { ok: false, err };
+    }
+  };
+
+  if (CURRENT_USER.id && Store.data.secretClaimed && mine){
+    const r = await attempt('update_event_as', () => sbRpc('update_event_as', {
+      p_short_id: shortId, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_patch: patch
+    }));
+    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
+  }
+
+  /* An admin may correct anything — including their own event whose
+     host_id is null, which the owner path refuses. */
+  if (IS_ADMIN && CURRENT_USER.id && Store.data.secretClaimed){
+    const r = await attempt('admin_update_event', () => sbRpc('admin_update_event', {
       p_user: CURRENT_USER.id, p_secret: deviceSecret(),
       p_short_id: shortId, p_patch: patch
-    });
-    return Array.isArray(row) ? row[0] : row;
+    }));
+    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
   }
 
-  const token = tokenFor(shortId);
-
-  if (CURRENT_USER.id && Store.data.secretClaimed){
-    try {
-      const row = await sbRpc('update_event_as', {
-        p_short_id: shortId, p_user: CURRENT_USER.id,
-        p_secret: deviceSecret(), p_patch: patch
-      });
-      return Array.isArray(row) ? row[0] : row;
-    } catch(err){
-      /* owns_event() checks host_id = your uuid. Events published while
-         ensureUser() was failing have host_id NULL, so they belong to
-         nobody and this refuses — even though the device that made them
-         still holds their token. Cancel already had this fallback;
-         editing did not, which is why one worked and the other did not
-         on the same event. */
-      console.error('[bich] update_event_as refused —', err.status || '', err.message || err);
-      if (!token) throw err;
-      console.warn('[bich] retrying the edit with the legacy token');
-    }
+  if (!mine && CURRENT_USER.id && Store.data.secretClaimed){
+    const r = await attempt('update_event_as', () => sbRpc('update_event_as', {
+      p_short_id: shortId, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_patch: patch
+    }));
+    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
   }
 
-  if (!token) throw new Error('this device did not create that event');
-  const row = await sbRpc('update_event', {
-    p_short_id: shortId, p_token: token, p_patch: patch
-  });
-  return Array.isArray(row) ? row[0] : row;
+  if (token){
+    const r = await attempt('update_event (token)', () => sbRpc('update_event', {
+      p_short_id: shortId, p_token: token, p_patch: patch
+    }));
+    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
+  }
+
+  const e = new Error(tried.length
+    ? tried[0]
+    : 'this device cannot edit that event — no account and no saved token');
+  e.allAttempts = tried;
+  throw e;
 }
 
 async function cancelEvent(shortId){
