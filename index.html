@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-18" />
+  <meta name="app-version" content="2026-07-26-19" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -190,9 +190,46 @@ body { display: flex; align-items: center; justify-content: center; }
   font-family: var(--font-serif); font-style: italic; font-size: 1.9rem;
   color: var(--accent); line-height: 1.1;
 }
-#magicCodeRow { display: flex; gap: var(--space-sm); align-items: center; }
+#magicCodeRow, #displayNameRow { display: flex; gap: var(--space-sm); align-items: center; }
+#displayNameRow .input { flex: 1; min-height: 44px; }
+#displayNameRow .btn { min-height: 44px; white-space: nowrap; }
 #magicCodeRow .input { flex: 1; min-height: 44px; }
 #magicCodeRow .btn { min-height: 44px; white-space: nowrap; }
+
+.review-card {
+  margin: 0 var(--space-md) var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-sm);
+}
+.review-card__head {
+  font-family: var(--font-mono); font-size: 0.6rem;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 10px;
+}
+.review-card__row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-sm); min-height: 44px;
+  border-top: 1px solid var(--border);
+}
+.review-card__title {
+  font-family: var(--font-serif); font-style: italic;
+  font-size: 0.95rem; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.review-card__no, .review-card__done {
+  background: none; border: none; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.58rem;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); padding: 12px 4px; white-space: nowrap;
+  min-height: 44px;
+}
+.review-card__no:hover { color: var(--text); }
+.review-card__done {
+  width: 100%; margin-top: 6px; color: var(--accent);
+  border-top: 1px solid var(--border);
+}
 
 .me-note { font-size: 0.72rem; line-height: 1.55; color: var(--muted); margin-top: var(--space-sm); }
 .me-list-bar {
@@ -1561,6 +1598,9 @@ if ('serviceWorker' in navigator) {
 
     </div>
 
+    <!-- Asked once, only about what the promotion job guessed. -->
+    <div class="review-card" id="attendReview" hidden></div>
+
     <div class="me-list-bar" id="meListBar" hidden>
       <span id="meListBarText"></span>
       <button type="button" id="meListExit">back to the feed</button>
@@ -1649,6 +1689,16 @@ if ('serviceWorker' in navigator) {
           <button type="button" data-theme="night" aria-pressed="false">night</button>
         </div>
         <p class="me-note">paper reads best outside. night is easier on the eyes indoors.</p>
+      </div>
+
+      <div class="me-block">
+        <span class="text-label">name</span>
+        <div class="me-row" id="displayNameRow">
+          <input class="input" id="displayName" maxlength="24"
+                 placeholder="optional" autocomplete="off" />
+          <button class="btn" id="displayNameSave">save</button>
+        </div>
+        <p class="me-note" id="displayNameNote">optional. your handle stays either way — this is just what you would rather be called.</p>
       </div>
 
       <div class="me-block">
@@ -3396,6 +3446,10 @@ function setEventLocation(lat, lng, fromPhoto) {
   if (!fromPhoto){
     // a deliberate tap outranks a guess from EXIF
     draft.pinFromExif = false;
+    /* A venue pick sets venueSource first and then calls this, so do not
+       overwrite it — otherwise every venue-derived pin records itself as
+       a manual tap. */
+    draft.pinSource = draft.venueSource ? 'venue' : 'manual';
     const lbl = document.getElementById('coordsLabel');
     if (lbl) lbl.classList.remove('is-guess');
   }
@@ -3476,6 +3530,7 @@ const Store = {
     secret: null,       // one per person; proves ownership of everything
     secretClaimed: false,
     magic: false,            // this account may use magic
+    reviewedAttendance: {},  // { shortId: iso } — asked once, never again
     passkey: false,          // a credential exists for this account
     passkeyDeclined: false   // asked once, said no; do not ask again
   },
@@ -3991,6 +4046,10 @@ async function bulkCreate(rows, rq){
         price: r.price, currency: r.currency,
         recurrence: r.recurrence, contact: r.contact,
         coverUrl: img ? img.url : null,
+        /* Read off a photo by a model, so needs_review is set and the
+           pin is labelled 'extracted' — the two fields that let the app
+           offer a check-these pass over exactly these events. */
+        pinSource: r.venue_latitude !== '' ? 'extracted' : null,
         source: 'photo'
       });
       made.push({ short_id: saved.short_id, title: r.event_name, date: r.date });
@@ -4090,6 +4149,23 @@ async function saveEvent(spec){
     cover_url: spec.coverUrl || null,
     status: 'live',
     source: spec.source || 'manual',
+
+    /* Where the pin came from. Without this there is no way to tell a
+       location somebody chose from one inferred off a photo or guessed
+       by a model — and no way to audit a wrong pin afterwards. */
+    pin_source: (spec.lat == null) ? null : (spec.pinSource || 'manual'),
+
+    /* An event that already happened. Real: backfilled history, and
+       testing the crossed-paths graph with events that have actually
+       been attended. It still belongs to its host and still counts for
+       the community graph; it just is not pretending to be something
+       anyone can still turn up to. */
+    is_backfill: startsAt.getTime() < Date.now() - 60 * 60 * 1000,
+
+    /* Written by a model rather than a person, so the app can offer a
+       "check these" pass over exactly those events and no others. */
+    needs_review: spec.source === 'photo' || spec.source === 'magic',
+
     edit_token_hash: hash
   });
 
@@ -4715,6 +4791,7 @@ function exitMeList(){
 
 async function renderMe(){
   refreshMagicAccess();          // cheap, cached server side, keeps the row honest
+  loadProfile();
   const pkState = document.getElementById('passkeyState');
   if (pkState && !pkState.dataset.busy){
     pkState.textContent = Store.data.passkey ? 'passkey saved' : 'no passkey saved';
@@ -5660,6 +5737,7 @@ function setPhotoOrigin(lat, lng){
   if (!MAGIC_ARMED && draft.lat == null){
     setEventLocation(lat, lng, true);     // the one place that moves the pin
     draft.pinFromExif = true;
+    draft.pinSource = 'exif';
     el.textContent = 'from your photo — tap the map to move it';
     el.classList.add('is-guess');
     return;
@@ -5979,6 +6057,7 @@ function resetCreateForm(){
   Object.assign(draft, {
     cover:null, crop:null, lat:null, lng:null, city:'', community:'',
     timeFinish:'', mapsLink:'', venueId:null, venueSource:null, venueOsmId:null,
+    pinSource:null,
     lineup:null, recurrence:'', contact:'', currency:'', category:'',
     venueAddress:'',
     photoLat:null, photoLng:null
@@ -6068,6 +6147,7 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
         venueAddress: draft.venueAddress,
         category: draft.category,
         venueId: draft.venueId,
+        pinSource: draft.pinSource || null,
         lat: draft.lat, lng: draft.lng,
         venueSource: draft.venueSource || (draft.mapsLink ? 'printed_coordinates' : 'manual'),
         city: draft.city, community: draft.community,
@@ -6421,6 +6501,126 @@ async function rebuildFromServer(){
   renderMe();
 }
 
+/* ── the display name ──────────────────────────────────────────────
+   Optional, and never a replacement for the handle. Requires the device
+   secret like every other write that changes an account. */
+async function loadProfile(){
+  const input = document.getElementById('displayName');
+  if (!input || !SB_READY() || !CURRENT_USER.id || !Store.data.secretClaimed) return;
+  try {
+    const rows = await sbRpc('my_profile', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    });
+    const p = Array.isArray(rows) ? rows[0] : rows;
+    if (p && !input.matches(':focus')) input.value = p.display_name || '';
+  } catch(_){}
+}
+
+async function saveDisplayName(){
+  const input = document.getElementById('displayName');
+  const note  = document.getElementById('displayNameNote');
+  const btn   = document.getElementById('displayNameSave');
+  btn.disabled = true;
+  try {
+    await ensureUser();
+    await claimDeviceSecret();
+    if (!CURRENT_USER.id || !Store.data.secretClaimed){
+      note.textContent = 'publish something first, so this device has an account.';
+      return;
+    }
+    const out = await sbRpc('set_display_name', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret(), p_name: input.value
+    });
+    note.textContent = out
+      ? `saved. people will see "${out}".`
+      : 'cleared. back to your handle.';
+  } catch(err){
+    note.textContent = explainWriteError(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── "were you there?" ─────────────────────────────────────────────
+   promote_attendance() has to guess: it turns 'going' into 'attended' a
+   few hours after an event ends, so somebody who said they were coming
+   and did not show gets counted as having been there. That quietly
+   pollutes the crossed-paths graph with people who never met.
+
+   So the app asks — once, only about what it guessed, and only after
+   the fact. Assume yes, let the person correct it. That is far less
+   friction than asking everybody to check in, and honest enough. */
+async function loadAttendanceReview(){
+  const box = document.getElementById('attendReview');
+  if (!box || !SB_READY() || !CURRENT_USER.id || !Store.data.secretClaimed) return;
+
+  let rows = [];
+  try {
+    rows = await sbRpc('recent_auto_attended', { p_user: CURRENT_USER.id }) || [];
+  } catch(_){ return; }
+
+  const done = Store.data.reviewedAttendance || {};
+  const pending = rows.filter(r => r && r.short_id && !done[r.short_id]);
+  if (!pending.length){ box.hidden = true; return; }
+
+  box.hidden = false;
+  box.innerHTML =
+    `<div class="review-card__head">you were at ${pending.length === 1 ? 'this' : 'these'}?</div>` +
+    pending.map(r => `
+      <div class="review-card__row" data-event="${escapeAttr(r.event_id)}" data-short="${escapeAttr(r.short_id)}">
+        <span class="review-card__title">${escapeAttr(r.title || 'an event')}</span>
+        <button type="button" class="review-card__no">i wasn't</button>
+      </div>`).join('') +
+    `<button type="button" class="review-card__done" id="reviewDone">all correct</button>`;
+}
+
+document.addEventListener('click', async (e) => {
+  const no = e.target.closest('.review-card__no');
+  if (no){
+    const row = no.closest('.review-card__row');
+    const eventId = row.dataset.event, shortId = row.dataset.short;
+    no.disabled = true;
+    try {
+      await sbRpc('unattend_as', {
+        p_user: CURRENT_USER.id, p_secret: deviceSecret(), p_event: eventId
+      });
+      /* Drop it locally too, or the going list and the database disagree
+         again — the exact split-brain this app kept producing. */
+      const going = Object.assign({}, Store.data.going || {});
+      delete going[shortId];
+      Store.set({ going });
+      markReviewed(shortId);
+      row.remove();
+      toast('thanks — corrected');
+    } catch(err){
+      no.disabled = false;
+      toast(explainWriteError(err));
+    }
+    const box = document.getElementById('attendReview');
+    if (box && !box.querySelector('.review-card__row')) box.hidden = true;
+    return;
+  }
+
+  if (e.target.closest('#reviewDone')){
+    const box = document.getElementById('attendReview');
+    box.querySelectorAll('.review-card__row').forEach(r => markReviewed(r.dataset.short));
+    box.hidden = true;
+  }
+});
+
+/* Asked once. A prompt that returns every launch stops being a question
+   and becomes noise. */
+function markReviewed(shortId){
+  if (!shortId) return;
+  const done = Object.assign({}, Store.data.reviewedAttendance || {});
+  done[shortId] = new Date().toISOString();
+  Store.set({ reviewedAttendance: done });
+}
+
+document.getElementById('displayNameSave')?.addEventListener('click', saveDisplayName);
+document.getElementById('displayName')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveDisplayName();
+});
 document.getElementById('magicRedeem')?.addEventListener('click', redeemMagicCode);
 document.getElementById('magicCode')?.addEventListener('keydown', e => {
   if (e.key === 'Enter') redeemMagicCode();
@@ -6552,6 +6752,7 @@ wireVenueSearch();
   /* Anything whose photo never made it to R2 gets another go now.
      Runs unawaited: a slow bucket must not delay the first paint. */
   recentreMapOnHome();            // communities are loaded by now
+  loadAttendanceReview();         // only shows if the job guessed something
   await refreshMagicAccess();     // decides whether the magic button exists at all
   await restoreLocalCovers();     // show queued photos before retrying them
   syncPendingCovers();
