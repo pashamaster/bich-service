@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-32" />
+  <meta name="app-version" content="2026-07-26-35" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2629,6 +2629,24 @@ function openDetail(id) {
   recordVisit(e.id);
   if (mine) loadEventStats(e.id);
 
+  /* Signal four: the last event looked at.
+     The other three all involve DOING something — publishing,
+     photographing, opening a link somebody sent. Looking is far more
+     casual, and you look at many more events than you publish. Treated
+     as a peer of the others it would move somebody's home every time
+     they tapped a pin while browsing another town, which is not what
+     anybody means by "where I am".
+
+     So it fills a gap rather than competing: it sets a community only
+     for somebody who has none. That is exactly the person the signal
+     exists for — the visitor who arrives, browses, never publishes,
+     and would otherwise sit on the Bali fallback forever.
+
+     Say the word if you want it last-wins like the other three. */
+  if (!(Store.data.home && Store.data.home.slug) && e.lat != null && e.lng != null){
+    adoptCommunity(e.lat, e.lng, 'view').catch(() => {});
+  }
+
   // then fill in what the lean feed row did not carry
   enrichEvent(e).then(full => {
     if (window._openEventId === full.id) paintDetail(full);
@@ -4743,6 +4761,18 @@ async function saveEvent(spec){
      event they own is editable with it, including this one. */
   claimDeviceSecret().then(() => maybeOfferPasskey()).catch(() => {});
   refreshMeCounts();         // one more hosted, and the host is going
+
+  /* Nudge the worker to check this venue's name against OpenStreetMap.
+     Fire and forget, after the event is already live, and completely
+     invisible: no spinner, no toast, no result. If it finds a
+     confident match the venue is corrected in the background; if it
+     does not, nothing happens and nobody is told anything.
+
+     The tab closing before this returns costs nothing — the worker
+     sweeps the queue every ten minutes anyway. */
+  if (WORKER_URL){
+    fetch(`${WORKER_URL}/venues/review?limit=3`, { method: 'POST' }).catch(() => {});
+  }
   /* Signal three: publishing somewhere makes it your community, every
      time, not just the first time. Deliberate enough to be silent. */
   if (spec.lat != null && spec.lng != null){
@@ -5697,53 +5727,99 @@ function toast(msg){
    through. A visitor who has done none of the three has no community,
    which is the same blank state as a new handle with no history. */
 
-const COMMUNITY_SIGNALS = { link: 'shared link', photo: 'photo location', publish: 'published here' };
+const COMMUNITY_SIGNALS = { link: 'shared link', photo: 'photo location',
+                            publish: 'published here', view: 'looked at an event' };
 
 async function resolvePlace(lat, lng){
-  if (lat == null || lng == null || !WORKER_URL) return null;
+  /* Every branch here used to return null in silence — no worker url,
+     a non-2xx, a point with no settlement, a thrown fetch. Four
+     different reasons, one indistinguishable outcome, and
+     adoptCommunity() then returned false without a word. That is why
+     community assignment appears to do nothing rather than failing in
+     a way somebody can act on. */
+  if (lat == null || lng == null){
+    console.warn('[bich] community: no coordinates to resolve'); return null;
+  }
+  if (!WORKER_URL){
+    console.warn('[bich] community: no worker url configured'); return null;
+  }
   try {
-    const r = await fetch(`${WORKER_URL}/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
-                          { signal: withTimeout(8000) });
-    if (!r.ok) return null;
+    const r = await fetch(
+      `${WORKER_URL}/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+      { signal: AbortSignal.timeout(8000) });
+    if (!r.ok){ console.warn(`[bich] community: /geocode said ${r.status}`); return null; }
     const p = await r.json();
-    return (p && p.osm_id && p.name) ? p : null;
-  } catch(_){ return null; }        // offline: no community, no error
+    if (!p || !p.osm_id || !p.name){
+      console.info('[bich] community: no settlement at', lat, lng,
+                   p && p.reason ? `(${p.reason})` : '');
+      return null;
+    }
+    return p;
+  } catch(err){
+    console.warn('[bich] community: /geocode unreachable —', err.message);
+    return null;
+  }
 }
 
 async function adoptCommunity(lat, lng, signal){
-  const place = await resolvePlace(lat, lng);
-  if (!place) return false;
+  if (lat == null || lng == null) return false;
 
-  let slug = null;
+  let slug = null, name = null;
+
+  /* Ask Postgres first. Once one event has been published in a town
+     that community exists, and every later point inside it resolves
+     without touching the geocoder — no Nominatim round trip, no worker
+     dependency, and it keeps working when the worker is down. */
   try {
-    slug = await sbRpc('ensure_community', {
-      p_osm_id: place.osm_id, p_name: place.name, p_kind: place.kind,
-      p_country: place.country, p_lat: place.lat, p_lng: place.lng
-    });
+    await claimDeviceSecret();
+    if (CURRENT_USER.id && Store.data.secretClaimed){
+      const res = await sbRpc('adopt_community_at', {
+        p_user: CURRENT_USER.id, p_secret: deviceSecret(),
+        p_lat: lat, p_lng: lng, p_via: signal,
+        p_operation_id: newOperationId()
+      });
+      if (res && res.found){ slug = res.slug; name = res.name; }
+    }
   } catch(err){
-    console.warn('[bich] could not record community', err);
-    return false;
+    console.warn('[bich] community: adopt_community_at failed —', err.message);
   }
-  if (!slug) return false;
+
+  /* Nothing known covers this point, so it is somewhere bich has not
+     seen before. That is when the geocoder earns its keep. */
+  if (!slug){
+    const found = await resolvePlace(lat, lng);
+    if (!found) return false;
+    try {
+      slug = await sbRpc('ensure_community', {
+        p_osm_id: found.osm_id, p_name: found.name, p_kind: found.kind,
+        p_country: found.country, p_lat: found.lat, p_lng: found.lng
+      });
+      name = found.name;
+    } catch(err){
+      console.warn('[bich] community: ensure_community refused —', err.message);
+      return false;
+    }
+    if (!slug){
+      console.warn('[bich] community: ensure_community returned nothing for', found.name);
+      return false;
+    }
+    outboxAdd('community.set', { slug, via: signal });
+  }
 
   const previous = Store.data.home && Store.data.home.slug;
   if (previous === slug) return false;                    // already there
 
-  Store.set({ home: { slug, name: place.name, via: signal } });
-  /* Also on the account, so a passkey restore does not land somebody
-     nowhere. Queued rather than awaited: community is a nicety, and it
-     must never delay or fail the thing that triggered it. */
-  outboxAdd('community.set', { slug, via: signal });
-  KNOWN_COMMUNITIES = null;                               // refetch, it may be new
+  Store.set({ home: { slug, name: name || slug, via: signal } });
+  KNOWN_COMMUNITIES = null;
   loadCommunities().then(() => recentreMapOnHome()).catch(() => {});
   console.info(`[bich] community → ${slug} (${COMMUNITY_SIGNALS[signal] || signal})`);
 
-  /* Moving somebody's whole feed because a friend sent them a link is
-     the one case that will feel broken rather than clever, so that one
-     is announced and reversible. Publishing or photographing a place is
-     deliberate enough to just happen. */
+  /* Relocating somebody because a friend sent them a link is the one
+     case that feels broken rather than clever, so that signal alone is
+     announced and reversible. Publishing, photographing or opening an
+     event are deliberate enough to happen quietly. */
   if (signal === 'link' && previous){
-    toastAction(`showing ${place.name.toLowerCase()}`, 'stay put', () => {
+    toastAction(`showing ${String(name || slug).toLowerCase()}`, 'stay put', () => {
       Store.set({ home: { slug: previous } });
       loadFeed();
     });
@@ -7313,6 +7389,52 @@ async function rebuildFromServer(){
 
    Every step is the real call, not a simulation — a diagnostic that
    tests a different code path than the bug is worse than none. */
+/* Type bichWhere() in the console. Says which community you are in,
+   how you got there, and — if you have none — which of the four
+   signals has and has not fired. */
+window.bichWhere = async function(){
+  const home = Store.data.home;
+  console.log('%cwhere bich thinks you are', 'font-weight:700;font-size:13px');
+  console.log('  local  ', home && home.slug ? `${home.slug} (via ${home.via || 'unknown'})` : 'none — falling back to bali');
+
+  if (SB_READY() && CURRENT_USER.id && Store.data.secretClaimed){
+    try {
+      const rows = await sbRpc('get_my_account', {
+        p_user: CURRENT_USER.id, p_secret: deviceSecret()
+      });
+      const me = Array.isArray(rows) ? rows[0] : rows;
+      console.log('  account', me && me.community_slug
+        ? `${me.community_slug} (via ${me.community_via})` : 'none stored on the account');
+      if (me && home && me.community_slug !== (home.slug || null))
+        console.warn('  → local and account disagree; the outbox may not have flushed');
+    } catch(err){ console.warn('  account lookup failed —', err.message); }
+  } else {
+    console.log('  account  cannot check: no claimed device secret');
+  }
+
+  const known = await loadCommunities();
+  console.log('  communities known to the database:', (known || []).length);
+  if (!(known || []).length)
+    console.warn('  → none exist yet, so nothing can be resolved. Publish an event with a pin.');
+
+  console.log('%csignals', 'font-weight:600');
+  console.log('  1 shared link     fires on opening /e/xxxx');
+  console.log('  2 publish         fires when an event has a pin');
+  console.log('  3 photo gps       fires when a chosen photo carries EXIF coordinates');
+  console.log('  4 event viewed    fires only when you have no community yet');
+  console.log('  fallback          bali');
+
+  const ev = EVENTS.find(e => e.lat != null);
+  if (ev){
+    console.log('\ntesting resolution against', ev.id, ev.lat, ev.lng);
+    try {
+      const slug = await sbRpc('community_for_point', { p_lat: ev.lat, p_lng: ev.lng });
+      console.log('  community_for_point →', slug || 'no community covers that point');
+      if (!slug) console.log('  → the geocoder would be asked to create one');
+    } catch(err){ console.warn('  community_for_point failed —', err.message); }
+  }
+};
+
 window.bichCheck = async function(){
   const line = (label, ok, detail) =>
     console.log(`%c${ok ? 'OK  ' : 'FAIL'}%c ${label}${detail ? ' — ' + detail : ''}`,
