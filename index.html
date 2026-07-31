@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-39" />
+  <meta name="app-version" content="2026-07-26-40" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -5561,9 +5561,12 @@ async function refreshMeCounts(){
            — no error, just nothing. So a stale claim flag shows
            "0 hosting" and looks like the truth. Re-claim and retry
            rather than reporting a zero we cannot stand behind. */
+        /* jsonb array now, not a row set — the old signature returned
+           setof events_public and a view rebuild deleted it. */
         let mine = await sbRpc('my_hosted', {
           p_user: CURRENT_USER.id, p_secret: deviceSecret()
         });
+        if (mine && !Array.isArray(mine)) mine = [];
         if (Array.isArray(mine) && mine.length === 0 && (Store.data.hosting || []).length){
           console.warn('[bich] my_hosted returned nothing but this device thinks it hosts events — re-claiming');
           if (await claimDeviceSecret(true)){
@@ -5948,15 +5951,18 @@ async function searchVenues(q){
       q: q.trim(),
       near_lat: draft.photoLat ?? draft.lat ?? null,
       near_lng: draft.photoLng ?? draft.lng ?? null,
-      community: null,
+      /* Scoped to this person's community. A venue book is local by
+         nature — offering somebody in Ericeira a bar in Canggu is the
+         noise that made this field feel like a search engine. */
+      community: (Store.data.home && Store.data.home.slug) || null,
       max_results: 6
     });
   } catch(_){ return []; }
 }
 
-/* Venue names come from OpenStreetMap now, which means they are
-   arbitrary strings from a public wiki going straight into innerHTML.
-   Escape them. */
+/* Venue names are user-typed and, after the worker's correction pass,
+   can also come from OpenStreetMap — arbitrary strings from a public
+   wiki going straight into innerHTML. Escape them. */
 function escapeAttr(v){
   return String(v == null ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -7359,7 +7365,7 @@ async function rebuildFromServer(){
     const mine = await sbRpc('my_hosted', {
       p_user: CURRENT_USER.id, p_secret: deviceSecret()
     });
-    const hosting = (mine || []).map(r => r.short_id).filter(Boolean);
+    const hosting = (Array.isArray(mine) ? mine : []).map(r => r.short_id).filter(Boolean);
     if (hosting.length) Store.set({ hosting });
     console.info('[bich] restored', hosting.length, 'hosted events');
   } catch(err){
