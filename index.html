@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-35" />
+  <meta name="app-version" content="2026-07-26-37" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1716,9 +1716,6 @@ if ('serviceWorker' in navigator) {
       <button class="map-chip" data-filter="week">next 7 days</button>
       <button class="map-chip" data-filter="next">the 7 after</button>
     </div>
-    <div class="map-filter-bar map-filter-bar--cat" id="mapCatBar">
-      <button class="map-chip active" data-cat="all">everything</button>
-    </div>
     <div id="map"></div>
     <div class="map-footer-sheet">
       <div class="map-footer-sheet__count">
@@ -1979,10 +1976,6 @@ if ('serviceWorker' in navigator) {
         <div class="detail-meta-grid__label">going</div>
         <div class="detail-meta-grid__value" id="detailGoing"></div>
       </div>
-      <div class="detail-meta-grid__item" id="detailCatItem" hidden>
-        <div class="detail-meta-grid__label">kind</div>
-        <div class="detail-meta-grid__value" id="detailCat"></div>
-      </div>
       <div class="detail-meta-grid__item" id="detailEndsItem" hidden>
         <div class="detail-meta-grid__label">until</div>
         <div class="detail-meta-grid__value" id="detailEnds"></div>
@@ -2089,22 +2082,6 @@ if ('serviceWorker' in navigator) {
         <div><label class="text-label" for="editPrice">price</label><input class="input" id="editPrice" type="number" min="0" step="0.5" inputmode="decimal" /></div>
         <div><label class="text-label" for="editCap">capacity</label><input class="input" id="editCap" type="number" min="1" inputmode="numeric" /></div>
       </div>
-      <label class="text-label" for="editCategory">category</label>
-      <select class="input" id="editCategory">
-        <option value="">unset</option>
-        <option value="music">music</option>
-        <option value="wellness">wellness</option>
-        <option value="food">food</option>
-        <option value="market">market</option>
-        <option value="sport">sport</option>
-        <option value="art">art</option>
-        <option value="talk">talk</option>
-        <option value="film">film</option>
-        <option value="social">social</option>
-        <option value="workshop">workshop</option>
-        <option value="nightlife">nightlife</option>
-        <option value="other">other</option>
-      </select>
 
       <label class="text-label" for="editDesc">description</label>
       <textarea class="input" id="editDesc" rows="5" maxlength="2000"></textarea>
@@ -2250,7 +2227,7 @@ async function enrichEvent(e){
   if (!SB_READY() || e._full) return e;
   try {
     const rows = await sbGet(
-      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,category,host_handle,going_count&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
+      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
     if (rows && rows[0]) Object.assign(e, rowToEvent(rows[0]), { _full: true, bundle: e.bundle });
   } catch(err){ console.warn('[bich] detail fetch failed', err.message); }
   return e;
@@ -2266,7 +2243,6 @@ function paintDetail(e){
     }
   };
   set('detailPrice', money(e.price, e.currency));
-  set('detailCat', e.category || '', 'detailCatItem');
 
   /* The mockup shows "Garden House Kemang · Jl. Kemang Raya 12,
      Jakarta". venue_address has existed in the schema since part 1
@@ -2433,9 +2409,8 @@ function openEditSheet(ev){
      against its own creator. What locks a date is somebody ELSE
      having made plans around it. */
   /* ── the three fields that used to be uneditable ──────────────────
-     Pin, cover and category. Extraction gets exactly these wrong most
+     Pin and cover. Extraction gets both of these wrong most
      often, and an event written by magic is still the host's event. */
-  setVal('editCategory', ev.category || '');
 
   editDraft = { lat: ev.lat ?? null, lng: ev.lng ?? null, cover: undefined };
 
@@ -2556,7 +2531,6 @@ async function saveEdit(){
     description: val('editDesc') || null,
     price_value: Math.max(0, Math.round((Number(val('editPrice')) || 0) * 100)),
     capacity: val('editCap') ? parseInt(val('editCap'), 10) : null,
-    category: val('editCategory') || null
   };
   /* Only touch the finish time when there is one to set, or clearing
      the field is indistinguishable from never having opened it — which
@@ -2849,10 +2823,10 @@ function outboxDue(item){
    new queued mutation means adding one entry here and nothing else. */
 const OUTBOX_HANDLERS = {
   'event.create': async (payload, opId) => {
-    const res = await sbRpc('publish_event', {
+    const res = await withOwnershipRetry('publish', () => sbRpc('publish_event', {
       p_payload: payload, p_user: CURRENT_USER.id,
       p_secret: deviceSecret(), p_operation_id: opId
-    });
+    }));
     if (res && res.replayed) console.info('[bich] publish replayed, not duplicated');
     return res;
   },
@@ -3574,7 +3548,6 @@ function initMap() {
    CSS class. Nothing read data-filter, so "today" and "next week"
    showed the same pins. */
 let mapFilter = 'any';
-let mapCategory = 'all';
 
 function filterRange(name){
   const now = new Date();
@@ -3637,7 +3610,6 @@ function mappableEvents(){
       const ends = e.ends_at ? new Date(e.ends_at) : new Date(when.getTime() + 2 * 3600 * 1000);
       if (!(ends > new Date())) return false;
     }
-    if (mapCategory !== 'all' && (e.category || 'other') !== mapCategory) return false;
     return true;
   });
 }
@@ -3659,7 +3631,6 @@ function openPinList(group){
     return `<button type="button" class="pin-row" data-id="${escapeHtml(e.id)}">
       <span class="pin-row__when">${escapeHtml(whenLabel(d))}</span>
       <span class="pin-row__t">${escapeHtml(e.title)}</span>
-      ${e.category ? `<span class="pin-row__c">${escapeHtml(e.category)}</span>` : ''}
     </button>`;
   }).join('');
   body.onclick = (ev) => {
@@ -3673,21 +3644,8 @@ function openPinList(group){
 
 /* Chips are built from the categories actually present, so the bar
    never offers a filter that would empty the map. */
-function paintCategoryChips(){
-  const bar = document.getElementById('mapCatBar');
-  if (!bar) return;
-  const present = [...new Set(EVENTS
-    .filter(e => e.lat != null && e.lng != null)
-    .map(e => e.category).filter(Boolean))].sort();
-  bar.innerHTML = `<button class="map-chip${mapCategory === 'all' ? ' active' : ''}" data-cat="all">everything</button>`
-    + present.map(c =>
-        `<button class="map-chip${mapCategory === c ? ' active' : ''}" data-cat="${escapeHtml(c)}">${escapeHtml(c)}</button>`
-      ).join('');
-  bar.hidden = present.length < 2;   // one category is not a choice
-}
 
 function paintMap(){
-  paintCategoryChips();
   const map = window._map;
   if (!map) return;
 
@@ -3744,7 +3702,6 @@ function paintMap(){
       + (rows.length === 1 ? 'event' : 'events')
       + (byPin.size && byPin.size !== rows.length ? ` at ${byPin.size} place${byPin.size === 1 ? '' : 's'}` : '')
       + (mapFilter === 'any' ? '' : ' ' + document.querySelector('.map-chip.active').textContent.trim())
-      + (mapCategory !== 'all' ? ' · ' + mapCategory : '')
       + (pinless ? ` · ${pinless} without a pin` : '');
   }
 
@@ -4200,7 +4157,14 @@ async function ensureUser(handle){
     const row = Array.isArray(rows) ? rows[0] : rows;
     if (row && row.id){
       CURRENT_USER = { id: row.id, handle: row.handle };
-      Store.set({ uid: row.id, handle: row.handle });
+      /* A brand new account has NO device secret yet. Leaving
+         secretClaimed true from a previous account means
+         claimDeviceSecret() early-returns, the secret is never
+         attached, and every ownership check afterwards answers
+         "not yours" — including publishing, which is what
+         "couldn't publish — this device did not create that event"
+         actually was. */
+      Store.set({ uid: row.id, handle: row.handle, secretClaimed: false });
       return CURRENT_USER;
     }
     throw new Error('create_account returned nothing');
@@ -4269,21 +4233,43 @@ function deviceSecret(){
 /* Attach it to the account. Idempotent: the RPC refuses to overwrite an
    existing secret and returns true only when it already matches, so a
    second device cannot silently take over an account. */
-async function claimDeviceSecret(){
+async function claimDeviceSecret(force){
   if (!SB_READY()) return false;
   await ensureUser();
   if (!CURRENT_USER.id) return false;
-  if (Store.data.secretClaimed) return true;
+
+  /* secretClaimed is a local belief about server state, and the two can
+     part company — a wiped database, a deleted account, a restored
+     backup. `force` re-checks instead of trusting it. claim_device_secret
+     is idempotent: it returns true when the stored hash already matches,
+     so re-running it costs one round trip and nothing else. */
+  if (Store.data.secretClaimed && !force) return true;
+
   try {
     const ok = await sbRpc('claim_device_secret', {
       p_user: CURRENT_USER.id, p_secret: deviceSecret()
     });
-    if (ok) Store.set({ secretClaimed: true });
-    else console.warn('[bich] this account already has a different secret on another device');
+    Store.set({ secretClaimed: Boolean(ok) });
+    if (!ok) console.warn('[bich] this account has a different secret on another device');
     return Boolean(ok);
   } catch(err){
-    console.warn('[bich] could not claim device secret', err);
+    console.warn('[bich] could not claim device secret —', err.message);
     return false;
+  }
+}
+
+/* Anything refused with "not yours" is worth one honest retry: the
+   local flag may simply be stale. Re-claim against the server, and if
+   that succeeds, run the operation again. */
+async function withOwnershipRetry(label, run){
+  try {
+    return await run();
+  } catch(err){
+    if (!/not yours/i.test(err.message || '')) throw err;
+    console.warn(`[bich] ${label}: refused as not-yours, re-claiming the device secret`);
+    const ok = await claimDeviceSecret(true);
+    if (!ok) throw err;
+    return await run();
   }
 }
 
@@ -4600,7 +4586,6 @@ async function bulkCreate(rows, rq){
         lineup: r.lineup,
         venueName: r.space_name,
         venueAddress: r.venue_address,
-        category: r.category,
         lat: r.venue_latitude === '' ? null : r.venue_latitude,
         lng: r.venue_longitude === '' ? null : r.venue_longitude,
         venueSource: r.venue_latitude !== '' ? 'printed_coordinates'
@@ -4716,14 +4701,13 @@ async function saveEvent(spec){
      host's attendance together, and records the operation id so a
      retry after a dropped response returns the original result instead
      of publishing a second event. */
-  const res = await sbRpc('publish_event', {
+  const res = await withOwnershipRetry('publish', () => sbRpc('publish_event', {
     p_payload: {
       title: String(spec.title || '').slice(0, 200),
       description: withLineup(spec.description, renderLineup(spec.lineup)) || null,
       venue_name: spec.venueName || null,
       venue_address: spec.venueAddress || null,
       venue_source: spec.venueSource || null,
-      category: spec.category || null,
       venue_lat: spec.lat ?? null,
       venue_lng: spec.lng ?? null,
       city: spec.city || null,
@@ -4748,7 +4732,7 @@ async function saveEvent(spec){
     p_user: CURRENT_USER.id,
     p_secret: deviceSecret(),
     p_operation_id: spec.operationId || newOperationId()
-  });
+  }));
 
   if (res && res.replayed) console.info('[bich] publish replayed — no duplicate created');
   const saved = res && res.event ? [res.event] : [];
@@ -4938,7 +4922,6 @@ function rowToEvent(r){
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
     communitySlug: r.community_slug || null,
-    category: r.category || null,
     venueAddress: r.venue_address || null,
     distanceKm: r.distance_km == null ? null : Math.round(r.distance_km),
     host: '',
@@ -5396,7 +5379,7 @@ async function loadFeed(){
   try {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const rows = await sbGet(
-      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,category,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
+      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
     EVENTS.length = 0;
     (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
@@ -5498,7 +5481,7 @@ async function openMeList(kind){
   if (missing.length && SB_READY()){
     try {
       const list = missing.map(encodeURIComponent).join(',');
-      const rows = await sbGet(`events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,category,host_handle,going_count&short_id=in.(${list})`);
+      const rows = await sbGet(`events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&short_id=in.(${list})`);
       (rows || []).forEach(r => have.set(r.short_id, rowToEvent(r)));
     } catch(err){ console.warn('[bich] could not load your list', err.message); }
   }
@@ -5553,9 +5536,21 @@ async function refreshMeCounts(){
     let hosting = (Store.data.hosting || []).length;
     if (Store.data.secretClaimed){
       try {
-        const mine = await sbRpc('my_hosted', {
+        /* my_hosted returns an EMPTY SET when the secret does not match
+           — no error, just nothing. So a stale claim flag shows
+           "0 hosting" and looks like the truth. Re-claim and retry
+           rather than reporting a zero we cannot stand behind. */
+        let mine = await sbRpc('my_hosted', {
           p_user: CURRENT_USER.id, p_secret: deviceSecret()
         });
+        if (Array.isArray(mine) && mine.length === 0 && (Store.data.hosting || []).length){
+          console.warn('[bich] my_hosted returned nothing but this device thinks it hosts events — re-claiming');
+          if (await claimDeviceSecret(true)){
+            mine = await sbRpc('my_hosted', {
+              p_user: CURRENT_USER.id, p_secret: deviceSecret()
+            });
+          }
+        }
         if (Array.isArray(mine)){
           hosting = mine.length;
           /* Keep the local list in step. It is what iOwn() reads, so a
@@ -6510,7 +6505,6 @@ function normalizeRows(rows, exif, today){
       google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
       description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
       location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none'),
-      category:      clean(r.category),
       venue_address: clean(r.venue_address),
       venue_match:   clean(r.venue_match),
       lineup:        Array.isArray(r.lineup) ? r.lineup : null
@@ -6616,14 +6610,12 @@ function fillForm(row){
   /* Both columns exist in events and the model already extracts them;
      they were being parsed and then dropped on the floor. */
   draft.recurrence = row.recurrence || '';
-  draft.category = row.category || '';
   draft.venueAddress = row.venue_address || '';
   /* The model was given the real venue strings and told to echo one
      back. If it did, we already know which row that is - no fuzzy
      search, no duplicate. */
   if (row.venue_match) linkKnownVenue(row.venue_match);
   draft.contact = row.contact || '';
-  draft.category = row.category || null;
   if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
   draft.city = row.city || '';
   draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
@@ -6938,7 +6930,7 @@ function resetCreateForm(){
     cover:null, crop:null, lat:null, lng:null, city:'', community:'',
     timeFinish:'', mapsLink:'', venueId:null, venueSource:null, venueOsmId:null,
     pinSource:null,
-    lineup:null, recurrence:'', contact:'', currency:'', category:'',
+    lineup:null, recurrence:'', contact:'', currency:'',
     venueAddress:'',
     photoLat:null, photoLng:null
   });
@@ -7024,7 +7016,6 @@ on('publishBtn', 'click', async () => {
         lineup: draft.lineup,
         venueName: ev.venue,
         venueAddress: draft.venueAddress,
-        category: draft.category,
         venueId: draft.venueId,
         pinSource: draft.pinSource || null,
         lat: draft.lat, lng: draft.lng,
@@ -7692,13 +7683,6 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   }
 }));
 
-on('mapCatBar', 'click', (e) => {
-  const chip = e.target.closest('[data-cat]');
-  if (!chip) return;
-  mapCategory = chip.dataset.cat || 'all';
-  window._mapShape = null;          // a filter change should reframe
-  paintMap();
-});
 on('pinListClose', 'click', () => {
   document.getElementById('pinList').hidden = true;
 });
