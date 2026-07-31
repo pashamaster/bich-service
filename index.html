@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-37" />
+  <meta name="app-version" content="2026-07-26-38" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -4372,10 +4372,12 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
            permits unlimited nulls and the same bar collects a row per
            publish. ensure_venue REFUSES source 'osm' without an id
            rather than silently storing a duplicate-prone row. */
-        source: (draft.venueSource === 'osm' && draft.venueOsmId)
-                  ? 'osm' : (fromPhoto ? 'photo' : 'manual'),
-        osm_id: (draft.venueSource === 'osm' && draft.venueOsmId)
-                  ? draft.venueOsmId : null
+        /* Always hand-typed now — the field no longer offers places
+           from OpenStreetMap, so nothing here can be osm-sourced. The
+           worker corrects these later, which is exactly what makes
+           them worth reviewing. */
+        source: fromPhoto ? 'photo' : 'manual',
+        osm_id: null
       },
       p_user: CURRENT_USER.id,
       p_secret: deviceSecret(),
@@ -4777,6 +4779,8 @@ function explainWriteError(err){
          /venue_pin_is_complete/.test(m)          ? 'the pin needs both a latitude and a longitude' :
          /edit_token_hash/.test(m)                ? 'run schema part 9 — events now need an edit token' :
          /duplicate key/.test(m)                  ? 'that event already exists' :
+         /has not claimed its account/.test(m)    ? "this device is still setting up — try again in a moment" :
+         /no account on this device/.test(m)      ? 'this device has no account yet' :
          /not yours/.test(m)                      ? 'this device did not create that event' :
          /cannot move an event/.test(m)           ? m :
          m ? m.slice(0, 160) : 'something went wrong';
@@ -5942,49 +5946,21 @@ function escapeAttr(v){
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/* OpenStreetMap, via the worker. Suggestions only — the venue book is
-   still the app's own, and publishing writes to it, so a place somebody
-   here has used before always outranks a stranger from OSM. */
-async function searchPlaces(q){
-  if (!WORKER_URL || q.trim().length < 2) return [];
-  const lat = draft.lat ?? draft.photoLat ?? null;
-  const lng = draft.lng ?? draft.photoLng ?? null;
-  const near = (lat != null && lng != null) ? `&lat=${lat}&lng=${lng}` : '';
-  try {
-    const r = await fetch(`${WORKER_URL}/places?q=${encodeURIComponent(q.trim())}${near}`,
-                          { signal: withTimeout(8000) });
-    if (!r.ok) return [];
-    const out = await r.json();
-    return (out && out.places) || [];
-  } catch(_){ return []; }
-}
+/* ── the venue field ───────────────────────────────────────────────
+   Somebody types the venue name. That is all this does.
 
-/* Local first, always. A place three people here have published to is a
-   better answer than whatever OSM ranks highest, and the two lists
-   overlap constantly — the same bar under a slightly different name and
-   a few metres away. Matching on name AND proximity catches that
-   without merging two genuinely different places that share a name. */
-function mergeVenueHits(local, remote){
-  const seen = (local || []).map(v => ({
-    id: v.id, name: v.name, address: v.city || null,
-    lat: v.lat, lng: v.lng, uses: v.use_count || 0, source: 'local'
-  }));
+   It does NOT query OpenStreetMap, and it deliberately does not
+   autocomplete against the wider world — a person naming the place
+   they are hosting at knows what it is called better than a gazetteer
+   does, and being interrupted mid-word by a list of foreign suggestions
+   is worse than useless.
 
-  const isDuplicate = (p) => seen.some(v =>
-    v.name.trim().toLowerCase() === p.name.trim().toLowerCase() &&
-    Math.abs(v.lat - p.lat) < 0.003 &&      // ~300m
-    Math.abs(v.lng - p.lng) < 0.003);
+   The one thing it will offer is places THIS community has already
+   published to, because reusing an existing venue links the event to
+   the same row and keeps the map tidy. Nothing more.
 
-  const extra = (remote || [])
-    .filter(p => !isDuplicate(p))
-    .map(p => ({
-      id: null, name: p.name, address: p.address,
-      lat: p.lat, lng: p.lng, uses: 0, source: 'osm', osm_id: p.osm_id
-    }));
-
-  return seen.concat(extra).slice(0, 8);
-}
-
+   Correcting a name against OSM happens afterwards, in the worker,
+   invisibly — see reviewVenues(). */
 function wireVenueSearch(){
   const input = document.getElementById('inputVenue');
   if (!input) return;
@@ -5992,27 +5968,30 @@ function wireVenueSearch(){
   list.className = 'venue-list';
   input.parentNode.insertBefore(list, input.nextSibling);
 
+  const clear = () => { list.innerHTML = ''; };
+
   input.addEventListener('input', () => {
     clearTimeout(venueTimer);
+    /* Typing is the primary act. Anything the field offers is a
+       shortcut for reusing a known place, never a correction, and it
+       never touches what has been typed. */
+    draft.venueId = null;
+    draft.venueSource = 'manual';
+
     const q = input.value;
+    if (q.trim().length < 2){ clear(); return; }
+
     venueTimer = setTimeout(async () => {
-      /* Both at once. The local book usually answers first and OSM
-         fills the gap in a town nobody has published to yet. */
-      const [local, remote] = await Promise.all([searchVenues(q), searchPlaces(q)]);
-      const hits = mergeVenueHits(local, remote);
-      if (!hits.length){ list.innerHTML = ''; return; }
-      list.innerHTML = hits.map(v => {
-        const meta = v.source === 'local'
-          ? (v.address || '') + (v.uses ? ' · ' + v.uses + ' events' : '')
-          : (v.address || 'from the map');
-        return `<button type="button" class="venue-hit" data-id="${v.id || ''}"
-                   data-lat="${v.lat}" data-lng="${v.lng}"
-                   data-source="${v.source}" data-address="${escapeAttr(v.address || '')}"
-                   data-osm="${escapeAttr(v.osm_id || '')}">
+      const hits = await searchVenues(q);
+      if (!hits || !hits.length){ clear(); return; }
+      list.innerHTML = hits.slice(0, 5).map(v =>
+        `<button type="button" class="venue-hit" data-id="${escapeAttr(v.id)}"
+                 data-lat="${v.lat}" data-lng="${v.lng}"
+                 data-address="${escapeAttr(v.city || '')}">
            <span class="venue-hit__name">${escapeAttr(v.name)}</span>
-           <span class="venue-hit__meta">${escapeAttr(meta)}</span>
-         </button>`;
-      }).join('');
+           <span class="venue-hit__meta">${escapeAttr(
+             (v.city || '') + (v.use_count ? ` · ${v.use_count} events` : ''))}</span>
+         </button>`).join('');
     }, 220);
   });
 
@@ -6020,16 +5999,19 @@ function wireVenueSearch(){
     const hit = e.target.closest('.venue-hit');
     if (!hit) return;
     input.value = hit.querySelector('.venue-hit__name').textContent;
-    /* A local pick carries its venue id, so the event links straight to
-       the existing row. An OSM pick has none — ensureVenue() creates
-       one on publish, which is how a new town's book starts filling. */
     draft.venueId = hit.dataset.id || null;
     draft.venueAddress = hit.dataset.address || draft.venueAddress;
-    draft.venueSource = hit.dataset.source === 'osm' ? 'osm' : 'venue_book';
-    draft.venueOsmId  = hit.dataset.osm || null;
-    setEventLocation(parseFloat(hit.dataset.lat), parseFloat(hit.dataset.lng), false);
-    list.innerHTML = '';
+    /* 'matched_venue' — one of the values events_venue_source_check
+       actually permits. The old code wrote 'venue_book' and 'osm',
+       neither of which is in that constraint, and every publish that
+       touched this field was rejected by Postgres. */
+    draft.venueSource = 'matched_venue';
+    const lat = parseFloat(hit.dataset.lat), lng = parseFloat(hit.dataset.lng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) setEventLocation(lat, lng, false);
+    clear();
   });
+
+  input.addEventListener('blur', () => setTimeout(clear, 180));
 }
 
 
@@ -6928,7 +6910,7 @@ function resetCreateForm(){
      survived a cancelled crop. */
   Object.assign(draft, {
     cover:null, crop:null, lat:null, lng:null, city:'', community:'',
-    timeFinish:'', mapsLink:'', venueId:null, venueSource:null, venueOsmId:null,
+    timeFinish:'', mapsLink:'', venueId:null, venueSource:null,
     pinSource:null,
     lineup:null, recurrence:'', contact:'', currency:'',
     venueAddress:'',
