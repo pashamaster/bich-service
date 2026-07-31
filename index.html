@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-38" />
+  <meta name="app-version" content="2026-07-26-39" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -4662,6 +4662,18 @@ function escapeHtml(t){
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+/* Empty string, whitespace, null, undefined and nonsense all become
+   null — not 0. Number('') and Number(null) are both 0, which is how
+   an untouched capacity field would have arrived as a capacity of
+   zero and been refused by the `capacity > 0` constraint instead. */
+function numOrNull(v){
+  if (v === null || v === undefined) return null;
+  const t = String(v).trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function saveEvent(spec){
   await ensureUser();
   if (!assertBoot()) return;   // a stated failure beats a blank screen
@@ -4721,9 +4733,14 @@ async function saveEvent(spec){
       starts_at: startsAt.toISOString(),
       ends_at: endsAt ? endsAt.toISOString() : null,
       recurrence: spec.recurrence || null,
-      price_value: Math.round((spec.price || 0) * 100),
+      price_value: Math.round((Number(spec.price) || 0) * 100),
       price_currency: spec.currency || 'EUR',
-      capacity: spec.capacity ?? null,
+      /* ?? only catches null and undefined — an untouched number input
+         reads as '', which sailed through and reached Postgres as
+         ""::integer. Two guards now: the payload is cleaned here, and
+         every cast in the RPC is wrapped in nullif. Either alone would
+         have been enough; neither was there. */
+      capacity: numOrNull(spec.capacity),
       cover_url: spec.coverUrl || null,
       contact: spec.contact || null,
       source: spec.source || 'manual',
