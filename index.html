@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-30" />
+  <meta name="app-version" content="2026-07-26-32" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2250,7 +2250,7 @@ async function enrichEvent(e){
   if (!SB_READY() || e._full) return e;
   try {
     const rows = await sbGet(
-      `events_public?select=*&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
+      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,category,host_handle,going_count&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
     if (rows && rows[0]) Object.assign(e, rowToEvent(rows[0]), { _full: true, bundle: e.bundle });
   } catch(err){ console.warn('[bich] detail fetch failed', err.message); }
   return e;
@@ -2805,7 +2805,8 @@ async function outboxDrop(id){
    on a timeout means losing somebody's event because a tunnel. */
 function isTransient(err){
   const msg = String((err && err.message) || '');
-  if (/failed to fetch|load failed|networkerror|timed out|aborted/i.test(msg)) return true;
+  if (/failed to fetch|load failed|networkerror|timed out|aborted|signal timed out/i.test(msg)) return true;
+  if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) return true;
   const s = err && err.status;
   return s === 408 || s === 425 || s === 429 || s === 500 || s === 502 || s === 503 || s === 504;
 }
@@ -2841,16 +2842,22 @@ const OUTBOX_HANDLERS = {
     p_short_id: payload.short_id, p_user: CURRENT_USER.id,
     p_secret: deviceSecret(), p_status: payload.status, p_operation_id: opId
   }),
+  /* All three carry the operation id now. They were the only mutations
+     without replay protection: a patch or cancel that committed and
+     then lost its response would be reapplied, and a community update
+     re-sent. Harmless for these three in practice, but "harmless in
+     practice" is not a property you want to be relying on per-endpoint. */
   'event.patch': async (payload, opId) => sbRpc('update_event_as', {
     p_short_id: payload.short_id, p_user: CURRENT_USER.id,
-    p_secret: deviceSecret(), p_patch: payload.patch
+    p_secret: deviceSecret(), p_patch: payload.patch, p_operation_id: opId
   }),
   'event.cancel': async (payload, opId) => sbRpc('cancel_event_as', {
-    p_short_id: payload.short_id, p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    p_short_id: payload.short_id, p_user: CURRENT_USER.id,
+    p_secret: deviceSecret(), p_operation_id: opId
   }),
   'community.set': async (payload, opId) => sbRpc('set_my_community', {
     p_user: CURRENT_USER.id, p_secret: deviceSecret(),
-    p_slug: payload.slug, p_via: payload.via
+    p_slug: payload.slug, p_via: payload.via, p_operation_id: opId
   })
 };
 
@@ -2873,8 +2880,18 @@ async function outboxFlush(){
     for (const item of items.sort((a, b) => a.created_at.localeCompare(b.created_at))){
       const run = OUTBOX_HANDLERS[item.operation_type];
       if (!run){
-        console.error('[bich] no handler for', item.operation_type, '— dropping');
-        await outboxDrop(item.operation_id);
+        /* Retained, not deleted. An operation type written by a newer
+           build and read by an older one — or the reverse, after a
+           service-worker rollback — is somebody's queued intention.
+           Destroying it because this build does not recognise the name
+           is the one thing a durable queue must never do. Marked failed
+           so it stays visible and a later build can pick it up. */
+        if (item.status !== 'failed'){
+          item.status = 'failed';
+          item.last_error = `this version does not know how to send "${item.operation_type}"`;
+          await outboxUpdate(item);
+          console.warn('[bich] unknown operation retained:', item.operation_type);
+        }
         continue;
       }
 
@@ -3155,7 +3172,7 @@ function paintAttendButton(going){
   }
 }
 
-document.getElementById('closeDetail').addEventListener('click', () => {
+on('closeDetail', 'click', () => {
   document.getElementById('detailScreen').classList.remove('visible');
 });
 
@@ -3254,7 +3271,7 @@ async function writeAttendance(shortId, going){
   }
 }
 
-document.getElementById('attendBtn').addEventListener('click', async () => {
+on('attendBtn', 'click', async () => {
   const id = window._openEventId;
   if (!id) return;
   const btn = document.getElementById('attendBtn');
@@ -3830,8 +3847,8 @@ function closeCreate() {
   modal.classList.remove('visible');
   overlay.classList.remove('visible');
 }
-document.getElementById('fabCreate').addEventListener('click', openCreate);
-document.getElementById('closeModal').addEventListener('click', closeCreate);
+on('fabCreate', 'click', openCreate);
+on('closeModal', 'click', closeCreate);
 overlay.addEventListener('click', closeCreate);
 
 /* draft state for the event being created */
@@ -4077,16 +4094,32 @@ function sbAuthHeaders(extra){
    bundle would be the heaviest thing on the page. */
 async function sbGet(path){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: sbAuthHeaders()
+    headers: sbAuthHeaders(),
+    signal: withTimeout()
   });
   if (!r.ok) throw new Error('read failed ' + r.status);
   return r.json();
 }
+/* Every request that leaves this device gets a deadline. Some calls
+   carried AbortSignal.timeout and most did not, so a hung Supabase or
+   geocoder request pended forever and the interface waited with it —
+   no error, no retry, just a spinner and a disabled button.
+
+   Classified as transient by isTransient(), so a timeout retries
+   rather than being shown to somebody as a failure. */
+const NET_TIMEOUT_MS = 15000;
+
+function withTimeout(ms){
+  try { return AbortSignal.timeout(ms || NET_TIMEOUT_MS); }
+  catch(_){ return undefined; }        // very old browsers: no deadline
+}
+
 async function sbRpc(fn, args){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
     method: 'POST',
     headers: sbAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(args || {})
+    body: JSON.stringify(args || {}),
+    signal: withTimeout()
   });
   if (!r.ok){
     const body = await r.json().catch(() => null);
@@ -4268,7 +4301,8 @@ async function sbInsert(table, row){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
     headers: sbAuthHeaders({ 'Content-Type': 'application/json', Prefer: 'return=representation' }),
-    body: JSON.stringify(row)
+    body: JSON.stringify(row),
+    signal: withTimeout()
   });
   const body = await r.json().catch(() => null);
   if (!r.ok){
@@ -4312,28 +4346,40 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
   } catch(_){ /* search is a convenience, not a gate */ }
 
   try {
-    const rows = await sbInsert('venues', {
-      name: name.slice(0, 200), lat, lng,
-      city: city || null,
-      community_slug: communitySlug || null,
-      address: draft.venueAddress || null,
-      /* Keep the provenance. A venue picked off the map is a different
-         record from one somebody typed, and the OSM id is what makes
-         unique(source, source_id) deduplicate — without it Postgres
-         allows unlimited nulls and the same bar gets a row per publish.
-         The insert policy in schema 16 requires the id for source
-         'osm', so falling back to 'manual' without one is not a
-         cosmetic choice: it is the difference between saving and being
-         refused. */
-      source: (draft.venueSource === 'osm' && draft.venueOsmId)
-                ? 'osm' : (fromPhoto ? 'photo' : 'manual'),
-      source_id: (draft.venueSource === 'osm' && draft.venueOsmId)
-                ? draft.venueOsmId : null
+    await claimDeviceSecret();
+    if (!CURRENT_USER.id || !Store.data.secretClaimed) return null;
+
+    /* Was a direct insert into venues. That table is no longer writable
+       by the browser: venue rows carry coordinates and a use_count that
+       feeds search ranking, so an open insert was a way to put
+       arbitrary places on the map and push them up the results.
+
+       ensure_venue() does the dedupe server-side as well, which is
+       where it belongs — two devices publishing to the same new bar at
+       once used to race and create two rows. */
+    const res = await sbRpc('ensure_venue', {
+      p_payload: {
+        name: name.slice(0, 200), lat, lng,
+        city: city || null,
+        address: draft.venueAddress || null,
+        /* Provenance. A venue picked off the map is a different record
+           from one somebody typed, and the OSM id is what makes
+           unique(source, source_id) deduplicate — without it Postgres
+           permits unlimited nulls and the same bar collects a row per
+           publish. ensure_venue REFUSES source 'osm' without an id
+           rather than silently storing a duplicate-prone row. */
+        source: (draft.venueSource === 'osm' && draft.venueOsmId)
+                  ? 'osm' : (fromPhoto ? 'photo' : 'manual'),
+        osm_id: (draft.venueSource === 'osm' && draft.venueOsmId)
+                  ? draft.venueOsmId : null
+      },
+      p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(),
+      p_operation_id: newOperationId()
     });
-    return (rows && rows[0] && rows[0].id) || null;
+    return (res && res.id) || null;
   } catch(err){
-    // 409 = the dedupe index caught a race. Not an error worth surfacing.
-    if (err.status !== 409) console.warn('[bich] venue not saved:', err.message);
+    console.warn('[bich] venue not saved:', err.message);
     return null;   // the event is still worth publishing
   }
 }
@@ -4613,6 +4659,7 @@ function escapeHtml(t){
 
 async function saveEvent(spec){
   await ensureUser();
+  if (!assertBoot()) return;   // a stated failure beats a blank screen
   await loadCommunities();
 
   const startsAt = new Date(`${spec.date}T${spec.timeStart || '00:00'}`);
@@ -4626,6 +4673,10 @@ async function saveEvent(spec){
   const token = newEditToken();
   const hash  = await sha256Hex(token);
 
+  /* publish_event verifies the device secret, so it has to be claimed
+     before the first publish rather than after it. */
+  await claimDeviceSecret();
+
   /* An event with no host cannot be edited or cancelled by anybody,
      ever — owns_event() matches on host_id and null matches nobody.
      Publishing anyway used to create a permanently orphaned event and
@@ -4637,50 +4688,53 @@ async function saveEvent(spec){
     }
   }
 
-  const saved = await sbInsert('events', {
-    host_id: CURRENT_USER.id,
-    title: String(spec.title || '').slice(0, 200),
-    description: withLineup(spec.description, renderLineup(spec.lineup)) || null,
-    venue_id: venueId,
-    venue_name: spec.venueName || null,
-    venue_address: spec.venueAddress || null,
-    category: spec.category || null,
-    venue_lat: spec.lat ?? null,
-    venue_lng: spec.lng ?? null,
-    venue_source: spec.venueSource || 'manual',
-    city: spec.city || null,
-    community_slug: slug,
-    photo_lat: spec.photoLat ?? null,   // origin only, never the pin
-    photo_lng: spec.photoLng ?? null,
-    starts_at: startsAt.toISOString(),
-    ends_at: endsAt ? endsAt.toISOString() : null,
-    price_value: Math.max(0, Math.round((Number(spec.price) || 0) * 100)),
-    price_currency: spec.currency || 'EUR',
-    capacity: spec.capacity ? parseInt(spec.capacity, 10) : null,
-    recurrence: spec.recurrence || null,
-    contact: spec.contact || null,
-    cover_url: spec.coverUrl || null,
-    status: 'live',
-    source: spec.source || 'manual',
+  /* One RPC, one transaction. This used to be a direct table insert
+     followed by four separate operations — remember the token, claim
+     the secret, write the host's attendance, adopt the community — and
+     a failure partway left a live event whose own host was not marked
+     going, belonging to no community, with nothing to repair it.
 
-    /* Where the pin came from. Without this there is no way to tell a
-       location somebody chose from one inferred off a photo or guessed
-       by a model — and no way to audit a wrong pin afterwards. */
-    pin_source: (spec.lat == null) ? null : (spec.pinSource || 'manual'),
-
-    /* An event that already happened. Real: backfilled history, and
-       testing the crossed-paths graph with events that have actually
-       been attended. It still belongs to its host and still counts for
-       the community graph; it just is not pretending to be something
-       anyone can still turn up to. */
-    is_backfill: startsAt.getTime() < Date.now() - 60 * 60 * 1000,
-
-    /* Written by a model rather than a person, so the app can offer a
-       "check these" pass over exactly those events and no others. */
-    needs_review: spec.source === 'photo' || spec.source === 'magic',
-
-    edit_token_hash: hash
+     publish_event validates server-side, inserts the event and the
+     host's attendance together, and records the operation id so a
+     retry after a dropped response returns the original result instead
+     of publishing a second event. */
+  const res = await sbRpc('publish_event', {
+    p_payload: {
+      title: String(spec.title || '').slice(0, 200),
+      description: withLineup(spec.description, renderLineup(spec.lineup)) || null,
+      venue_name: spec.venueName || null,
+      venue_address: spec.venueAddress || null,
+      venue_source: spec.venueSource || null,
+      category: spec.category || null,
+      venue_lat: spec.lat ?? null,
+      venue_lng: spec.lng ?? null,
+      city: spec.city || null,
+      community_slug: slug || null,
+      /* Private. Written for community inference only, never projected
+         into events_public or any public response. */
+      photo_lat: spec.photoLat ?? null,
+      photo_lng: spec.photoLng ?? null,
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt ? endsAt.toISOString() : null,
+      recurrence: spec.recurrence || null,
+      price_value: Math.round((spec.price || 0) * 100),
+      price_currency: spec.currency || 'EUR',
+      capacity: spec.capacity ?? null,
+      cover_url: spec.coverUrl || null,
+      contact: spec.contact || null,
+      source: spec.source || 'manual',
+      pin_source: (spec.lat == null) ? null : (spec.pinSource || 'manual'),
+      needs_review: spec.source === 'photo' || spec.source === 'magic',
+      edit_token_hash: hash
+    },
+    p_user: CURRENT_USER.id,
+    p_secret: deviceSecret(),
+    p_operation_id: spec.operationId || newOperationId()
   });
+
+  if (res && res.replayed) console.info('[bich] publish replayed — no duplicate created');
+  const saved = res && res.event ? [res.event] : [];
+  if (!saved.length) throw new Error('publish returned nothing');
 
   const row = saved[0];
   rememberToken(row.short_id, token);
@@ -4887,7 +4941,11 @@ async function loadCommunities(){
     /* community_reach carries kind, may_widen and max_radius_km
        alongside the circle, so the widening ladder is defined by the
        database rather than guessed at in three places in the app. */
-    KNOWN_COMMUNITIES = await sbGet('community_reach?select=*');
+    /* Was a table-wide read of community_reach. The data is a coarse
+       place directory and not sensitive, but a broad select is exactly
+       the convenience the permission model rules out — and the same
+       answer fits inside an RPC with a bound on it. */
+    KNOWN_COMMUNITIES = await sbRpc('community_lookup', { p_slug: null });
   } catch(_){
     try {
       KNOWN_COMMUNITIES = await sbGet(
@@ -5037,6 +5095,85 @@ function setFeedStatus(text, isError){
    grant beyond select. If the RPC is misconfigured the events still
    show, just without the social number - which is far better than
    silently falling back to seven fake events that look real. */
+/* ── guard() ───────────────────────────────────────────────────────
+   Two bugs with one shape.
+
+   P2.3: every action that disables its own button restored it only on
+   the success path. An exception left the control dead with no way
+   back except a reload — and an exception is exactly when somebody
+   most wants to try again.
+
+   P2.5: only the attendance button had a busy flag. Publish, edit,
+   cancel, redeem and passkey could all be fired twice by a double tap,
+   an Enter key while the pointer handler was in flight, or a
+   programmatic call.
+
+   One wrapper: single-flight per key, and try/finally so the control
+   comes back whatever happens. */
+const _inFlight = new Set();
+
+async function guard(key, el, fn){
+  if (_inFlight.has(key)) {
+    console.info('[bich] ignoring duplicate', key);
+    return undefined;
+  }
+  _inFlight.add(key);
+  const label = el ? el.textContent : null;
+  if (el) el.disabled = true;
+  try {
+    return await fn();
+  } finally {
+    /* Unconditional. This is the whole point of the wrapper: the
+       failure path is where a stuck button actually hurts. */
+    _inFlight.delete(key);
+    if (el){
+      el.disabled = false;
+      if (label != null && el.textContent !== label && !el.dataset.keepLabel){
+        el.textContent = label;
+      }
+    }
+  }
+}
+
+/* ── on() ──────────────────────────────────────────────────────────
+   Every top-level `getElementById('x').addEventListener(...)` is a
+   single point of failure for the ENTIRE script: if that element is
+   ever missing — renamed in markup, removed by a partial deploy, an
+   older cached index.html against a newer service worker — the call
+   throws during evaluation and every listener declared AFTER it never
+   binds. The result is not a degraded app, it is a blank dead one.
+
+   This binds when it can and says so when it cannot, so one absent
+   button costs one button. */
+function on(id, type, fn, opts){
+  const el = document.getElementById(id);
+  if (!el){
+    console.warn('[bich] missing element:', id, '— its', type, 'handler is not bound');
+    (window._missingElements = window._missingElements || []).push(id);
+    return null;
+  }
+  el.addEventListener(type, fn, opts);
+  return el;
+}
+
+/* A few elements genuinely cannot be absent — without them there is no
+   app, and a blank screen with a console error is worse than a stated
+   failure. Checked once at boot. */
+function assertBoot(){
+  const required = ['screen-home','screen-map','screen-me','eventListNearby',
+                    'createModal','detailScreen','map'];
+  const missing = required.filter(id => !document.getElementById(id));
+  if (!missing.length) return true;
+  document.body.innerHTML =
+    '<div style="padding:40px;font-family:monospace;font-size:13px;line-height:1.6">' +
+    '<strong>bich could not start</strong><br><br>' +
+    'This page is missing: ' + missing.map(m => escapeHtml(m)).join(', ') + '.<br><br>' +
+    'That usually means a half-finished deploy or a stale cached page. ' +
+    'Close every bich.app tab and reopen.</div>';
+  console.error('[bich] boot failed, missing:', missing);
+  return false;
+}
+
 /* ── askConfirm ────────────────────────────────────────────────────
    window.confirm() is suppressed in an iOS standalone PWA. Launched
    from the home screen, it returns immediately without ever showing a
@@ -5093,13 +5230,22 @@ async function bichCheck(){
   add('worker configured', Boolean(WORKER_URL), WORKER_URL || 'no worker url');
 
   if (SB_READY()){
+    /* events_public is the one sanctioned read. Everything else must
+       FAIL — a success there means the revokes did not apply and the
+       browser can still reach columns like photo_lat. */
+    try { await sbGet('events_public?select=short_id&limit=1'); add('read events_public', true); }
+    catch(e){ add('read events_public', false, `${e.status || ''} ${e.message}`.trim()); }
+
     for (const [label, path] of [
-      ['read communities', 'communities?select=slug&limit=1'],
-      ['read venues',      'venues?select=id&limit=1'],
-      ['read events_public','events_public?select=short_id&limit=1']
+      ['events table is private',      'events?select=photo_lat&limit=1'],
+      ['venues table is private',      'venues?select=id&limit=1'],
+      ['communities table is private', 'communities?select=slug&limit=1'],
+      ['attendances are private',      'attendances?select=user_id&limit=1']
     ]){
-      try { await sbGet(path); add(label, true); }
-      catch(e){ add(label, false, `${e.status || ''} ${e.message}`.trim()); }
+      try {
+        await sbGet(path);
+        add(label, false, 'readable by anon — run schema 27');
+      } catch(_){ add(label, true); }
     }
     try {
       const f = await sbRpc('feed', { viewer: null, community: null, max_results: 1 });
@@ -5220,7 +5366,7 @@ async function loadFeed(){
   try {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const rows = await sbGet(
-      `events_public?select=*&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
+      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,category,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
     EVENTS.length = 0;
     (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
     renderBundles();
@@ -5322,7 +5468,7 @@ async function openMeList(kind){
   if (missing.length && SB_READY()){
     try {
       const list = missing.map(encodeURIComponent).join(',');
-      const rows = await sbGet(`events_public?select=*&short_id=in.(${list})`);
+      const rows = await sbGet(`events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,category,host_handle,going_count&short_id=in.(${list})`);
       (rows || []).forEach(r => have.set(r.short_id, rowToEvent(r)));
     } catch(err){ console.warn('[bich] could not load your list', err.message); }
   }
@@ -5556,7 +5702,8 @@ const COMMUNITY_SIGNALS = { link: 'shared link', photo: 'photo location', publis
 async function resolvePlace(lat, lng){
   if (lat == null || lng == null || !WORKER_URL) return null;
   try {
-    const r = await fetch(`${WORKER_URL}/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`);
+    const r = await fetch(`${WORKER_URL}/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+                          { signal: withTimeout(8000) });
     if (!r.ok) return null;
     const p = await r.json();
     return (p && p.osm_id && p.name) ? p : null;
@@ -5733,7 +5880,8 @@ async function searchPlaces(q){
   const lng = draft.lng ?? draft.photoLng ?? null;
   const near = (lat != null && lng != null) ? `&lat=${lat}&lng=${lng}` : '';
   try {
-    const r = await fetch(`${WORKER_URL}/places?q=${encodeURIComponent(q.trim())}${near}`);
+    const r = await fetch(`${WORKER_URL}/places?q=${encodeURIComponent(q.trim())}${near}`,
+                          { signal: withTimeout(8000) });
     if (!r.ok) return [];
     const out = await r.json();
     return (out && out.places) || [];
@@ -5824,7 +5972,6 @@ const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
 /* Must stay empty on bich.app. A key in public JS is a credit card
    in a shop window, and Google's scanners will disable it. Use it
    only on localhost. */
-const GEMINI_KEY_DEV = '';
 const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
 const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
 const COVER_MAX_SIDE = 1000;   // the only stored size, hero and card both
@@ -6328,55 +6475,24 @@ async function extractEvent(base64, exif, knownVenues){
     const rows = Array.isArray(out) ? out : (out.events || []);
     return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
   }
-  // DEV: direct Gemini from the browser. One user, localhost, key not shipped.
-  if (GEMINI_KEY_DEV){
-    const today = new Date().toISOString().slice(0,10);
-    const exifNote = exif && (exif.lat!=null || exif.dt)
-      ? `\n\nEXIF supplied with this photo (location fallback only, never the event date): GPS ${exif.lat ?? 'none'}, ${exif.lng ?? 'none'} · captured ${exif.dt ?? 'unknown'}`
-      : '\n\nNo EXIF was supplied with this photo.';
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_KEY_DEV },
-      body: JSON.stringify({
-        system_instruction: { parts:[{ text: PHOTO_SYSTEM_PROMPT + `\n\nToday's date is ${today}. Use it to resolve relative dates and weekdays.` }] },
-        contents: [{ role:'user', parts:[
-          { inline_data: { mime_type:'image/jpeg', data: base64 } },
-          { text: 'Extract every event in this photo as records.' + exifNote }
-        ]}],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
-      })
-    });
-    const d = await r.json().catch(() => null);
-    if (!r.ok || !d || d.error){
-      const err = new Error(d?.error?.code === 429 ? 'busy right now. try again in a moment?' : "couldn't read that photo");
-      err.soft = d?.error?.code === 429;
-      throw err;
-    }
-    const text = (d.candidates?.[0]?.content?.parts || []).map(p => p.text).join('') || '{}';
-    const out = JSON.parse(text);
-    const rows = Array.isArray(out) ? out : (out.events || []);
-    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
-  }
+  /* REMOVED — two direct model calls used to live here.
+     A dev path holding a Gemini key constant, and below it an
+     UNCONDITIONAL fallback to api.anthropic.com whenever no worker was
+     configured. Neither was behind a flag.
 
-  // DEMO: inline model call so the flow runs without any key or backend
-  const exifLine = exif && (exif.lat!=null || exif.dt)
-    ? `\n\nEXIF supplied (location fallback only, not the event date): GPS ${exif.lat ?? '?'}, ${exif.lng ?? '?'} · captured ${exif.dt ?? '?'}` : '';
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      model:'claude-sonnet-4-6', max_tokens:1000, system: PHOTO_SYSTEM_PROMPT,
-      messages:[{ role:'user', content:[
-        { type:'image', source:{ type:'base64', media_type:'image/jpeg', data: base64 } },
-        { type:'text', text:'Extract the event(s) from this photo as a JSON array of row objects.' + exifLine }
-      ]}]
-    })
-  });
-  if (!res.ok) throw new Error('model ' + res.status);
-  const data = await res.json();
-  const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n')
-    .replace(/```json/gi,'').replace(/```/g,'').trim();
-  const parsed = JSON.parse(text);
-  return Array.isArray(parsed) ? parsed : [parsed];
+     Both broke the same promise: Core never calls a model, and a key
+     in shipped frontend code is one paste from being live in a file
+     anybody can read. The fallback was worse than the dev path,
+     because it turned a worker outage into a silent direct model call
+     instead of the safe failure the spec requires.
+
+     Magic now fails honestly. The cover is already uploaded and is
+     still a perfectly good Core cover — which is exactly why the two
+     paths are kept independent. */
+  const err = new Error('the reader is unavailable — your photo is saved, fill the rest in yourself');
+  err.soft = true;
+  err.retryable = true;
+  throw err;
 }
 
 function todayISO(){ return new Date().toISOString().slice(0,10); }
@@ -6584,8 +6700,8 @@ coverPicker.addEventListener('click', (e) => {
 coverPicker.addEventListener('keydown', (e) => {
   if ((e.key==='Enter'||e.key===' ') && !coverPicker.classList.contains('has-image')){ e.preventDefault(); openPicker(); }
 });
-document.getElementById('coverReplace').addEventListener('click', openPicker);
-document.getElementById('coverCrop').addEventListener('click', async () => {
+on('coverReplace', 'click', openPicker);
+on('coverCrop', 'click', async () => {
   if (!sourceBitmap) return;
   const c = await openCropper(sourceBitmap, 'drag the corners to the flyer');
   if (c !== undefined) readPhoto(c);      // undefined means they backed out
@@ -6768,7 +6884,7 @@ function formatWhen(dateStr, timeStr){
 }
 
 /* ── publish: build the event, save it, show it in the feed ── */
-document.getElementById('publishBtn').addEventListener('click', async () => {
+on('publishBtn', 'click', async () => {
   const title = document.getElementById('inputTitle').value.trim();
   /* After a publish that saved the event but lost the cover, this
      button is a dismiss control, not a publish control. Route the tap
@@ -6852,14 +6968,12 @@ document.getElementById('publishBtn').addEventListener('click', async () => {
          wrote this row before, so every event opened its life reading
          "0 people" while its own host was looking at it. Best effort:
          a refused attendance must not undo a published event. */
-      const hostGoing = await writeAttendance(ev.id, true);
-      if (hostGoing.state === 'saved'){
-        Store.setGoing(ev.id, true);
-        ev.going = hostGoing.count != null ? hostGoing.count : 1;
-      } else if (hostGoing.state === 'queued'){
-        Store.setGoing(ev.id, true);
-        await outboxAdd('attendance.set', { short_id: ev.id, status: 'going' });
-      }
+      /* publish_event writes the host's going row in the SAME
+         transaction now, so there is nothing to do here but reflect
+         it. The separate call this replaces is exactly how an event
+         could end up live with its own host absent. */
+      Store.setGoing(ev.id, true);
+      ev.going = Math.max(1, ev.going || 0);
 
       if (img) ev.cover = img.url;      // one size, so one field
       else if (draft.cover) {
@@ -6957,7 +7071,7 @@ if (!Store.data.onboarded) {
   showHandle();
 }
 
-document.getElementById('rerollBtn').addEventListener('click', () => {
+on('rerollBtn', 'click', () => {
   if (Store.data.onboarded) return;      // locked once you are known
   currentHandle = genHandle();
   onboardHandle.style.opacity = '0';
@@ -6967,7 +7081,7 @@ document.getElementById('rerollBtn').addEventListener('click', () => {
   }, 200);
 });
 
-document.getElementById('onboardContinue').addEventListener('click', async () => {
+on('onboardContinue', 'click', async () => {
   onboard.classList.remove('visible');
   Store.set({ onboarded: true, handle: currentHandle });
   showHandle();
@@ -7365,18 +7479,18 @@ function markReviewed(shortId){
   Store.set({ reviewedAttendance: done });
 }
 
-document.getElementById('magicRedeem')?.addEventListener('click', redeemMagicCode);
+on('magicRedeem', 'click', () => guard('magic.redeem', document.getElementById('magicRedeem'), redeemMagicCode));
 document.getElementById('magicCode')?.addEventListener('keydown', e => {
-  if (e.key === 'Enter') redeemMagicCode();
+  if (e.key === 'Enter') guard('magic.redeem', document.getElementById('magicRedeem'), redeemMagicCode);
 });
-document.getElementById('mePasskey')?.addEventListener('click', enrolPasskey);
-document.getElementById('meRestore')?.addEventListener('click', restoreFromPasskey);
+on('mePasskey', 'click', () => guard('passkey.enrol', document.getElementById('mePasskey'), enrolPasskey));
+on('meRestore', 'click', () => guard('passkey.restore', document.getElementById('meRestore'), restoreFromPasskey));
 
-document.getElementById('acceptPasskey')?.addEventListener('click', () => {
+on('acceptPasskey', 'click', () => {
   document.getElementById('recoveryPrompt').classList.remove('visible');
   enrolPasskey();
 });
-document.getElementById('dismissPasskey')?.addEventListener('click', () => {
+on('dismissPasskey', 'click', () => {
   document.getElementById('recoveryPrompt').classList.remove('visible');
   Store.set({ passkeyDeclined: true });
 });
@@ -7421,11 +7535,11 @@ document.getElementById('inputDate').value = today.toISOString().split('T')[0];
 document.getElementById('inputTime').value = '19:00';
 
 /* ── owner controls ────────────────────────────────────────────── */
-document.getElementById('editEventBtn').addEventListener('click', () => {
+on('editEventBtn', 'click', () => {
   const e = EVENTS.find(x => x.id === window._openEventId);
   if (e) openEditSheet(e);
 });
-document.getElementById('cancelEventBtn').addEventListener('click', async () => {
+on('cancelEventBtn', 'click', async () => {
   const id = window._openEventId;
   if (!id) return;
   const e = EVENTS.find(x => x.id === id);
@@ -7435,16 +7549,16 @@ document.getElementById('cancelEventBtn').addEventListener('click', async () => 
   if (!(await askConfirm(warn, 'cancel it'))) return;
   if (await cancelEvent(id)) document.getElementById('closeDetail').click();
 });
-document.getElementById('editClose').addEventListener('click', closeEditSheet);
-document.getElementById('editSave').addEventListener('click', saveEdit);
-document.getElementById('editSheet').addEventListener('click', (e) => {
+on('editClose', 'click', closeEditSheet);
+on('editSave', 'click', saveEdit);
+on('editSheet', 'click', (e) => {
   if (e.target.id === 'editSheet') closeEditSheet();   // tap the scrim
 });
 document.querySelector('.me-stats').addEventListener('click', (e) => {
   const b = e.target.closest('[data-list]');
   if (b) openMeList(b.dataset.list);
 });
-document.getElementById('meListExit').addEventListener('click', exitMeList);
+on('meListExit', 'click', exitMeList);
 
 /* Leaving the home tab drops the filter, or the next visit shows a
    stale personal list pretending to be the feed. */
@@ -7456,17 +7570,17 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   }
 }));
 
-document.getElementById('mapCatBar').addEventListener('click', (e) => {
+on('mapCatBar', 'click', (e) => {
   const chip = e.target.closest('[data-cat]');
   if (!chip) return;
   mapCategory = chip.dataset.cat || 'all';
   window._mapShape = null;          // a filter change should reframe
   paintMap();
 });
-document.getElementById('pinListClose').addEventListener('click', () => {
+on('pinListClose', 'click', () => {
   document.getElementById('pinList').hidden = true;
 });
-document.getElementById('bulkClose').addEventListener('click', () => {
+on('bulkClose', 'click', () => {
   document.getElementById('bulkResult').hidden = true;
 });
 
