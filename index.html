@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-40" />
+  <meta name="app-version" content="2026-07-26-41" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -4980,11 +4980,13 @@ async function loadCommunities(){
        the convenience the permission model rules out — and the same
        answer fits inside an RPC with a bound on it. */
     KNOWN_COMMUNITIES = await sbRpc('community_lookup', { p_slug: null });
-  } catch(_){
-    try {
-      KNOWN_COMMUNITIES = await sbGet(
-        'communities?select=slug,name,kind,centre_lat,centre_lng,radius_km&is_active=is.true');
-    } catch(__){ KNOWN_COMMUNITIES = []; }
+  } catch(err){
+    /* There was a direct-table fallback here. It cannot work — schema 27
+       revoked select on communities — so it only ever turned one clear
+       failure into two confusing ones. An empty list is honest: the app
+       falls back to Bali and says why in the console. */
+    console.warn('[bich] could not load communities —', err.message);
+    KNOWN_COMMUNITIES = [];
   }
   return KNOWN_COMMUNITIES;
 }
@@ -5076,9 +5078,14 @@ function communityForCoords(lat, lng){
 async function linkKnownVenue(name){
   if (!SB_READY() || !name) return;
   try {
-    const rows = await sbGet(
-      `venues?select=id,name,lat,lng&name=eq.${encodeURIComponent(name)}&limit=1`);
-    if (rows && rows[0]){
+    /* Was a direct read of the venues table, which schema 27 closed.
+       search_venues is the sanctioned door and already ranks an exact
+       prefix match first. */
+    const rows = await sbRpc('search_venues', {
+      q: name, near_lat: draft.lat ?? null, near_lng: draft.lng ?? null,
+      community: (Store.data.home && Store.data.home.slug) || null, max_results: 1
+    });
+    if (rows && rows[0] && rows[0].name.toLowerCase() === name.toLowerCase()){
       draft.venueId = rows[0].id;
       if (draft.lat == null && rows[0].lat != null){
         setEventLocation(rows[0].lat, rows[0].lng, false);
