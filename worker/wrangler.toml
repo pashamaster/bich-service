@@ -63,8 +63,8 @@ DAILY_CAP = "180"
 # already holds and publishes in config.js, so nothing new is trusted
 # to this worker - row level security is what protects the data, not
 # the secrecy of this string. There is still no service-role key here.
-SUPABASE_URL = "https://ibdqherxuolymstcqmsw.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliZHFoZXJ4dW9seW1zdGNxbXN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MjE3OTEsImV4cCI6MjEwMDM5Nzc5MX0.iKR24FW26CsZdbJ6s4y-s9UPztYfujwIiitpX4btAvU"
+SUPABASE_URL = "https://omwurzkxapktduzppbim.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9td3Vyemt4YXBrdGR1enBwYmltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1NTUyMDMsImV4cCI6MjEwMTEzMTIwM30.w4VJNgbcNNDZqL9TAtfByduwwYBZfI4mpEmwANyLCxA"
 
 # The core/magic wall. "false" makes /extract-event return 404 and no
 # request can reach Gemini at all.
