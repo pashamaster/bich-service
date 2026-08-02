@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-02-42" />
+  <meta name="app-version" content="2026-08-02-43" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2492,6 +2492,18 @@ function setEditPin(lat, lng, quiet){
 async function replaceEditCover(file){
   const note = document.getElementById('editNote');
   try {
+    /* STEP 0, the same gate the create sheet uses. This is the second
+       upload entry point and had no validation at all: a PDF or a
+       renamed text file got as far as createImageBitmap and came back
+       as "could not replace the cover: The source image could not be
+       decoded", which tells somebody nothing about what to do next.
+
+       No EXIF step here on purpose. Replacing a cover on an event that
+       already exists says nothing about where anybody is now, so it is
+       not one of the three community signals. */
+    const problem = rejectUpload(file, await file.arrayBuffer());
+    if (problem) throw new Error(problem);
+
     const bmp = await createImageBitmap(file);
     const full = render(bmp, null, COVER_MAX_SIDE, 0.82);
     const ext  = full.mime === 'image/webp' ? 'webp' : 'jpg';
@@ -6135,6 +6147,85 @@ Never invent coordinates, names, prices or dates the photo does not support. A b
 
 Judge legibility honestly. If text was cut off, too small, blurred or lost to glare, say so and name what you could not read. We use that to offer a tighter crop. Do not pretend a hard photo was easy.`;
 
+/* ═══════════════════════════════════════════════════════════════════
+   THE UPLOAD PIPELINE
+
+   Every photo enters here and walks the same numbered steps. The order
+   is not cosmetic — step 1 must happen before step 3, because canvas
+   re-encoding strips EXIF and there is no way back once the bytes are
+   gone.
+
+     0  validate      is this actually an image, and can we open it
+     1  read geo      pull GPS off the untouched bytes
+     2  photo origin  valid coordinates become their own entity, which
+                      resolves community and centres the map
+     3  attach        the picture becomes the event card's cover
+     4  CORE COMPLETE — magic off, we stop here and that is a success
+     5  flyer check   magic only: does Gemini see an event in this
+     6  not a flyer   fall back to core, which already finished at 4
+     7  is a flyer    the magic flow takes over
+
+   Steps 0-4 are synchronous and always run. Steps 5-7 run only with
+   magic armed, and only after the cover is already on the card — so a
+   slow model call never holds up the picture appearing. */
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;   // a 48MP HEIC is ~8MB; 25 is generous
+
+/* Magic bytes, not the filename and not file.type. Both of those are
+   supplied by whatever produced the file and neither is trustworthy:
+   `accept="image/*"` on the input is a hint to the picker, not a
+   guarantee, and a renamed .txt arrives with a perfectly plausible
+   type. Sniffing the header is the only honest answer. */
+function sniffImageType(buf){
+  const b = new Uint8Array(buf, 0, Math.min(buf.byteLength, 32));
+  if (b.length < 12) return null;
+  if (b[0]===0xFF && b[1]===0xD8 && b[2]===0xFF) return 'image/jpeg';
+  if (b[0]===0x89 && b[1]===0x50 && b[2]===0x4E && b[3]===0x47) return 'image/png';
+  if (b[0]===0x47 && b[1]===0x49 && b[2]===0x46) return 'image/gif';
+  if (b[0]===0x52 && b[1]===0x49 && b[2]===0x46 && b[3]===0x46 &&
+      b[8]===0x57 && b[9]===0x45 && b[10]===0x42 && b[11]===0x50) return 'image/webp';
+  /* ISO-BMFF: ....ftyp then a brand. AVIF shares the container with
+     HEIC and must be reported separately — the two are not
+     interchangeable, and decodeImage picks a decoder by type. Calling
+     an AVIF "heic" would send it to the HEIC decoder, which cannot
+     read it. */
+  if (b[4]===0x66 && b[5]===0x74 && b[6]===0x79 && b[7]===0x70){
+    const brand = String.fromCharCode(b[8],b[9],b[10],b[11]).toLowerCase();
+    if (/^(avif|avis)$/.test(brand)) return 'image/avif';
+    if (/^(heic|heix|hevc|hevx|mif1|msf1)$/.test(brand)) return 'image/heic';
+  }
+  return null;
+}
+
+/* STEP 0. Refuse before the pipeline rather than failing somewhere
+   inside it. Returns null when the file is fine, or a message written
+   for the person rather than for a log. */
+function rejectUpload(file, buf){
+  if (!file || !file.size) return "that file is empty. pick another?";
+  if (file.size > MAX_UPLOAD_BYTES){
+    return `that photo is ${(file.size/1048576).toFixed(0)}MB — the limit is ${MAX_UPLOAD_BYTES/1048576}MB.`;
+  }
+  if (!buf || buf.byteLength < 12) return "that file is too small to be a photo.";
+  if (!sniffImageType(buf)) return "that does not look like an image. try a jpg, png or heic?";
+  return null;
+}
+
+/* STEP 1/2 gate. EXIF GPS is frequently present-but-meaningless, and
+   the failure is silent: a zeroed GPS chip writes 0/0, which is a real
+   coordinate in the Gulf of Guinea. Somebody in Lisbon would silently
+   join a community 4,000km out to sea. Anything not obviously a place
+   on earth is treated as no coordinates at all, which is the honest
+   reading — the field was there, it just does not say anything. */
+function geoFromExif(exif){
+  if (!exif) return null;
+  const lat = Number(exif.lat), lng = Number(exif.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  // Null Island: the sentinel every zeroed or failed GPS writes.
+  if (Math.abs(lat) < 0.0001 && Math.abs(lng) < 0.0001) return null;
+  return { lat, lng, capturedAt: exif.dt || null, source: 'exif' };
+}
+
 /* read GPS + capture date from a JPEG's raw bytes (must run BEFORE canvas re-encode, which strips EXIF) */
 function readExif(buf){
   try{
@@ -6633,15 +6724,31 @@ function todayISO(){ return new Date().toISOString().slice(0,10); }
 
 function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElementById(id).value = v; }
 
-/* Photo GPS names the town and centres the map. It NEVER drops the pin:
-   a flyer in a cafe window advertises something happening elsewhere. */
-function setPhotoOrigin(lat, lng){
+/* STEP 2. The photo's own coordinates, held as their own thing rather
+   than smeared across the draft. Where the picture was taken is not
+   where the event is, and keeping them separate is what stops the two
+   being confused.
+
+   `dropPin` is passed in rather than read from MAGIC_ARMED, and that
+   matters. A photo can start out as a magic candidate and end up core
+   — armed, sent to the model, no flyer found — and at that point it
+   must behave exactly like a core photo, pin included. Reading the
+   toggle in here would give the wrong answer for that case, because
+   the toggle is still on.
+
+   Safe to call twice: step 2 calls it with the pin withheld while
+   magic is pending, step 6 calls it again to release the pin. */
+function setPhotoOrigin(origin, dropPin){
+  if (!origin) return;
+  const { lat, lng } = origin;
+  photoOrigin = origin;
   draft.photoLat = lat; draft.photoLng = lng;
   if (window._miniMap) window._miniMap.setView([lat, lng], 12);
 
-  /* Signal two: a photo that carries GPS updates the community, whether
-     or not this event is ever published. Nothing is asked of anyone —
-     the coordinates were already in the file. */
+  /* Signal three: a photo that carries GPS updates the community,
+     whether or not this event is ever published. Nothing is asked of
+     anyone — the coordinates were already in the file. Idempotent, so
+     a second call after the flyer check costs nothing. */
   adoptCommunity(lat, lng, 'photo').catch(() => {});
 
   const el = document.getElementById('coordsLabel');
@@ -6651,8 +6758,11 @@ function setPhotoOrigin(lat, lng){
      photo was taken is the wrong answer. In CORE the photo IS the
      place — someone standing at the spot taking a picture of it — so
      the same rule that protects magic breaks core. Pre-fill the pin,
-     mark it a guess, and let them drag it. */
-  if (!MAGIC_ARMED && draft.lat == null){
+     mark it a guess, and let them drag it.
+
+     Only ever a DEFAULT: it fills an empty pin and never overwrites
+     one somebody placed themselves. */
+  if (dropPin && draft.lat == null){
     setEventLocation(lat, lng, true);     // the one place that moves the pin
     draft.pinFromExif = true;
     draft.pinSource = 'exif';
@@ -6680,7 +6790,10 @@ function fillForm(row){
      search, no duplicate. */
   if (row.venue_match) linkKnownVenue(row.venue_match);
   draft.contact = row.contact || '';
-  if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
+  /* Step 7. The pin must never come from EXIF here — a flyer read off
+     a cafe window advertises something across town — so dropPin stays
+     false and the printed coordinates below get the final say. */
+  if (photoOrigin) setPhotoOrigin(photoOrigin, false);
   draft.city = row.city || '';
   draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
   draft.mapsLink = row.google_maps_link || '';
@@ -6840,7 +6953,11 @@ on('coverCrop', 'click', async () => {
 });
 
 /* Holds the decoded photo so a re-crop never re-reads the file. */
-let sourceBitmap = null, sourceExif = null;
+/* photoOrigin is step 2's entity: the photo's own coordinates, kept
+   apart from draft.lat/draft.lng which are the EVENT's location. The
+   two are different facts and conflating them is how a flyer shot in a
+   cafe window ends up pinned to the cafe. */
+let sourceBitmap = null, sourceExif = null, photoOrigin = null;
 
 function showCover(dataUrl){
   draft.cover = dataUrl;
@@ -6872,14 +6989,24 @@ async function readPhoto(crop){
   draft.lineup = null;                // never carry one photo's into the next
   showCover(render(sourceBitmap, crop, COVER_MAX_SIDE, 0.85).dataUrl);
 
-  /* Core is the default and does not read anything. No model call, no
-     worker call, no spend — the photo is a cover and that is all. Only
-     an armed magic button gets past here. */
+  /* ── STEP 4 · CORE COMPLETE ───────────────────────────────────────
+     The cover is on the card and, if the photo carried usable
+     coordinates, the community is resolved and the map is centred.
+     That is a complete, successful outcome — not a lesser one.
+
+     Core does not read anything: no model call, no worker call, no
+     spend. Only an armed magic button gets past here. */
   if (!MAGIC_ARMED){
     coverNotice.className = 'cover-notice show';
-    coverNotice.textContent = 'photo added as the cover. fill in the rest.';
+    coverNotice.textContent = photoOrigin
+      ? 'photo added — location picked up from it. fill in the rest.'
+      : 'photo added as the cover. fill in the rest.';
     return;
   }
+
+  /* Everything past this point is steps 5-7 and is allowed to be slow.
+     Core already finished above, so a stalled model call costs the
+     person nothing they had before. */
 
   /* Magic needs a claimed account before the worker can check it
      against the cohort. Done here rather than at publish, so somebody
@@ -6906,16 +7033,23 @@ async function readPhoto(crop){
     const rows = out.events || out;
     const rq   = out.read_quality || {};
 
-    if (rq.is_event === false){
-      coverNotice.className = 'cover-notice show';
-      coverNotice.textContent = 'photo added. fill in the gaps.';
+    /* ── STEP 6 · not a flyer, fall back to core ────────────────────
+       Gemini looked and found no event. The photo is just a photo, so
+       it continues as core — including the pin that step 2 withheld
+       while magic was pending. The button being on does not change
+       what the photo turned out to be.
+
+       Both exits are the same outcome and are handled together: the
+       model saying "not an event", and the model saying nothing
+       usable at all. */
+    if (rq.is_event === false || !rows || !rows.length){
+      fallBackToCore(rq.is_event === false
+        ? 'no event found in that photo — added as the cover.'
+        : 'nothing readable in that photo — added as the cover.');
       return;
     }
-    if (!rows || !rows.length){
-      coverNotice.className = 'cover-notice show';
-      coverNotice.textContent = 'photo added. fill in the gaps.';
-      return;
-    }
+
+    /* ── STEP 7 · it is a flyer, magic takes over ─────────────────── */
 
     /* Magic was armed by a deliberate press, and that press IS the
        approval. Whatever the photo yielded — a single gig or a month's
@@ -6929,13 +7063,39 @@ async function readPhoto(crop){
 
   } catch(err){
     coverBusy.classList.remove('show');
-    // The cover is set and the photo is fine. Only the reading failed, so
-    // this is not an error state - saying so in red reads as "you broke it".
-    // Quota and invite refusals DO need to be visible, so those stay red.
-    coverNotice.className = err.soft ? 'cover-notice show err' : 'cover-notice show';
-    coverNotice.textContent = err.soft ? err.message : 'photo added. fill in the gaps.';
-    if (sourceExif && sourceExif.lat != null) setPhotoOrigin(sourceExif.lat, sourceExif.lng);
+    /* The cover is set and the photo is fine. Only the reading failed,
+       so this is not an error state — saying so in red reads as "you
+       broke it". Quota and invite refusals DO need to be visible, so
+       those stay red. Either way the photo lands back in core, which
+       is the same place step 6 puts it. */
+    if (err.soft){
+      coverNotice.className = 'cover-notice show err';
+      coverNotice.textContent = err.message;
+      releaseCorePin();
+    } else {
+      fallBackToCore("couldn't read that photo — added as the cover.");
+    }
   }
+}
+
+/* STEP 6, shared by the not-a-flyer exits and the failure path.
+   A photo that entered as a magic candidate and came back without an
+   event is a core photo, and core is where it goes. The only thing
+   still outstanding is the pin step 2 held back. */
+function fallBackToCore(message){
+  coverNotice.className = 'cover-notice show';
+  coverNotice.textContent = photoOrigin
+    ? message.replace(/\.$/, '') + ' location picked up from it.'
+    : message;
+  releaseCorePin();
+}
+
+/* The pin step 2 withheld while the flyer check was pending. Re-running
+   setPhotoOrigin is safe and idempotent — the community adopt is a
+   no-op second time, and the pin is only filled when still empty, so
+   somebody who dragged it while waiting keeps their own placement. */
+function releaseCorePin(){
+  if (photoOrigin) setPhotoOrigin(photoOrigin, true);
 }
 
 coverInput.addEventListener('change', async (e) => {
@@ -6944,22 +7104,65 @@ coverInput.addEventListener('change', async (e) => {
   if (!file) return;
   coverNotice.className = 'cover-notice';
 
-  // EXIF comes off the untouched bytes, before anything decodes or re-encodes.
-  // Works for HEIC too, which is what an iPhone actually hands over.
-  sourceExif = null;
-  try { sourceExif = readExif(await file.arrayBuffer()); } catch(_){}
+  const fail = (msg) => {
+    coverBusy.classList.remove('show');
+    coverNotice.className = 'cover-notice show err';
+    coverNotice.textContent = msg;
+  };
 
+  sourceExif = null;
+  photoOrigin = null;
+
+  /* ── STEP 0 · validate ────────────────────────────────────────────
+     One read of the bytes serves the whole pipeline: the header sniff,
+     the EXIF walk, and nothing after. Size is checked before the read
+     so a 400MB file is refused rather than pulled into memory first. */
+  if (file.size > MAX_UPLOAD_BYTES){
+    return fail(`that photo is ${(file.size/1048576).toFixed(0)}MB — the limit is ${MAX_UPLOAD_BYTES/1048576}MB.`);
+  }
+  let buf;
+  try { buf = await file.arrayBuffer(); }
+  catch(_){ return fail("couldn't read that file. try picking it again?"); }
+
+  const problem = rejectUpload(file, buf);
+  if (problem) return fail(problem);
+
+  /* ── STEP 1 · read geo ────────────────────────────────────────────
+     Off the untouched bytes, before anything decodes or re-encodes.
+     Works for HEIC too, which is what an iPhone actually hands over.
+     A PNG will essentially never have GPS and that is not a failure —
+     it is simply a photo with no coordinates, which is step 2's null
+     case and completely normal. */
+  try { sourceExif = readExif(buf); } catch(_){ sourceExif = null; }
+  const origin = geoFromExif(sourceExif);
+
+  /* ── STEP 3 (before 2 deliberately) · attach ──────────────────────
+     Decode first, because step 2 centres the mini map and there is no
+     point moving a map for a photo that turns out not to open. This is
+     also the last chance to refuse: a file can pass the header sniff
+     and still be truncated or corrupt inside. */
   coverBusy.classList.add('show');
   try {
     const dec = await decodeImage(file);
     sourceBitmap = dec.bitmap;
   } catch(_){
-    coverBusy.classList.remove('show');
-    coverNotice.className = 'cover-notice show err';
-    coverNotice.textContent = "couldn't open that photo. try a jpg or png?";
-    return;
+    return fail("couldn't open that photo — it may be damaged. try another?");
   }
   coverBusy.classList.remove('show');
+
+  /* ── STEP 2 · photo origin ────────────────────────────────────────
+     Valid coordinates become their own entity and resolve the
+     community. This now runs for EVERY photo, core included.
+
+     It did not before: readPhoto() returned early on the core path and
+     setPhotoOrigin was only ever reached from inside magic, so a core
+     photo carrying GPS resolved no community and never centred the
+     map. The `if (!MAGIC_ARMED …)` pin branch inside setPhotoOrigin
+     was written for exactly this case and could never run.
+
+     The pin is withheld while magic is armed and released at step 6 if
+     the photo turns out not to be a flyer. */
+  if (origin) setPhotoOrigin(origin, !MAGIC_ARMED);
 
   // Straight through, no crop. The crop is offered afterwards, only if needed.
   readPhoto(null);
@@ -6999,7 +7202,7 @@ function resetCreateForm(){
     photoLat:null, photoLng:null
   });
   if (sourceBitmap && sourceBitmap.close) sourceBitmap.close();
-  sourceBitmap = null; sourceExif = null;
+  sourceBitmap = null; sourceExif = null; photoOrigin = null;
   // restore default date/time
   const t = new Date(); t.setDate(t.getDate()+1);
   // toISOString() is UTC: west of Greenwich late in the day it returns
