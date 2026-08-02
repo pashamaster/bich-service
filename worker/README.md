@@ -16,7 +16,7 @@ decide what is allowed. That keeps the service role key out of every system.
 | GET | `/img/<key>` | serves a stored image |
 
 `/events` is **not** a route, despite `index.html` posting to it on every
-publish. See `docs/BUGS.md` §3.
+publish. .
 
 ## Deploy
 
@@ -37,11 +37,11 @@ Vars live in `wrangler.toml`; the key lives in an encrypted secret.
 | `ALLOWED_ORIGINS` | var | comma separated. CORS only — not access control |
 | `PUBLIC_IMG_BASE` | var | R2 custom domain, so images skip the worker |
 | `BICH_INVITE_CODES` | var | comma separated. **Empty means open** |
-| `DAILY_CAP` | var | approximate. See `docs/BUGS.md` §22 |
+| `DAILY_CAP` | var | approximate.  |
 | `BICH_KV` | binding | optional quota counter, commented out by default |
 
 ## Before this handles real traffic
 
 `BICH_INVITE_CODES` is empty, so `/upload` currently accepts anonymous uploads
 from anyone who knows the URL. `ALLOWED_ORIGINS` does not prevent this — CORS is
-enforced by browsers, and `curl` ignores it. See `docs/BUGS.md` §17–21.
+enforced by browsers, and `curl` ignores it. 
