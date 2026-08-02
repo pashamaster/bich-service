@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-02-43" />
+  <meta name="app-version" content="2026-08-02-44" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -572,22 +572,54 @@ body.is-admin .detail-owner::before {
 .leaflet-control-attribution a { color: var(--accent) !important; }
 .leaflet-control-zoom a { background: var(--surface) !important; color: var(--text) !important; border-color: var(--border) !important; }
 
+/* ── map markers ───────────────────────────────────────────────────
+   --pin-size is the single source of truth for a marker's box. It is
+   set inline by paintMap() and echoed to Leaflet as iconSize, so the
+   CSS box and the icon anchor cannot drift apart — that drift is what
+   makes pins sit visibly beside the place they mark.
+
+   Every colour and font here is an existing token, so paper and night
+   both work with no extra rules and a new theme gets these for free. */
 .map-marker {
-  width: 32px; height: 32px;
+  width: var(--pin-size, 32px); height: var(--pin-size, 32px);
   background: var(--accent);
   border: 2px solid var(--bg);
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   color: var(--bg);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: max(0.6rem, calc(var(--pin-size, 32px) * 0.34));
   font-weight: 500;
+  line-height: 1;
   box-shadow: 0 4px 12px var(--border-accent);
+  transition: width .18s ease, height .18s ease;
+}
+
+/* Priority. A halo rather than a different colour: colour already
+   means something on this map, and a second meaning on the same
+   channel is unreadable. The ring scales with the dot. */
+.map-marker--pri {
+  box-shadow: 0 0 0 calc(var(--pin-size, 22px) * 0.14) var(--border-accent),
+              0 4px 14px var(--border-accent);
+}
+.map-marker--pri2 {
+  box-shadow: 0 0 0 calc(var(--pin-size, 30px) * 0.18) var(--border-accent),
+              0 0 0 calc(var(--pin-size, 30px) * 0.30) var(--border-accent),
+              0 6px 18px var(--border-accent);
+}
+
+/* Finished, still inside the three day tail. Dimmed rather than
+   removed or recoloured — it is the same event, just over. */
+.map-marker--past { opacity: 0.5; }
+.map-pin--past .map-pin__label { opacity: 0.6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .map-marker { transition: none; }
 }
 /* A pin plus its time. The label is positioned off the dot rather than
    inside the icon box, so the dot itself stays exactly on the
    coordinate and the text hangs beside it. */
-.map-pin { position: relative; width: 14px; height: 14px; }
+.map-pin { position: relative; width: var(--pin-size, 14px); height: var(--pin-size, 14px); }
 .map-pin__label {
   position: absolute; left: 20px; top: 50%;
   transform: translateY(-50%);
@@ -606,7 +638,9 @@ body.is-admin .detail-owner::before {
    the map falls back to plain dots and the count in the footer. */
 .leaflet-container.zoomed-out .map-pin__label { display: none; }
 
-.map-marker--single { width: 14px; height: 14px; }
+/* The lone dot inherits --pin-size from its .map-pin wrapper, so one
+   inline value sizes the wrapper, the dot and the Leaflet icon. */
+.map-marker--single { width: var(--pin-size, 14px); height: var(--pin-size, 14px); }
 
 .map-filter-bar {
   position: absolute; top: 16px; left: 16px; right: 16px;
@@ -3475,7 +3509,23 @@ document.querySelectorAll('.tab').forEach(tab => {
     const chip = document.getElementById('handleChip');
     if (chip) chip.hidden = (target === 'me' || target === 'profile');
 
-    if (target === 'map' && !window._mapReady) initMap();
+    /* Only the FIRST visit used to do anything here. On every later
+       visit _mapReady was already true, so nothing fired and the map
+       showed whatever paintMap() happened to draw last — which, on a
+       first run, was an empty EVENTS array. Publish an event, switch
+       to the map, see nothing.
+
+       invalidateSize() because Leaflet measures its container on
+       creation. If the map was built while its panel was hidden, or
+       the phone has rotated since, the tile grid is sized to the wrong
+       box and pins land visibly off. */
+    if (target === 'map'){
+      if (!window._mapReady) initMap();
+      else {
+        if (window._map) window._map.invalidateSize();
+        paintMap();
+      }
+    }
     // Hide FAB on map view (already crowded)
     document.getElementById('fabCreate').style.display = target === 'home' ? '' : 'none';
   });
@@ -3591,7 +3641,10 @@ function filterRange(name){
        as the lower bound hid exactly those. mappableEvents() drops
        anything that has actually finished. */
     const end = new Date(start); end.setDate(end.getDate() + 1);
-    return [start, end];
+    /* includesNow yes — something running right now is the most
+       relevant thing on the map. tail no: a thing that finished on
+       Tuesday is not "today", however recent. */
+    return [start, end, true, false];
   }
   /* Rolling windows, not calendar weeks. A Mon-Sun "this week" is
      degenerate on a Sunday - it collapses to the same set as "today",
@@ -3601,18 +3654,35 @@ function filterRange(name){
      it behaves identically whichever day they open the app. */
   if (name === 'week'){
     const end = new Date(start); end.setDate(end.getDate() + 7);
-    return [now, end];
+    return [now, end, true, false];
   }
   if (name === 'next'){
     const from = new Date(start); from.setDate(from.getDate() + 7);
     const to = new Date(from);    to.setDate(to.getDate() + 7);
-    return [from, to];
+    /* Neither flag. A window that opens a week out has no business
+       showing what is on tonight, let alone what finished on Tuesday. */
+    return [from, to, false, false];
   }
-  return [now, null];                     // any day
+  /* "any day" is the everything-relevant view and the only one that
+     carries the three day tail. */
+  return [now, null, true, true];         // any day
+}
+
+/* How long a finished event stays on the map. Three days: long enough
+   that "what was that thing on Friday" is still answerable on Monday,
+   short enough that the map is not a graveyard. */
+const MAP_PAST_MS = 3 * 24 * 3600 * 1000;
+
+/* When an event is over, for the purposes of the map. A finish time is
+   authoritative; without one, give it two hours, which covers a class
+   and understates a party in the safe direction. */
+function eventEnd(e, when){
+  return e.ends_at ? new Date(e.ends_at) : new Date(when.getTime() + 2 * 3600 * 1000);
 }
 
 function mappableEvents(){
-  const [from, to] = filterRange(mapFilter);
+  const [from, to, includesNow, tail] = filterRange(mapFilter);
+  const now = Date.now();
   return EVENTS.filter(e => {
     /* A pin is required. L.marker([null, null]) throws "Invalid
        LatLng" and takes the whole map down with it, and plenty of
@@ -3633,13 +3703,20 @@ function mappableEvents(){
     if (!when) return false;
     if (to && when >= to) return false;
 
-    /* Still on counts as on. An event with a finish time is live until
-       that finish; without one, give it two hours before it drops off,
-       which covers a class and understates a party in the safe
-       direction. */
+    /* Starts before this window opens. Two reasons to keep it anyway,
+       and both are decided by the window, not by the event.
+
+       This branch used to end in a bare `return true` for anything not
+       yet finished, which quietly broke "next week": an event two days
+       away starts before that window opens and has not finished, so it
+       was shown. The chip has been showing everything within fourteen
+       days rather than the seven-to-fourteen it claims. */
     if (when < from){
-      const ends = e.ends_at ? new Date(e.ends_at) : new Date(when.getTime() + 2 * 3600 * 1000);
-      if (!(ends > new Date())) return false;
+      const ends = eventEnd(e, when);
+      // Still running. Counts only if this window contains the present.
+      if (ends.getTime() > now) return includesNow;
+      // Over. Lingers only on the window that carries the tail.
+      return tail && (now - ends.getTime() <= MAP_PAST_MS);
     }
     return true;
   });
@@ -3676,6 +3753,28 @@ function openPinList(group){
 /* Chips are built from the categories actually present, so the bar
    never offers a filter that would empty the map. */
 
+/* ── priority tiers ────────────────────────────────────────────────
+   How much bigger a pin gets for how many of your people are going.
+   Ordered high to low; pinTier() takes the first that matches.
+
+   14px is the existing dot and tier 0 is byte-for-byte what the map
+   drew before, so an event nobody you know is going to looks exactly
+   as it always did. Growth is deliberately modest: 22 and 30 read as
+   "this one" at a glance without a single event swallowing its
+   neighbours at low zoom.
+
+   min: 3 is shared with the feed card and the detail sheet, which
+   already use crossed >= 3. One number, three surfaces. */
+const PIN_TIERS = [
+  { min: 6, size: 30, cls: 'map-marker--pri map-marker--pri2' },
+  { min: 3, size: 22, cls: 'map-marker--pri' },
+  { min: 0, size: 14, cls: '' }
+];
+function pinTier(crossed){
+  const c = crossed || 0;
+  return PIN_TIERS.find(t => c >= t.min) || PIN_TIERS[PIN_TIERS.length - 1];
+}
+
 function paintMap(){
   const map = window._map;
   if (!map) return;
@@ -3701,6 +3800,29 @@ function paintMap(){
     const first = group[0];
     const n = group.length;
 
+    /* Priority. e.crossed is circle_count: how many people this viewer
+       has crossed paths with are going. A stack takes the strongest
+       event in it, because the reason to look at the stack is the best
+       thing inside it.
+
+       The 3 threshold is not new — feed cards and the detail screen
+       already treat crossed >= 3 as worth showing. Reusing it means a
+       pin, a card and the detail sheet agree about which events
+       matter, rather than each having its own private idea. */
+    const crossed = group.reduce((m, e) => Math.max(m, e.crossed || 0), 0);
+    const tier = pinTier(crossed);
+
+    /* A stack never shrinks below its normal 32: the count has to stay
+       legible whatever the priority. */
+    const size = n > 1 ? Math.max(32, tier.size) : tier.size;
+
+    /* Finished but inside the three day tail. Only when the WHOLE
+       group is over — one live event in a stack keeps it live. */
+    const over = group.every(e => {
+      const w = eventDate(e);
+      return w && eventEnd(e, w).getTime() <= Date.now();
+    });
+
     /* A bare dot tells you something is somewhere and nothing else, so
        reading the map meant tapping every pin to find out what and
        when. The label carries the same wording as everywhere else in
@@ -3712,14 +3834,33 @@ function paintMap(){
       ? `<span class="map-pin__label">${escapeHtml(whenLabel(eventDate(first)))}</span>`
       : '';
 
+    /* The sign inside the dot. A stack shows how many events; a single
+       prioritised event shows how many of your people are going, which
+       is the whole reason it grew. An ordinary single event stays a
+       bare dot — exactly as before, so nothing changes for the common
+       case. */
+    const sign = n > 1
+      ? (n > 99 ? '99+' : String(n))
+      : (tier.min > 0 ? (crossed > 99 ? '99+' : String(crossed)) : '');
+
+    const cls = [tier.cls, over ? 'map-marker--past' : ''].filter(Boolean).join(' ');
+    const title = escapeHtml(
+      n > 1 ? `${n} events here` :
+      (crossed > 0 ? `${first.title} · ${crossed} you've crossed paths with going`
+                   : first.title));
+
     const m = L.marker([first.lat, first.lng], {
       icon: L.divIcon({
         className: '',
         html: n > 1
-          ? `<div class="map-marker">${n > 99 ? '99+' : n}</div>`
-          : `<div class="map-pin"><div class="map-marker map-marker--single"></div>${label}</div>`,
-        iconSize: n > 1 ? [32, 32] : [14, 14],
-        iconAnchor: n > 1 ? [16, 16] : [7, 7]
+          ? `<div class="map-marker ${cls}" style="--pin-size:${size}px" title="${title}">${sign}</div>`
+          : `<div class="map-pin ${over ? 'map-pin--past' : ''}" style="--pin-size:${size}px">`
+            + `<div class="map-marker map-marker--single ${cls}" title="${title}">${sign}</div>${label}</div>`,
+        /* Echoed from the same `size`, never hardcoded. When these two
+           disagree the marker draws centred on the wrong point and
+           every pin sits slightly off the place it marks. */
+        iconSize:   [size, size],
+        iconAnchor: [size / 2, size / 2]
       })
     }).addTo(map);
     m.on('click', () => n === 1 ? openDetail(first.id) : openPinList(group));
@@ -5403,6 +5544,19 @@ async function feedAnchor(){
   return null;
 }
 
+/* Every successful feed path ends here. It used to be three separate
+   copies of this sequence and one of them — the plain feed() path —
+   was missing the paintMap() line, so the map never repainted for
+   anybody without a community. That is not a bug you fix by adding the
+   missing call; it is a bug you fix by making it impossible to forget,
+   because a fourth path would have forgotten it too. */
+function applyFeedRows(rows){
+  EVENTS.length = 0;
+  (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
+  renderBundles();
+  if (window._mapReady) paintMap();
+}
+
 async function loadFeed(){
   if (!SB_READY()) return false;
 
@@ -5421,10 +5575,7 @@ async function loadFeed(){
         used = km;
         if (rows.length >= FEED_MIN_EVENTS) break;
       }
-      EVENTS.length = 0;
-      rows.forEach(r => EVENTS.push(rowToEvent(r)));
-      renderBundles();
-      if (window._mapReady) paintMap();
+      applyFeedRows(rows);
       const where = (anchor.name || anchor.slug).toLowerCase();
       setFeedStatus(
         !rows.length ? `nothing near ${where} yet` :
@@ -5444,9 +5595,7 @@ async function loadFeed(){
       community: null,
       max_results: 60
     });
-    EVENTS.length = 0;
-    rows.forEach(r => EVENTS.push(rowToEvent(r)));
-    renderBundles();
+    applyFeedRows(rows);
     setFeedStatus(EVENTS.length ? '' : 'nothing published near you yet');
     return true;
   } catch(err){
@@ -5458,18 +5607,14 @@ async function loadFeed(){
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const rows = await sbGet(
       `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
-    EVENTS.length = 0;
-    (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
-    renderBundles();
-    if (window._mapReady) paintMap();
+    applyFeedRows(rows);
     setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
     return true;
   } catch(err2){
     console.error('[bich] events_public also failed', err2);
     /* Never leave the sample data on screen pretending to be real.
        An empty feed with an honest message beats seven fictions. */
-    EVENTS.length = 0;
-    renderBundles();
+    applyFeedRows([]);
     const first = window._lastFeedError;
     setFeedStatus("couldn't load events. run bichCheck() in the console.", true);
     console.error('[bich] feed unavailable.',
