@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-07-26-41" />
+  <meta name="app-version" content="2026-08-02-42" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -207,7 +207,7 @@ body { display: flex; align-items: center; justify-content: center; }
   border-top: 1px solid var(--border);
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   padding: var(--space-lg) var(--space-md)
-           calc(var(--space-lg) + max(env(safe-area-inset-bottom, 0px), 0px));
+           calc(var(--space-lg) + var(--safe-bottom));
   display: flex; flex-direction: column; gap: var(--space-sm);
 }
 .confirm-sheet__text {
@@ -638,7 +638,7 @@ body.is-admin .detail-owner::before {
   position: absolute; bottom: 0; left: 0; right: 0;
   background: var(--bg);
   border-top: 1px solid var(--border-accent);
-  padding: var(--space-md) var(--space-md) calc(var(--space-md) + max(env(safe-area-inset-bottom, 0px), 0px));
+  padding: var(--space-md) var(--space-md) calc(var(--space-md) + var(--safe-bottom));
   z-index: 500;
 }
 .map-footer-sheet__count {
@@ -709,11 +709,16 @@ body.is-admin .detail-owner::before {
 /* The publish button lives here, pinned to the bottom of a 100dvh
    sheet. Without the inset its lower third sits under the iPhone home
    indicator, where a tap is either swallowed or read as a system
-   gesture. Every other bottom-anchored surface in this file already
-   does this; the create sheet was the one that got missed. */
+   gesture.
+
+   This used to read `max(env(safe-area-inset-bottom, 0px), 0px)`, which
+   is not a floor — max(X, 0) is X. Anywhere the inset reports 0, and
+   Android gesture navigation frequently does, the button went straight
+   back to sitting in the gesture strip. --safe-bottom carries a real
+   12px minimum and 20px once installed. */
 .modal-footer {
   padding: var(--space-md) var(--space-md)
-           calc(var(--space-md) + max(env(safe-area-inset-bottom, 0px), 0px));
+           calc(var(--space-md) + var(--safe-bottom));
   border-top: 1px solid var(--border);
 }
 
@@ -1293,7 +1298,7 @@ body.is-admin .detail-owner::before {
   position: fixed;
   bottom: 0; left: 0; right: 0;
   padding: var(--space-md) var(--space-md)
-           calc(var(--space-md) + max(env(safe-area-inset-bottom, 0px), 0px));
+           calc(var(--space-md) + var(--safe-bottom));
   background: linear-gradient(to top, var(--bg) 60%, transparent);
   display: flex; gap: var(--space-sm);
   z-index: 10;
@@ -1499,19 +1504,11 @@ body.is-admin .detail-owner::before {
 /* grain follows the theme instead of being hard coded */
 .grain::before { opacity: var(--grain-opacity); }
 
-/* Installed to the home screen, the page runs full bleed under the
-   status bar and the home indicator. Safari's chrome used to do this
-   job; now we do. The floor of 47px covers notch and Dynamic Island
-   devices where the reported inset is sometimes 0. */
-@media (display-mode: standalone) {
-  :root {
-    --safe-top:    max(env(safe-area-inset-top, 0px), 47px);
-    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
-  }
-}
-@media (display-mode: standalone) and (orientation: landscape) {
-  :root { --safe-top: max(env(safe-area-inset-top, 0px), 12px); }
-}
+/* The standalone safe-area floors used to sit here. They were DEAD:
+   a plain `:root` block further down the file redeclared --safe-top and
+   --safe-bottom at the same specificity, and a media query adds none,
+   so the later rule won unconditionally and the 47px notch floor never
+   applied once. Moved below the base declaration — see "type scale". */
 
 /* covers were shot for a dark ground; on paper they need a touch down */
 .event-card__cover img,
@@ -1538,6 +1535,26 @@ body.is-admin .detail-owner::before {
   --safe-bottom-floor: 12px;
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   --tap: 44px;
+}
+
+/* Installed to the home screen, the page runs full bleed under the
+   status bar and the home indicator. Safari's chrome used to do this
+   job; now we do. The floor of 47px covers notch and Dynamic Island
+   devices where the reported inset is sometimes 0.
+
+   This MUST stay below the :root above. Both are specificity 0,1,0 and
+   a media query contributes nothing, so whichever is written last wins.
+   For months this block sat above it and did nothing at all. */
+@media (display-mode: standalone) {
+  :root {
+    --safe-top:    max(env(safe-area-inset-top, 0px), 47px);
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  }
+}
+/* Landscape puts the island on the short edge, so the tall floor would
+   waste a third of the screen. */
+@media (display-mode: standalone) and (orientation: landscape) {
+  :root { --safe-top: max(env(safe-area-inset-top, 0px), 12px); }
 }
 
 .text-label, .form-section__label {
@@ -2574,9 +2591,11 @@ function openDetail(id) {
   document.getElementById('detailTitle').textContent = e.title;
   document.getElementById('detailDesc').textContent = e.desc;
   document.getElementById('detailWhen').textContent = e.when;
-  /* events_public exposes no host handle, so e.host is always ''. Show
-     our own handle on our own events and hide the block otherwise,
-     rather than printing a label over empty space. */
+  /* events_public DOES expose host_handle now, and rowToEvent carries
+     it. Our own handle still wins on our own events — "you" is more
+     use to somebody than reading their own two words back at them —
+     and the block hides entirely when neither is known, rather than
+     printing a label over empty space. */
   const hostName = iOwn(e.id) ? (currentHandle || 'you') : (e.host || '');
   document.getElementById('detailHost').textContent = hostName;
   const hostBlock = document.getElementById('detailHostBlock');
@@ -2603,23 +2622,23 @@ function openDetail(id) {
   recordVisit(e.id);
   if (mine) loadEventStats(e.id);
 
-  /* Signal four: the last event looked at.
-     The other three all involve DOING something — publishing,
-     photographing, opening a link somebody sent. Looking is far more
-     casual, and you look at many more events than you publish. Treated
-     as a peer of the others it would move somebody's home every time
-     they tapped a pin while browsing another town, which is not what
-     anybody means by "where I am".
+  /* There is deliberately NO community signal here.
+     There are exactly three: opening a shared link, publishing with
+     venue coordinates, and choosing a photo that carries GPS. All three
+     are things somebody DID. Opening an event in the feed is not — you
+     look at far more events than you act on, and most of them are the
+     ones already near you.
 
-     So it fills a gap rather than competing: it sets a community only
-     for somebody who has none. That is exactly the person the signal
-     exists for — the visitor who arrives, browses, never publishes,
-     and would otherwise sit on the Bali fallback forever.
+     A fourth signal used to live here and it was wrong twice over. It
+     wrote community_via = 'view', which set_my_community refuses, so
+     every one of these parked in the outbox as a permanent failure and
+     put a red "1 change could not be saved" on the Me screen that never
+     cleared. And the idea itself was wrong: browsing is not a statement
+     about where you are.
 
-     Say the word if you want it last-wins like the other three. */
-  if (!(Store.data.home && Store.data.home.slug) && e.lat != null && e.lng != null){
-    adoptCommunity(e.lat, e.lng, 'view').catch(() => {});
-  }
+     A visitor with no community is still handled — a shared link is
+     signal one, and openFromShortLink sets PROVISIONAL_HOME straight
+     away so they are not staring at the fallback while they read. */
 
   // then fill in what the lean feed row did not carry
   enrichEvent(e).then(full => {
@@ -4722,6 +4741,20 @@ async function saveEvent(spec){
       venue_name: spec.venueName || null,
       venue_address: spec.venueAddress || null,
       venue_source: spec.venueSource || null,
+      /* ensureVenue() has resolved this by now and it was being dropped
+         on the floor — publish_event had no venue_id column in its
+         insert, so events.venue_id was null on every row ever written.
+         That silently disabled two things: use_count never rose, so the
+         search_venues ranking boost did nothing, and apply_venue_match's
+         `where e.venue_id = p_venue` matched no rows, so a corrected
+         venue name never reached a single event. Unknown ids resolve to
+         null server side rather than raising.
+
+         `venueId`, not `spec.venueId`: the const above resolves to
+         ensureVenue()'s result, which is the id of the row it just
+         created for a hand-typed venue. spec.venueId is only set when
+         somebody picked an existing venue from the suggestions. */
+      venue_id: venueId || null,
       venue_lat: spec.lat ?? null,
       venue_lng: spec.lng ?? null,
       city: spec.city || null,
@@ -4945,7 +4978,12 @@ function rowToEvent(r){
     communitySlug: r.community_slug || null,
     venueAddress: r.venue_address || null,
     distanceKm: r.distance_km == null ? null : Math.round(r.distance_km),
-    host: '',
+    /* events_public gained host_handle and enrichEvent already asks for
+       it by name — this line then threw it away, so every event on the
+       detail screen looked hostless. feed() and feed_near() do NOT
+       return it, so a card straight off the feed still has nothing here
+       until enrichEvent fills it in; '' is the honest value until then. */
+    host: r.host_handle || '',
     /* Everything used to land in 'personal', so two of the three
        sections on the home screen were permanently empty. */
     bundle: bundleFor(when)
@@ -5753,8 +5791,11 @@ function toast(msg){
    through. A visitor who has done none of the three has no community,
    which is the same blank state as a new handle with no history. */
 
+/* The three valid signals, and there are only three. Kept in step with
+   users_community_via_check and with set_my_community / adopt_community_at,
+   which both refuse anything else. */
 const COMMUNITY_SIGNALS = { link: 'shared link', photo: 'photo location',
-                            publish: 'published here', view: 'looked at an event' };
+                            publish: 'published here' };
 
 async function resolvePlace(lat, lng){
   /* Every branch here used to return null in silence — no worker url,
@@ -5789,6 +5830,17 @@ async function resolvePlace(lat, lng){
 
 async function adoptCommunity(lat, lng, signal){
   if (lat == null || lng == null) return false;
+
+  /* Refuse an unknown signal HERE, before anything is written or
+     queued. The database is the authority and rejects these with 22023,
+     but the outbox classifies that as permanent — so a bad signal did
+     not fail loudly, it parked as `failed` and sat on the Me screen
+     saying "1 change could not be saved" until storage was cleared.
+     One line here turns a stuck queue into a console warning. */
+  if (!COMMUNITY_SIGNALS[signal]){
+    console.warn('[bich] refusing unknown community signal:', signal);
+    return false;
+  }
 
   let slug = null, name = null;
 
