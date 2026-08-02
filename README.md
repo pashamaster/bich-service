@@ -21,7 +21,7 @@ of this repository.
 ├── apple-touch-icon.png    Safari looks here by default
 ├── icons/                  app icons, referenced as /icons/… by the manifest
 ├── worker/                 Cloudflare Worker — Gemini + R2
-└── docs/                   schema spec and the code review
+└── SQL/                   schema spec 
 ```
 
 Everything the browser loads has to stay at the repository root: GitHub Pages
@@ -29,13 +29,9 @@ serves from `/` (or `/docs`, nothing else), the service worker needs root scope
 to control the whole origin, and `manifest.webmanifest` declares `"scope": "/"`.
 Moving `index.html` into a subfolder would take the site offline.
 
-`worker/` and `docs/` are never fetched by the browser, so they can live
+`worker/` and `SQL/` are never fetched by the browser, so they can live
 wherever is tidiest.
 
-`store.js`, `photo-pipeline.js` and `themes.css` were deleted, not moved. Each
-was a stale duplicate of code that already lives inline in `index.html`, and
-none of them was ever loaded. Verified redundant line by line — see
-`docs/BUGS.md` §1.
 
 ---
 
@@ -77,7 +73,7 @@ used anywhere in this system and must never be added.
 ## Releasing
 
 Three version strings need bumping together, which is one more than there should
-be (see `docs/BUGS.md` §30):
+be:
 
 - `index.html` → `<meta name="app-version">`
 - `config.js` → `version`
@@ -88,19 +84,7 @@ The service worker is network-first for HTML and `config.js`, so a bumped
 
 ---
 
-## Known issues
 
-`docs/BUGS.md` — 46 findings from a full review, ordered by impact.
-
-**Start with §0.** `loadFeed()` in `index.html` is missing its closing braces and
-swallows 285 lines, including the app's entire boot sequence. The feed never
-loads from the database, share links never open, the profile tab throws, and
-publishing starts an infinite request loop. Everything else is hard to observe
-until that is fixed.
-
-## Not in this repo, and should be
-
-The database schema and its row level security policies. Comments throughout the
-code refer to "schema part 4" and "spec 7.2"; neither exists here. RLS is the
+The database schema and its row level security policies. RLS is the
 only thing protecting the data behind a public anon key, and right now it lives
-solely as state inside a hosted Supabase project. Export it to `docs/schema.sql`.
+solely as state inside a hosted Supabase project. Export it to `SQL/supabase-baseline.sql`.
