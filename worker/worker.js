@@ -117,6 +117,28 @@ const json = (b, s, o) => new Response(JSON.stringify(b), {
 });
 
 export default {
+  /* The safety net. The app pokes /venues/review after each publish,
+     which handles the common case immediately — but a tab closed too
+     early, an offline publish that syncs later, or a worker deploy
+     mid-flight all leave venues unchecked. This sweeps them up.
+
+     Every ten minutes, which is the agreed tolerance: a correction
+     that lands within ten minutes of publishing is invisible to
+     everybody. The queue is naturally tiny — only hand-typed venues,
+     each checked once — so most runs find nothing and cost nothing. */
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil((async () => {
+      try {
+        const req = new Request('https://internal/venues/review?limit=20', { method: 'POST' });
+        const res = await reviewVenues(req, env, null);
+        const body = await res.json().catch(() => null);
+        console.log('[bich] scheduled venue review:', JSON.stringify(body));
+      } catch (err) {
+        console.error('[bich] scheduled venue review failed:', err.message);
+      }
+    })());
+  },
+
   async fetch(request, env) {
     const allowed = (env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
     const reqOrigin = request.headers.get('Origin') || '';
@@ -148,6 +170,22 @@ export default {
     /* Venue search. Also a GET, also above the POST guard, also free
        and never near Gemini. */
     if (path.endsWith('/places')) return searchPlaces(request, env, origin);
+
+    /* Venue canonicalisation. Poked by the app after a publish, and by
+       the scheduled handler as a safety net. Touches no model, so it
+       sits above the invite gate with the rest.
+
+       POST only, and that is not cosmetic. This route sits ABOVE the
+       method guard below, so before this check a bare
+       `GET /venues/review?limit=20` from anybody at all started twenty
+       Overpass queries spaced 1.1s apart — twenty seconds of wall time
+       and twenty hits on a shared community quota, per request, from a
+       URL you could paste into a browser bar. Both real callers already
+       use POST. */
+    if (path.endsWith('/venues/review')) {
+      if (request.method !== 'POST') return json({ error: 'post only' }, 405, origin);
+      return reviewVenues(request, env, origin);
+    }
 
     if (request.method !== 'POST') return json({ error: 'nothing here' }, 405, origin);
 
@@ -884,4 +922,221 @@ async function searchPlaces(request, env, origin) {
   }
 
   return json({ places }, 200, origin);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   VENUE CANONICALISATION
+
+   People type "the mill". OpenStreetMap probably knows it as "Moinho
+   do Cerrado". Afterwards — never during typing — we ask what is
+   actually at those coordinates and record the answer beside what they
+   typed.
+
+   Overpass rather than Nominatim or OpenTripMap:
+     · no key and no daily cap, unlike OpenTripMap's 5,000
+     · raw OSM, so coverage is as good as OSM itself — which matters
+       in Bali, where curated POI datasets are thin
+     · one query returns every named place within a radius, and the
+       matching happens here
+
+   Overpass is often called slow and awkward for autocomplete. Both are
+   true and neither applies: this runs after the fact, in batches, with
+   nobody waiting.
+
+   This Worker still holds no Supabase credential. It authenticates to
+   two narrow RPCs with a shared secret, which can read venues awaiting
+   review and write a match back, and nothing else.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const REVIEW_RADIUS_M = 300;   // the rule: correct only within 300m
+
+/* Everything that separates "the Mill" from "the mill." before the
+   strings are compared. */
+function normaliseName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // strip accents
+    .replace(/[''`´]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(the|a|o|a|el|la|le|de|do|da|di|du)\b/g, ' ')  // leading articles
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/* Token overlap rather than edit distance. "mill cafe" vs "cafe mill"
+   is the same place with the words swapped, which Levenshtein scores
+   as badly wrong. Word order carries almost no meaning in venue names.
+   Falls back to a containment check for one-word names. */
+function nameSimilarity(a, b) {
+  const A = normaliseName(a), B = normaliseName(b);
+  if (!A || !B) return 0;
+  if (A === B) return 1;
+
+  const ta = new Set(A.split(' ')), tb = new Set(B.split(' '));
+  let shared = 0;
+  for (const t of ta) if (tb.has(t)) shared++;
+  const jaccard = shared / (ta.size + tb.size - shared);
+
+  // "mill" inside "the old mill house" is a strong signal on its own
+  if (ta.size === 1 || tb.size === 1) {
+    const contained = A.includes(B) || B.includes(A);
+    return Math.max(jaccard, contained ? 0.75 : 0);
+  }
+  return jaccard;
+}
+
+function metresBetween(aLat, aLng, bLat, bLng) {
+  const dLat = (bLat - aLat) * 111000;
+  const dLng = (bLng - aLng) * 111000 * Math.cos(aLat * Math.PI / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+/* Name similarity carries most of the weight; proximity is a tiebreak
+   that decays to nothing at 300m. A near-perfect name 250m away should
+   still beat a poor name next door — venue coordinates are frequently
+   a doorway, a car park, or wherever the phone happened to be.
+
+   Nobody reviews the result, so this number is the whole decision.
+   Postgres enforces the same thresholds again on the way in, because a
+   Worker can be redeployed with looser ones and the database should
+   not simply believe whatever it is told. */
+function score(typedName, lat, lng, candidate) {
+  const sim = nameSimilarity(typedName, candidate.name);
+  const d = metresBetween(lat, lng, candidate.lat, candidate.lng);
+  const near = Math.max(0, 1 - d / REVIEW_RADIUS_M);
+  return {
+    confidence: Math.round((sim * 0.8 + near * 0.2) * 100) / 100,
+    distance: Math.round(d),
+    sim
+  };
+}
+
+async function overpassNear(lat, lng) {
+  const q = `[out:json][timeout:25];
+    (
+      node(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["amenity"];
+      node(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["leisure"];
+      node(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["tourism"];
+      node(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["shop"];
+      way(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["amenity"];
+      way(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["leisure"];
+      way(around:${REVIEW_RADIUS_M},${lat},${lng})["name"]["tourism"];
+    );
+    out center 40;`;
+
+  const r = await fetch(OVERPASS_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'bich.service/1.0 (https://bich.app)'
+    },
+    body: 'data=' + encodeURIComponent(q),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!r.ok) throw new Error('overpass said ' + r.status);
+  const body = await r.json();
+
+  return (body.elements || [])
+    .map(el => {
+      const p = el.center || el;
+      if (!p.lat || !p.lon || !el.tags || !el.tags.name) return null;
+      return {
+        name: String(el.tags.name).slice(0, 200),
+        lat: p.lat, lng: p.lon,
+        osm_id: `${el.type}/${el.id}`,
+        kind: el.tags.amenity || el.tags.leisure || el.tags.tourism || el.tags.shop || null
+      };
+    })
+    .filter(Boolean);
+}
+
+async function sbRpcFromWorker(env, fn, args) {
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_ANON_KEY,
+      Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(args),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`${fn} ${r.status} ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+async function reviewVenues(request, env, origin) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.WORKER_SHARED_SECRET) {
+    return json({ error: 'venue review is not configured' }, 503, origin);
+  }
+
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '5', 10) || 5, 20);
+
+  let queue;
+  try {
+    queue = await sbRpcFromWorker(env, 'venues_needing_review', {
+      p_secret: env.WORKER_SHARED_SECRET, p_limit: limit
+    });
+  } catch (err) {
+    return json({ error: 'could not read the queue: ' + err.message }, 502, origin);
+  }
+  if (!Array.isArray(queue) || !queue.length) {
+    return json({ checked: 0 }, 200, origin);
+  }
+
+  const out = [];
+  for (const v of queue) {
+    let candidates = [];
+    try {
+      candidates = await overpassNear(v.lat, v.lng);
+    } catch (err) {
+      /* Overpass being busy is not this venue's fault. Leave it
+         unchecked so a later run picks it up, rather than recording a
+         false "nothing found" that suppresses it for a month. */
+      out.push({ id: v.id, skipped: err.message });
+      break;                        // one failure: back off entirely
+    }
+
+    const best = candidates
+      .map(c => ({ ...c, ...score(v.name, v.lat, v.lng, c) }))
+      .sort((a, b) => b.confidence - a.confidence)[0];
+
+    /* Act, or do nothing. There is no third option any more: nobody
+       sees a suggestion, so a low-confidence guess would either be
+       applied wrongly or sit in a table nobody opens. */
+    const usable = best && best.sim >= 0.6 && best.distance <= REVIEW_RADIUS_M
+      ? best : null;
+
+    try {
+      const status = await sbRpcFromWorker(env, 'apply_venue_match', {
+        p_secret: env.WORKER_SHARED_SECRET,
+        p_venue: v.id,
+        p_match: usable ? {
+          name: usable.name, lat: usable.lat, lng: usable.lng,
+          osm_id: usable.osm_id, confidence: usable.confidence
+        } : null
+      });
+      out.push({
+        id: v.id, typed: v.name,
+        corrected: usable && String(status).startsWith('matched') ? usable.name : null,
+        distance: usable ? usable.distance : null,
+        confidence: usable ? usable.confidence : null,
+        status
+      });
+    } catch (err) {
+      out.push({ id: v.id, error: err.message });
+    }
+
+    // Overpass asks for restraint; a second between calls is restraint.
+    await new Promise(r => setTimeout(r, 1100));
+  }
+
+  return json({ checked: out.length, results: out }, 200, origin);
 }

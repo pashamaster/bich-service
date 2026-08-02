@@ -99,8 +99,18 @@ function requireKV(env, json, origin) {
 
 /* ── registration ──────────────────────────────────────────────────
    The device secret is required here and that is the whole access
-   control. uid is publicly listable — users has an open select policy —
-   so a uuid alone would let anyone enrol a passkey against anyone. The
+   control. NOTE the schema has moved under this comment: users is NOT
+   openly selectable any more — anon can read only events_public and
+   handle_words, and events_public exposes host_handle rather than
+   host_id, so a uid is not obtainable from the public surface at all.
+   The posture is therefore stronger than this paragraph claims.
+
+   What is still true: this endpoint does not verify the secret against
+   Postgres, only that it is long enough. Anyone who did learn a uid
+   could enrol a passkey against it with a made-up secret. That is
+   contained by the first-secret-wins rule below and by Postgres holding
+   the real hash, so the worst case is a useless credential rather than
+   a stolen account. The
    secret never leaves the owner's device except as a hash to Postgres
    and as a value to this worker. */
 export async function passkeyRegisterBegin(request, env, json, origin) {
@@ -315,9 +325,18 @@ async function checkClientData(clientDataJSON, expectedChallenge, expectedType, 
   if (!sameString(data.challenge, expectedChallenge)) return 'challenge did not match';
 
   /* The origin must be one we serve. Without this a phishing page on
-     another domain could relay a valid-looking ceremony. */
+     another domain could relay a valid-looking ceremony.
+
+     FAILS CLOSED. This used to read `if (allowed.length && !allowed…)`,
+     so an unset or empty ALLOWED_ORIGINS skipped origin verification
+     altogether — the one check standing between a passkey and a
+     phishing relay, disabled by a missing environment variable and
+     nothing in the logs to say so. It is set correctly in
+     wrangler.toml, so this changes no behaviour in production; it
+     changes what happens the day somebody deploys without it. */
   const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (allowed.length && !allowed.includes(data.origin)) return 'origin not allowed';
+  if (!allowed.length) return 'ALLOWED_ORIGINS is not configured on this worker';
+  if (!allowed.includes(data.origin)) return 'origin not allowed';
 
   if (data.tokenBinding && data.tokenBinding.status === 'present') {
     return 'token binding is not supported';
