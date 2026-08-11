@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-02-46" />
+  <meta name="app-version" content="2026-08-03-49" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1095,6 +1095,20 @@ body.is-admin .detail-owner::before {
   overflow: hidden;
   position: relative;
 }
+/* The map div MUST carry its own size. It used to have none: an empty
+   <div id="miniMap"> is 0px tall, and the only height rule was the
+   .leaflet-container selector below — a class Leaflet adds during
+   init, i.e. AFTER it has already measured the container.
+
+   So L.map() measured 0x0 and cached it. A zero-area viewport requests
+   no tiles, which is why the picker was blank, and it caches a pixel
+   origin computed for a 0x0 box, so map clicks resolved nowhere useful.
+   Nobody could drop a pin, every event published with venue_lat null,
+   and the map therefore had nothing to draw.
+
+   The .leaflet-container rule stays as a belt-and-braces for the
+   moment Leaflet takes over. */
+#miniMap { width: 100%; height: 100%; }
 .mini-map-picker .leaflet-container { height: 100%; }
 
 .mini-map-overlay {
@@ -2232,13 +2246,42 @@ function renderEventCard(e) {
     </article>`;
 }
 
+/* Rank WITHIN each date bucket, never across them.
+
+   The buckets are an honest date filter and ranking must not override
+   them — otherwise a brilliant event next month buries what is on
+   tonight. It also keeps time decay useful: inside "coming up"
+   everything has a similarly small tau, so social and proximity decide
+   the order there rather than being flattened by a comparison against
+   tonight.
+
+   Falls back to chronological when there is no score, which is every
+   path except feed_ranked. Sorts a copy — EVENTS order is relied on
+   elsewhere. */
+function rankedBucket(key){
+  return EVENTS
+    /* Finished events are map-only. They arrive in the same feed now,
+       and bundleFor() would drop them into 'personal' — its fallback
+       bucket — so last night's gig would appear under "coming up".
+       One test here rather than a rule re-derived per bucket. */
+    .filter(e => e.bundle === key && !eventIsOver(e))
+    .slice()
+    .sort((a, b) => {
+      if (a.score != null && b.score != null && a.score !== b.score){
+        return b.score - a.score;
+      }
+      const ta = eventDate(a), tb = eventDate(b);
+      return (ta ? ta.getTime() : 0) - (tb ? tb.getTime() : 0);
+    });
+}
+
 function renderBundles() {
   document.getElementById('eventListPersonal').innerHTML =
-    EVENTS.filter(e => e.bundle === 'personal').map(renderEventCard).join('');
+    rankedBucket('personal').map(renderEventCard).join('');
   document.getElementById('eventListNearby').innerHTML =
-    EVENTS.filter(e => e.bundle === 'nearby').map(renderEventCard).join('');
+    rankedBucket('nearby').map(renderEventCard).join('');
   document.getElementById('eventListWeekend').innerHTML =
-    EVENTS.filter(e => e.bundle === 'weekend').map(renderEventCard).join('');
+    rankedBucket('weekend').map(renderEventCard).join('');
 
   [['Personal','personal'],['Nearby','nearby'],['Weekend','weekend']].forEach(([cap, key]) => {
     const d = document.getElementById('divider' + cap);
@@ -3680,16 +3723,35 @@ function filterRange(name){
   return [now, null, true, true];         // any day
 }
 
-/* How long a finished event stays on the map. Three days: long enough
-   that "what was that thing on Friday" is still answerable on Monday,
-   short enough that the map is not a graveyard. */
-const MAP_PAST_MS = 3 * 24 * 3600 * 1000;
+/* How long a finished event stays on the map.
+
+   36 hours, matching feed_ranked's past_hours default. The two MUST
+   agree: the server decides which finished rows arrive, this decides
+   which of them are drawn. If this is the longer of the two it silently
+   does nothing — which is exactly what happened when it was three days
+   and no feed returned a finished event at all.
+
+   36 covers "yesterday evening and today" at any hour, which is the
+   span that helps somebody work out what has been going on around
+   them without turning the map into a graveyard. */
+const MAP_PAST_MS = 36 * 3600 * 1000;
 
 /* When an event is over, for the purposes of the map. A finish time is
    authoritative; without one, give it two hours, which covers a class
    and understates a party in the safe direction. */
 function eventEnd(e, when){
   return e.ends_at ? new Date(e.ends_at) : new Date(when.getTime() + 2 * 3600 * 1000);
+}
+
+/* Trust the server's flag when it is there, work it out when it is not.
+   feed_ranked answers this authoritatively — it uses a 3 hour default
+   rather than 2, matching promote_attendance — and the local fallback
+   keeps the optimistic publish row and the events_public path honest. */
+function eventIsOver(e){
+  if (e.isPast === true) return true;
+  const when = eventDate(e);
+  if (!when) return false;
+  return eventEnd(e, when).getTime() <= Date.now();
 }
 
 function mappableEvents(){
@@ -3804,6 +3866,19 @@ function framingSet(rows, h){
   return h.known ? [] : rows;
 }
 
+/* "ended 20:30" for something earlier today, "ended yesterday" once the
+   day has turned. Nothing in the 36 hour window is ever older than
+   that, so those two cases cover it. */
+function endedLabel(e){
+  const when = eventDate(e);
+  if (!when) return 'ended';
+  const fin = eventEnd(e, when);
+  const today = new Date().toDateString() === fin.toDateString();
+  const hh = String(fin.getHours()).padStart(2, '0');
+  const mm = String(fin.getMinutes()).padStart(2, '0');
+  return today ? `ended ${hh}:${mm}` : `ended yesterday`;
+}
+
 /* ── priority tiers ────────────────────────────────────────────────
    How much bigger a pin gets for how many of your people are going.
    Ordered high to low; pinTier() takes the first that matches.
@@ -3869,10 +3944,7 @@ function paintMap(){
 
     /* Finished but inside the three day tail. Only when the WHOLE
        group is over — one live event in a stack keeps it live. */
-    const over = group.every(e => {
-      const w = eventDate(e);
-      return w && eventEnd(e, w).getTime() <= Date.now();
-    });
+    const over = group.every(eventIsOver);
 
     /* A bare dot tells you something is somewhere and nothing else, so
        reading the map meant tapping every pin to find out what and
@@ -3881,8 +3953,14 @@ function paintMap(){
 
        Stacked pins show a count instead: five labels on one spot would
        be unreadable, and the pin list already handles that case. */
+    /* whenLabel() is written for things that have not happened yet, so
+       on a finished event it reads as an instruction to attend
+       something that is over. Say plainly that it has ended — a dimmed
+       dot alone tells nobody why it is dimmed, and the whole point of
+       keeping these on the map is working out what has been going on. */
     const label = n === 1
-      ? `<span class="map-pin__label">${escapeHtml(whenLabel(eventDate(first)))}</span>`
+      ? `<span class="map-pin__label">${escapeHtml(
+          over ? endedLabel(first) : whenLabel(eventDate(first)))}</span>`
       : '';
 
     /* The sign inside the dot. A stack shows how many events; a single
@@ -4053,7 +4131,17 @@ const overlay = document.getElementById('modalOverlay');
 function openCreate() {
   modal.classList.add('visible');
   overlay.classList.add('visible');
-  setTimeout(initMiniMap, 100);
+  /* The modal is display:none until the line above, so the picker has
+     no measurable box until the browser has laid it out. initMiniMap
+     handles the first open; every LATER open needs a re-measure too,
+     because the container was hidden in between and the phone may have
+     rotated. Without it the second visit inherits a stale size for the
+     rest of the session. */
+  setTimeout(() => {
+    initMiniMap();
+    const m = window._miniMap;
+    if (m) m.invalidateSize();
+  }, 100);
 }
 function closeCreate() {
   modal.classList.remove('visible');
@@ -4069,10 +4157,11 @@ let miniMarker = null;
 
 function initMiniMap() {
   if (window._miniReady) return;
+  const home = mapHome();
   const m = L.map('miniMap', {
     /* Same home as the main map. Opening the pin picker on the wrong
        island means every single event starts with a pan. */
-    center: [mapHome().lat, mapHome().lng], zoom: mapHome().zoom,
+    center: [home.lat, home.lng], zoom: home.zoom,
     zoomControl: false, attributionControl: false
   });
   window._miniBase = L.tileLayer(TILE_URL(currentTiles().base), {
@@ -4082,6 +4171,17 @@ function initMiniMap() {
   m.on('click', (e) => setEventLocation(e.latlng.lat, e.latlng.lng, false));
   window._miniMap = m;
   window._miniReady = true;
+
+  /* Re-measure once the browser has actually laid the container out.
+     Even with the CSS height in place this is worth keeping: the modal
+     animates in, and a map measured mid-animation is measured wrong.
+     Two frames is enough for layout to settle; the timeout is the
+     backstop for a browser that throttles rAF in a hidden tab. */
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    m.invalidateSize();
+    m.setView([home.lat, home.lng], home.zoom);
+  }));
+  setTimeout(() => m.invalidateSize(), 400);
 }
 
 /* single source of truth for the pin — used by map taps AND photo extraction */
@@ -5193,6 +5293,16 @@ function rowToEvent(r){
     coverFull: r.cover_url || null,
     going: Number(r.going_count) || 0,
     crossed: r.circle_count == null ? 0 : r.circle_count,
+    /* feed_ranked's score. Absent on every other path — feed(),
+       feed_near() and the events_public fallback all return rows with
+       no score — and rankedBucket() falls back to chronological when it
+       is missing, so an unranked path still produces a sane list. */
+    score: (r.score == null ? null : Number(r.score)),
+    /* feed_ranked's is_past. Only that path sets it; everywhere else
+       it is undefined and eventIsOver() falls back to comparing the
+       times itself, so the optimistic row added on publish and the
+       events_public fallback both behave. */
+    isPast: (r.is_past === true) || undefined,
     communitySlug: r.community_slug || null,
     venueAddress: r.venue_address || null,
     distanceKm: r.distance_km == null ? null : Math.round(r.distance_km),
@@ -5748,11 +5858,21 @@ async function loadFeed(){
     try {
       let rows = [], used = ladder[0];
       for (const km of ladder){
-        rows = await sbRpc('feed_near', {
+        /* feed_ranked first, feed_near if patch 36 has not been run.
+           Deployable in either order: an unranked row simply has no
+           score and rankedBucket() falls back to chronological. */
+        const args = {
           viewer: CURRENT_USER.id || null,
           near_lat: anchor.centre_lat, near_lng: anchor.centre_lng,
           radius_km: km, community: anchor.slug, max_results: 60
-        });
+        };
+        rows = window._noRanking
+          ? await sbRpc('feed_near', args)
+          : await sbRpc('feed_ranked', args).catch(err => {
+              window._noRanking = true;
+              console.info('[bich] feed_ranked unavailable — run patch 36. Using feed_near.', err.message);
+              return sbRpc('feed_near', args);
+            });
         used = km;
         if (rows.length >= FEED_MIN_EVENTS) break;
       }
