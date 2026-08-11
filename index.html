@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-02-44" />
+  <meta name="app-version" content="2026-08-02-46" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3593,8 +3593,20 @@ function initMap() {
 
   /* Once somebody moves the map themselves, stop moving it for them.
      A view that jumps back the moment communities finish loading feels
-     like the app fighting you. */
-  map.on('dragstart zoomstart', () => { map._userHasPanned = true; });
+     like the app fighting you.
+
+     THE CATCH, and it froze the map permanently: Leaflet fires
+     zoomstart for PROGRAMMATIC zooms too. setView() and fitBounds()
+     both trigger it, so the map's own very first paint set
+     _userHasPanned, and from then on every `if (!map._userHasPanned)`
+     branch was dead. The view stayed wherever it first landed —
+     usually the Bali fallback — for the rest of the session, no matter
+     what the person did or which community they later joined.
+
+     dragstart is safe: only a finger or a mouse produces it. Zoom has
+     to be filtered against a flag we set around our own calls. */
+  map.on('dragstart', () => { map._userHasPanned = true; });
+  map.on('zoomstart', () => { if (!map._programmaticMove) map._userHasPanned = true; });
 
   const zoomClass = () => {
     const el = map.getContainer();
@@ -3753,6 +3765,45 @@ function openPinList(group){
 /* Chips are built from the categories actually present, so the bar
    never offers a filter that would empty the map. */
 
+/* Move the map ourselves without it counting as the person moving it.
+   Everything in this file that repositions the view goes through here;
+   calling map.setView or map.fitBounds directly re-introduces the
+   freeze described in initMap. */
+function programmaticView(fn){
+  const map = window._map;
+  if (!map) return;
+  map._programmaticMove = true;
+  try { fn(map); } finally {
+    /* Cleared after the animation, not on the next line — the zoomstart
+       we are shielding against fires asynchronously. The timeout is the
+       backstop for the case where the move is a no-op and zoomend
+       therefore never comes. */
+    map.once('zoomend moveend', () => { map._programmaticMove = false; });
+    setTimeout(() => { map._programmaticMove = false; }, 800);
+  }
+}
+
+/* Which events the view should be framed around.
+
+   Near home when home is real: a single event on another continent
+   must not drag the whole map out to ocean.
+
+   Everything when home is only a fallback: h.known is false when
+   nobody has a community yet and mapHome() has guessed Bali. Filtering
+   to within 3 degrees of a guess threw away every real event and left
+   the map pointing at Indonesia. A fallback is a guess; real events
+   beat a guess.
+
+   Empty means "do not reframe", which the caller reads as "sit on
+   home". */
+function framingSet(rows, h){
+  if (!rows.length) return [];
+  const near = rows.filter(e =>
+    Math.abs(e.lat - h.lat) < 3 && Math.abs(e.lng - h.lng) < 3);
+  if (near.length) return near;
+  return h.known ? [] : rows;
+}
+
 /* ── priority tiers ────────────────────────────────────────────────
    How much bigger a pin gets for how many of your people are going.
    Ordered high to low; pinTier() takes the first that matches.
@@ -3890,14 +3941,24 @@ function paintMap(){
   /* Frame the events — but only the ones near home. Without this a
      single event on another continent drags the whole view out to
      ocean, and somebody in Canggu opens the map to see the Pacific.
-     Home always wins when the two disagree. */
-  const nearHome = rows.filter(e =>
-    Math.abs(e.lat - h.lat) < 3 && Math.abs(e.lng - h.lng) < 3);
+     Home wins when the two disagree AND home is real.
 
-  if (nearHome.length && moved){
-    map.fitBounds(nearHome.map(e => [e.lat, e.lng]), { padding: [40, 40], maxZoom: 14 });
+     That last clause is the fix. h.known is false when there is no
+     community and mapHome() has fallen back to Bali. Someone in Lisbon
+     with no community got a map centred on Indonesia, `nearHome`
+     filtered every one of their events out as >3° away, and the view
+     sat on the fallback while their markers were drawn correctly
+     12,000km off screen. Identical, from the sofa, to a map with no
+     events on it.
+
+     A fallback is a guess. Real events beat a guess. */
+  const frame = framingSet(rows, h);
+
+  if (frame.length && moved){
+    programmaticView(m => m.fitBounds(
+      frame.map(e => [e.lat, e.lng]), { padding: [40, 40], maxZoom: 14 }));
   } else if (!map._userHasPanned){
-    map.setView([h.lat, h.lng], h.zoom);
+    programmaticView(m => m.setView([h.lat, h.lng], h.zoom));
   }
 }
 
@@ -3978,7 +4039,11 @@ function recentreMapOnHome(){
   const map = window._map;
   if (!map || map._userHasPanned) return;
   const h = mapHome();
-  map.setView([h.lat, h.lng], h.zoom);
+  programmaticView(m => m.setView([h.lat, h.lng], h.zoom));
+  /* A community arriving changes what counts as "near home", so the
+     frame has to be recomputed — otherwise the pins stay as they were
+     laid out against the fallback. */
+  if (window._mapReady){ window._mapShape = null; paintMap(); }
 }
 
 /* ─── CREATE EVENT MODAL ─── */
@@ -5267,36 +5332,143 @@ function communityForCoords(lat, lng){
    in your venue book instead of inventing a near miss. */
 /* Turn an exact venue name the model echoed back into a venue id. */
 async function linkKnownVenue(name){
-  if (!SB_READY() || !name) return;
+  if (!SB_READY() || !name) return false;
   try {
     /* Was a direct read of the venues table, which schema 27 closed.
        search_venues is the sanctioned door and already ranks an exact
-       prefix match first. */
+       prefix match first.
+
+       The bias now falls back to the PHOTO's coordinates. It used to be
+       `draft.lat ?? null`, and in the magic flow draft.lat is null
+       exactly when the flyer printed no coordinates — which is most
+       flyers. So the one search that most needed a location hint was
+       the one making it with none, and search_venues' distance term
+       (`- distance * 0.02`) contributed nothing. A flyer naming "Bar
+       Central" was matched against every Bar Central in the table with
+       no idea which town it meant. */
     const rows = await sbRpc('search_venues', {
-      q: name, near_lat: draft.lat ?? null, near_lng: draft.lng ?? null,
+      q: name,
+      near_lat: draft.lat ?? draft.photoLat ?? null,
+      near_lng: draft.lng ?? draft.photoLng ?? null,
       community: (Store.data.home && Store.data.home.slug) || null, max_results: 1
     });
     if (rows && rows[0] && rows[0].name.toLowerCase() === name.toLowerCase()){
       draft.venueId = rows[0].id;
       if (draft.lat == null && rows[0].lat != null){
         setEventLocation(rows[0].lat, rows[0].lng, false);
+        draft.pinSource = 'venue';
       }
       console.info('[bich] matched known venue:', rows[0].name);
+      return draft.lat != null;
     }
   } catch(err){ console.warn('[bich] venue link failed', err.message); }
+  return false;
 }
 
+/* Put a pin on the venue the flyer NAMES, using the photo's own
+   coordinates to say which town it means.
+
+   This is not the same as pinning the photo. Pinning the photo would be
+   wrong — a flyer shot in a cafe window advertises something across
+   town, and that rule still holds everywhere else. Here the photo's
+   coordinates are only a SEARCH BIAS: they narrow "Bar Central" from
+   every Bar Central on earth to the one near where the picture was
+   taken. The pin that comes back is the venue's, not the photo's.
+
+   Precedence, strongest first:
+     1. coordinates printed on the flyer   — handled by the caller
+     2. a venue we already know, by name   — linkKnownVenue
+     3. OSM, by name, biased to the photo  — here
+     4. nothing; the person drops the pin
+
+   pin_source 'venue' is deliberate: apply_venue_match only ever moves
+   a pin it owns, so a pin placed by this route stays correctable by the
+   canonicalisation sweep, while a hand-dragged one never is. */
+async function resolveVenuePin(name){
+  if (!name || draft.lat != null) return false;
+
+  if (await linkKnownVenue(name)) return true;
+  if (draft.lat != null) return true;
+
+  const lat = draft.photoLat, lng = draft.photoLng;
+  if (lat == null || lng == null) return false;
+
+  try {
+    const r = await fetch(
+      `${WORKER_URL}/places?q=${encodeURIComponent(name)}` +
+      `&lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+      { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return false;
+    const out = await r.json();
+    const hit = (out.places || [])[0];
+    if (!hit || hit.lat == null) return false;
+
+    /* Guard against a wild match. Nominatim is told to prefer the area
+       but not restricted to it, so a misread name can return a place on
+       another continent, and a pin 9,000km away is worse than no pin.
+       50km is generous for "the next town over" and refuses the rest. */
+    const km = haversineKm(lat, lng, hit.lat, hit.lng);
+    if (km > 50){
+      console.info(`[bich] ignoring "${name}" at ${Math.round(km)}km from the photo`);
+      return false;
+    }
+
+    setEventLocation(hit.lat, hit.lng, true);
+    draft.pinSource = 'venue';
+    draft.venueSource = 'venue_name_only';
+    if (!draft.venueAddress && hit.address) draft.venueAddress = hit.address;
+    const el = document.getElementById('coordsLabel');
+    if (el){
+      el.textContent = `${hit.name} — tap the map to move it`;
+      el.classList.add('is-guess');
+    }
+    console.info(`[bich] pinned "${hit.name}" ${Math.round(km)}km from the photo`);
+    return true;
+  } catch(err){
+    console.warn('[bich] venue lookup failed', err.message);
+    return false;
+  }
+}
+
+/* The candidate venue names sent to Gemini, so it echoes back a name we
+   already hold rather than inventing a spelling.
+
+   THIS WAS DEAD. It read the `venues` table directly, and schema 27
+   closed that door — anon can read exactly two relations, events_public
+   and handle_words. Every call returned 403, the catch swallowed it as
+   a console warning, and the model has been getting an empty candidate
+   list this whole time. linkKnownVenue carries a comment about the same
+   migration; the fix was applied there and missed here.
+
+   Rebuilt on events_public, which is readable by design. It yields
+   venues that already have a published event, which is precisely what
+   the venue book is for — a place nobody has ever posted about is not a
+   useful suggestion anyway. */
 async function venuesNear(lat, lng, slug){
   if (!SB_READY()) return [];
   try {
+    const sel = 'events_public?select=venue_name,venue_lat,venue_lng&venue_name=not.is.null';
     const q = slug
-      ? `venues?select=name,city&community_slug=eq.${encodeURIComponent(slug)}&order=use_count.desc&limit=30`
+      ? `${sel}&community_slug=eq.${encodeURIComponent(slug)}&limit=120`
       : (lat == null ? null :
-         `venues?select=name,city&lat=gte.${lat-0.25}&lat=lte.${lat+0.25}` +
-         `&lng=gte.${lng-0.25}&lng=lte.${lng+0.25}&order=use_count.desc&limit=30`);
+         `${sel}&venue_lat=gte.${lat-0.25}&venue_lat=lte.${lat+0.25}` +
+         `&venue_lng=gte.${lng-0.25}&venue_lng=lte.${lng+0.25}&limit=120`);
     if (!q) return [];
     const rows = await sbGet(q);
-    return (rows || []).map(v => v.name).filter(Boolean);
+
+    /* One row per event, so a venue with a week of classes appears
+       twenty times. Count them and put the busiest first — the same
+       ordering use_count gave, derived from the events themselves. */
+    const seen = new Map();
+    (rows || []).forEach(r => {
+      const n = (r.venue_name || '').trim();
+      if (!n) return;
+      seen.set(n, (seen.get(n) || 0) + 1);
+    });
+    return [...seen.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 30)
+      .map(([n]) => n);
   } catch(err){
     console.warn('[bich] venue shortlist unavailable', err.message);
     return [];
@@ -5492,6 +5664,15 @@ async function bichCheck(){
       await sbGet('users?select=id&limit=1');
       add('users table is private', false, 'it is readable by anon — run schema 25');
     } catch(_){ add('users table is private', true, 'anon cannot list accounts'); }
+    /* Also asserts the OPPOSITE. venuesNear() read this table directly
+       for months after schema 27 closed it, failed 403 on every call,
+       and swallowed it as a console warning — so the model's candidate
+       venue list was silently always empty. Anything that reads venues
+       must go through search_venues or events_public. */
+    try {
+      await sbGet('venues?select=id&limit=1');
+      add('venues table is private', false, 'readable by anon — a direct read has crept back in');
+    } catch(_){ add('venues table is private', true, 'reads go via search_venues'); }
     add('identity', Boolean(CURRENT_USER.id), CURRENT_USER.id ? currentHandle : 'no user row yet');
   }
 
@@ -6930,23 +7111,57 @@ function fillForm(row){
      they were being parsed and then dropped on the floor. */
   draft.recurrence = row.recurrence || '';
   draft.venueAddress = row.venue_address || '';
-  /* The model was given the real venue strings and told to echo one
-     back. If it did, we already know which row that is - no fuzzy
-     search, no duplicate. */
-  if (row.venue_match) linkKnownVenue(row.venue_match);
   draft.contact = row.contact || '';
   /* Step 7. The pin must never come from EXIF here — a flyer read off
      a cafe window advertises something across town — so dropPin stays
-     false and the printed coordinates below get the final say. */
+     false. What the photo's coordinates DO get used for is below. */
   if (photoOrigin) setPhotoOrigin(photoOrigin, false);
   draft.city = row.city || '';
   draft.timeFinish = row.time_start ? String(row.time_finish||'').slice(0,5) : '';
   draft.mapsLink = row.google_maps_link || '';
-  // the pin comes only from coordinates PRINTED on the flyer, never from EXIF
+
+  /* ── where the pin comes from, strongest first ───────────────────
+     1. coordinates PRINTED on the flyer — a fact the flyer states
+     2. a venue we already know, matched by name, ranked by proximity
+        to the photo
+     3. OSM, by name, biased to the photo
+     4. nothing — the person drops it themselves
+
+     2 and 3 both use the photo's coordinates as a SEARCH BIAS, never
+     as the pin. They answer "which Bar Central", not "where is the
+     event". The pin that lands is always the venue's own.
+
+     This is the gap: the venue name and the photo's coordinates were
+     both sitting on the draft and neither was ever combined with the
+     other, so a flyer without printed coordinates produced no pin at
+     all — just "Ericeira · drop a pin to set the spot" — while the app
+     already knew the venue's name and roughly where the photo was
+     taken. */
   const lat = (row.venue_latitude!=null && row.venue_latitude!=='') ? Number(row.venue_latitude) : null;
   const lng = (row.venue_longitude!=null && row.venue_longitude!=='') ? Number(row.venue_longitude) : null;
-  if (lat!=null && lng!=null && !Number.isNaN(lat) && !Number.isNaN(lng)) setEventLocation(lat, lng, true);
-  else if (draft.city) document.getElementById('coordsLabel').textContent = `${draft.city} · drop a pin to set the spot`;
+
+  if (lat!=null && lng!=null && !Number.isNaN(lat) && !Number.isNaN(lng)){
+    setEventLocation(lat, lng, true);
+    draft.pinSource = 'extracted';
+    /* Still worth linking the venue row, for venue_id and the
+       correction pipeline — it just must not move this pin. */
+    if (row.venue_match) linkKnownVenue(row.venue_match);
+    return;
+  }
+
+  /* No printed coordinates. Say something useful while the lookup runs
+     rather than leaving the field blank for a second and a half. */
+  const el = document.getElementById('coordsLabel');
+  if (el && draft.city) el.textContent = `${draft.city} · finding the venue…`;
+
+  resolveVenuePin(row.venue_match || row.space_name).then(found => {
+    if (found || draft.lat != null) return;
+    if (!el) return;
+    el.textContent = draft.city
+      ? `${draft.city} · drop a pin to set the spot`
+      : 'tap on map to set location';
+    el.classList.remove('is-guess');
+  });
 }
 
 /* ── cover upload wiring ── */
@@ -7497,6 +7712,11 @@ on('publishBtn', 'click', async () => {
 
   EVENTS.unshift(ev);
   renderBundles();
+  /* renderBundles alone left the new event off the map until the next
+     full feed load, which is the other half of "publishing does not
+     create a pin". The optimistic row already carries its coordinates,
+     so it can be drawn immediately. */
+  if (window._mapReady) paintMap();
   if (SB_READY()) loadFeed();   // pull it back with real counts
 
   const finish = () => {
