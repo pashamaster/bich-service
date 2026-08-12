@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-03-50" />
+  <meta name="app-version" content="2026-08-03-54" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -5640,15 +5640,41 @@ async function resolveVenuePin(name){
    venues that already have a published event, which is precisely what
    the venue book is for — a place nobody has ever posted about is not a
    useful suggestion anyway. */
+const VENUE_CANDIDATES = 12;
+
+/* The radius to search when no community contains the point. Uses the
+   nearest known community's own radius, so an island's 60km and a
+   town's 15km each get a sensible box instead of one flat number. */
+function radiusNear(lat, lng){
+  if (!KNOWN_COMMUNITIES || !KNOWN_COMMUNITIES.length) return 25;
+  let best = null;
+  for (const c of KNOWN_COMMUNITIES){
+    if (c.centre_lat == null || c.centre_lng == null) continue;
+    const km = haversineKm(lat, lng, c.centre_lat, c.centre_lng);
+    if (!best || km < best.km) best = { km, r: c.radius_km || 25 };
+  }
+  return best ? best.r : 25;
+}
+
 async function venuesNear(lat, lng, slug){
   if (!SB_READY()) return [];
   try {
     const sel = 'events_public?select=venue_name,venue_lat,venue_lng&venue_name=not.is.null';
     const q = slug
       ? `${sel}&community_slug=eq.${encodeURIComponent(slug)}&limit=120`
-      : (lat == null ? null :
-         `${sel}&venue_lat=gte.${lat-0.25}&venue_lat=lte.${lat+0.25}` +
-         `&venue_lng=gte.${lng-0.25}&venue_lng=lte.${lng+0.25}&limit=120`);
+      : (lat == null ? null : (() => {
+          /* No community covers this point. Fall back to a box, but
+             size it from the nearest community's own radius rather
+             than a flat guess — a town is 15km and an island 60, and
+             a fixed 28km box is simultaneously too wide for one and
+             too narrow for the other. 25km only when nothing is
+             known at all. */
+          const km = radiusNear(lat, lng);
+          const dLat = km / 111;
+          const dLng = km / (111 * Math.max(Math.cos(lat * Math.PI / 180), 0.01));
+          return `${sel}&venue_lat=gte.${lat-dLat}&venue_lat=lte.${lat+dLat}` +
+                 `&venue_lng=gte.${lng-dLng}&venue_lng=lte.${lng+dLng}&limit=120`;
+        })());
     if (!q) return [];
     const rows = await sbGet(q);
 
@@ -5661,9 +5687,15 @@ async function venuesNear(lat, lng, slug){
       if (!n) return;
       seen.set(n, (seen.get(n) || 0) + 1);
     });
+    /* Twelve, not thirty. Every name here is prompt text on every
+       extraction, and the list is only useful when the flyer happens
+       to name a venue we already hold. Ranked by how many events each
+       has, so the twelve most active places in the area are the twelve
+       most likely to be on a flyer — the tail was costing tokens on
+       every request to catch a case that almost never fires. */
     return [...seen.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 30)
+      .slice(0, VENUE_CANDIDATES)
       .map(([n]) => n);
   } catch(err){
     console.warn('[bich] venue shortlist unavailable', err.message);
@@ -6652,7 +6684,21 @@ const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
    in a shop window, and Google's scanners will disable it. Use it
    only on localhost. */
 const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
-const SEND_MAX_SIDE  = 1000;   // long side sent to gemini: 2 tiles, not 4
+/* The long side sent to Gemini. This is a TOKEN decision, not a
+   quality one: Gemini tiles an image into 768px squares and charges 258
+   tokens per tile. A 1000px portrait is 2 tiles (516); 768px is 1 tile
+   (258). Anything between 769 and 1000 costs the same as 1000, so
+   sending 1000 was paying double for pixels that crossed the boundary
+   by a quarter.
+
+   768 is the ceiling for one tile, so this is the most resolution
+   available at the lowest price — not a compromise, the exact optimum.
+   Quality is nudged 0.85 → 0.88 to spend some of the saving back on
+   small print, which is what actually matters on a dense timetable.
+
+   Note the COVER is still stored at COVER_MAX_SIDE (1000). This only
+   affects the copy the model reads. */
+const SEND_MAX_SIDE  = 768;    // exactly one Gemini tile: 258 tokens, not 516
 const COVER_MAX_SIDE = 1000;   // the only stored size, hero and card both
 const THUMB_MAX_SIDE = 600;    // unused since one-image covers; kept for the cropper
 
@@ -6663,21 +6709,14 @@ const THUMB_MAX_SIDE = 600;    // unused since one-image covers; kept for the cr
 function readInvite(){ return Store.data.invite || ''; }
 function setInvite(c){ Store.set({ invite: c }); }
 
-const PHOTO_SYSTEM_PROMPT = `You are a data formatting analyst. You read one uploaded photo and turn it into structured event records.
-
-The photo is whatever was in someone's camera roll: a printed flyer photographed at an angle, a poster on a wall, a screenshot of a social post or a map pin, a chalkboard, a handwritten sign, or something that is not about an event at all. Judge before you extract.
-
-Read everything visible, including text that is rotated, handwritten, or running around an edge. Expect perspective distortion, glare, shadow and surrounding clutter that is not part of the flyer.
-
-Report dates and times EXACTLY as they are printed. Do not convert them, do not work out the year, do not work out which weekday comes next. Put the printed characters in date_literal and weekday_literal and leave the arithmetic to us. If no year is printed, leave year_literal null rather than guessing one.
-
-Venue coordinates come only from coordinates or a map pin printed in the image. If none are printed, leave them null. Any EXIF location supplied to you is where the PHOTO was taken, which is not where the event happens: a flyer in a cafe window advertises something elsewhere. Use EXIF only to name the city and the wider community, never as the venue. EXIF capture time is never the event time.
-
-One record per distinct event date. A flyer listing four dates produces four records with the shared fields repeated. A stated weekly repeat produces one record with the recurrence in words.
-
-Never invent coordinates, names, prices or dates the photo does not support. A blank field prompts the user; a wrong field does not.
-
-Judge legibility honestly. If text was cut off, too small, blurred or lost to glare, say so and name what you could not read. We use that to offer a tighter crop. Do not pretend a hard photo was easy.`;
+/* The photo prompt and the response schema used to be duplicated here,
+   about 330 lines of them, DECLARED AND NEVER REFERENCED. The browser
+   never talks to Gemini — it posts the image to the worker's
+   /extract-event and the worker owns both the prompt and the
+   responseSchema. Two copies of a contract with only one of them live
+   is how they drift, and reading the dead one gives a false picture of
+   what the model is actually being asked. Deleted; worker.js is the
+   single source. */
 
 /* ═══════════════════════════════════════════════════════════════════
    THE UPLOAD PIPELINE
@@ -6988,55 +7027,7 @@ function openCropper(bitmap, hint){
 /* The 10-field record, as a Gemini responseSchema. Identical to the Worker's
    copy — keep them in sync, or better, have the Worker serve it. Never repeat
    these fields in the prompt: duplicating the schema lowers output quality. */
-const EVENT_SCHEMA = {
-  type: 'object',
-  propertyOrdering: ['events','read_quality'],
-  required: ['events','read_quality'],
-  properties: {
-    events: {
-      type: 'array',
-      items: {
-        type: 'object',
-        propertyOrdering: ['event_name','space_name','venue_latitude','venue_longitude',
-          'date_literal','weekday_literal','year_literal','time_start','time_finish',
-          'recurrence','city','community','description','price','currency','contact','location_source'],
-        required: ['event_name'],
-        properties: {
-          event_name:      { type:'string' },
-          space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
-          venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
-          venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image. Null otherwise.' },
-          date_literal:    { type:'string', nullable:true, description:'the date EXACTLY as printed, e.g. "JULY 16th" or "16.08". Do not convert.' },
-          weekday_literal: { type:'string', nullable:true, description:'weekday as printed if any, e.g. "thursday". Do not convert to a date.' },
-          year_literal:    { type:'string', nullable:true, description:'year ONLY if printed. Null if the flyer omits it.' },
-          time_start:      { type:'string', nullable:true, description:'24 hour HH:MM' },
-          time_finish:     { type:'string', nullable:true, description:'24 hour HH:MM if printed. Null if only a start is shown.' },
-          recurrence:      { type:'string', nullable:true, description:'plain words if stated, e.g. "every sunday". Null for a one off.' },
-          city:            { type:'string', nullable:true, description:'town from flyer text, else from supplied EXIF location' },
-          community:       { type:'string', nullable:true, description:'wider local area, coarse and stable, e.g. "Ericeira" or "Mallorca"' },
-          description:     { type:'string', nullable:true, description:'two or three short phrases from the activity type. No dashes of any kind.' },
-          price:           { type:'number', nullable:true },
-          currency:        { type:'string', nullable:true },
-          contact:         { type:'string', nullable:true, description:'phone, handle or link exactly as printed' },
-          location_source: { type:'string', nullable:true, description:'one of printed_coordinates, printed_address, venue_name_only, none' }
-        }
-      }
-    },
-    read_quality: {
-      type: 'object',
-      propertyOrdering: ['is_event','legibility','unreadable','crop_would_help'],
-      required: ['is_event','legibility'],
-      properties: {
-        is_event:        { type:'boolean', description:'false if the photo carries no event information at all' },
-        legibility:      { type:'string', description:'clear, partial, or poor' },
-        unreadable:      { type:'array', nullable:true, items:{ type:'string' },
-                           description:'short names of what could not be read, e.g. "finish time"' },
-        crop_would_help: { type:'boolean', nullable:true,
-                           description:'true when the flyer fills a small part of the frame, sits at a steep angle, or is lost in clutter' }
-      }
-    }
-  }
-};
+
 
 /* ── date resolution, in code ─────────────────────────────────────
    Reading "JULY 16th" off a poster is perception, which small models do
@@ -7049,6 +7040,21 @@ const DAYS   = ['sunday','monday','tuesday','wednesday','thursday','friday','sat
 function resolveDate(row, today){
   const now = today ? new Date(today + 'T00:00:00') : new Date();
   const lit = (row.date_literal || '').toLowerCase().trim();
+  const iso = (d) => d.toLocaleDateString('en-CA');   // local, never UTC-shifted
+
+  /* Relative words. The prompt sends these through verbatim rather than
+     resolving them, for the same reason as every other date: the model
+     does not reliably know what day it is, and this is three lines of
+     arithmetic. "tonight" is today because a flyer saying tonight was
+     photographed today. */
+  if (/\b(today|tonight|hoje|hoy)\b/.test(lit)) return iso(now);
+  /* No trailing \b on this one: JS word boundaries are ASCII-only, so
+     \b after "amanhã" does not match — ã is a non-word character and
+     the boundary is already there. Leading \b is fine and still stops
+     it firing inside a longer word. */
+  if (/\b(tomorrow|amanh[aã]|ma[ñn]ana)/.test(lit)){
+    const t = new Date(now); t.setDate(now.getDate() + 1); return iso(t);
+  }
 
   if (lit){
     let d = null, mo = null;
@@ -7073,23 +7079,54 @@ function resolveDate(row, today){
       // No year printed: pick the year that puts this date CLOSEST to today,
       // past or future. A flyer on a wall in July saying "JULY 16" is this
       // year's, a week ago. Pushing it to next year would be absurd.
+      /* No year printed. Two candidates matter: the nearest occurrence
+         already PAST (P days ago) and the nearest one still AHEAD (F
+         days away). Prefer the past — a flyer usually means the date it
+         prints, and one that has just gone by is a real event that
+         happened — UNLESS the future one is much closer:
+
+             use the future when  F < 2 * P
+
+         Since F + P is about 365, the crossover sits near P = 122. So a
+         date up to roughly four months past still reads as the past,
+         and anything older rolls forward.
+
+         Worked both ways:
+           11 Aug, "July 31"    P=11,  F=354 -> 354 < 22 is false -> past
+           5 Jan, "December 20" P=16,  F=350 -> 350 < 32 is false -> past
+           20 Dec, "January 5"  P=349, F=16  -> 16 < 698 is true  -> future
+         The last is the case the rule exists for. */
       const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      let best = null;
+      const DAY = 86400000;
+      let past = null, future = null;
       for (const y of [now.getFullYear()-1, now.getFullYear(), now.getFullYear()+1]){
-        const diff = Math.abs(new Date(y, mo, d) - ref);
-        if (!best || diff < best.diff) best = { y, diff };
+        const cand = new Date(y, mo, d);
+        const delta = Math.round((cand - ref) / DAY);
+        if (delta >= 0){ if (!future || delta < future.delta) future = { y, delta }; }
+        else          { if (!past   || -delta < past.delta)   past   = { y, delta: -delta }; }
       }
-      return `${best.y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const pick = !past ? future
+                 : !future ? past
+                 : (future.delta < 2 * past.delta ? future : past);
+      return `${pick.y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     }
   }
 
-  // weekday only: the next one from today
-  const wd = (row.weekday_literal || '').toLowerCase().trim();
-  const wi = DAYS.findIndex(x => wd.startsWith(x.slice(0,3)));
+  /* Weekday only: the next upcoming one. Always forward — "Sunday 6pm"
+     conventionally means the Sunday coming, not the one just gone,
+     which is the opposite of the bare-date rule above and deliberately
+     so.
+
+     date_literal is searched too, because "this saturday" and "every
+     sunday" are date_literal text that contains a weekday and no
+     number, and those used to fall through to '' and lose the event. */
+  const wd = ((row.weekday_literal || '') + ' ' + lit).toLowerCase().trim();
+  const wi = DAYS.findIndex(x => new RegExp('\\b' + x.slice(0,3)).test(wd));
   if (wi > -1){
+    // ||7 so "sunday" on a Sunday means next Sunday, not this morning
     const delta = ((wi - now.getDay()) + 7) % 7 || 7;
     const t = new Date(now); t.setDate(now.getDate() + delta);
-    return t.toISOString().slice(0,10);
+    return iso(t);
   }
   return '';
 }
@@ -7154,15 +7191,105 @@ function withLineup(description, lineupText){
   return joined.slice(0, 2000);   // events.description check constraint
 }
 
+/* Repeat a STATED recurrence four weeks ahead.
+
+   The trigger is the flyer saying so — "every sunday", "todos os
+   domingos" — not the shape of the photo. A yoga studio's weekly
+   timetable is NOT this case: it is many different classes that each
+   happen once in the week shown, and multiplying it produces eighty
+   near-identical rows nobody asked for. That distinction was got wrong
+   first time round and is the whole point of keeping the two apart.
+
+   So:
+     "every sunday" on a poster        -> 4 events, one a week
+     a studio's week of 20 classes     -> 20 events, each once
+     a poster listing 3 printed dates  -> 3 events, exactly as printed
+
+   Four occurrences, each its own row, because the standing rule is
+   separate event entities rather than a collapsed recurring class.
+   Every row keeps its recurrence text so the page can still say what
+   it is.
+
+   Capped at BULK_MAX, trimmed to whole cycles so nobody gets three
+   Sundays and half a fourth. */
+const SCHEDULE_WEEKS = 4;
+
+/* Does this row claim to repeat every week? Only an explicit statement
+   counts. Gemini writes recurrence in plain words, and may write it in
+   the flyer's own language, so match on the interval rather than on
+   English: a weekday name plus a word meaning "every", or the word
+   weekly itself. Anything unrecognised repeats nothing, which is the
+   safe direction — a missed repeat is one event where there should be
+   four, an over-eager one is dozens of events nobody wanted. */
+function repeatsWeekly(row){
+  const r = String(row && row.recurrence || '').toLowerCase().trim();
+  if (!r) return false;
+  if (/\b(fortnight|biweekly|monthly|every other|alternate)\b/.test(r)) return false;
+  return /\b(weekly|every|each|todos?|cada|semanal|toda)\b/.test(r);
+}
+
+function expandWeekly(rows, today){
+  const base = today ? new Date(today + 'T00:00:00') : new Date();
+  const repeating = rows.filter(repeatsWeekly);
+  if (!repeating.length) return rows;
+
+  const once = rows.filter(r => !repeatsWeekly(r));
+  const out = once.slice();
+  const room = Math.max(0, BULK_MAX - once.length);
+  /* Whole cycles only. With 3 repeating rows and room for 10, that is
+     3 weeks (9 rows), not 3 weeks plus one stray Sunday. */
+  const weeks = Math.max(1, Math.min(SCHEDULE_WEEKS,
+                                     Math.floor(room / repeating.length)));
+
+  for (let w = 0; w < weeks; w++){
+    for (const r of repeating){
+      if (!r.date) { if (w === 0) out.push(r); continue; }
+      const d = new Date(r.date + 'T00:00:00');
+      if (Number.isNaN(d.getTime())) { if (w === 0) out.push(r); continue; }
+      d.setDate(d.getDate() + w * 7);
+      if (d < base && w === 0) continue;
+      out.push(Object.assign({}, r, { date: d.toLocaleDateString('en-CA') }));
+    }
+  }
+  return out;
+}
+
+/* Finish time, in order of authority:
+
+     1. printed on the flyer      — Gemini returns it, duration_source
+                                    "stated". Nothing beats a fact.
+     2. assumed by Gemini         — duration_source "inferred". It has
+                                    read the whole photo: the wording,
+                                    the artwork, the lineup. It knows
+                                    far more about what kind of thing
+                                    this is than a regex over two
+                                    fields ever will.
+     3. this function             — only when Gemini declined, which it
+                                    is told to do when nothing fits.
+
+   Both of the first two arrive as row.time_finish and are taken
+   verbatim by the first line. This is the backstop, not the primary
+   path, and it exists because rows also reach here from the manual
+   form where there is no model in the loop at all.
+
+   The durations match the prompt exactly. Two lists that are supposed
+   to agree will drift unless somebody makes them agree; these are
+   written in the same order and with the same numbers so a change to
+   one is an obvious prompt to change the other. */
 function inferFinish(row){
   if (row.time_finish) return String(row.time_finish).slice(0,5);
   const t = row.time_start ? String(row.time_start).slice(0,5) : '';
   if (!t) return '';
   const blob = ((row.event_name||'') + ' ' + (row.description||'')).toLowerCase();
-  if (/\bopens?\b|door/.test(blob)) return '';              // door time, not a session
-  const mins = /yoga|pilates|fitness|class|workout/.test(blob) ? 60
-             : /dinner|supper|feast|lunch/.test(blob) ? 150
-             : /sauna|breathwork|meditation/.test(blob) ? 90 : 90;
+  // a door time says nothing about length, so infer nothing from it
+  if (/\bopens?\b|door/.test(blob)) return '';
+  const mins =
+      /yoga|pilates|fitness|movement|workout|breathwork|meditation/.test(blob) ? 60
+    : /festival|carnival|all night|block party|\bparty\b|\brave\b/.test(blob) ? 240
+    : /concert|\bgig\b|\bdj\b|live set|performance|\bshow\b/.test(blob) ? 180
+    : /dinner|supper|feast|lunch|brunch/.test(blob) ? 150
+    : /class|workshop|talk|course|session/.test(blob) ? 90
+    : 90;
   const [h,m] = t.split(':').map(Number);
   const end = new Date(2000,0,1,h,m + mins);
   return String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
@@ -7580,7 +7707,7 @@ async function readPhoto(crop){
   await ensureUser().catch(() => {});
   await claimDeviceSecret().catch(() => {});
 
-  const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.85);
+  const send = render(sourceBitmap, crop, SEND_MAX_SIDE, 0.88);
   coverBusy.classList.add('show');
   try {
     /* Resolve the area from the photo's own GPS first, then ask the
@@ -7624,7 +7751,15 @@ async function readPhoto(crop){
        event into the form to be published by hand, which made the
        button mean two different things depending on the photo. */
     coverNotice.className = 'cover-notice show';
-    await bulkCreate(rows, rq);
+
+    /* Only rows that SAY they repeat get repeated, and the layout has
+       nothing to do with it. A studio timetable is many one-off classes
+       in one photo, so it passes through at one event each; a poster
+       reading "every sunday" becomes four. Rows that make no such claim
+       are returned untouched either way. */
+    const finalRows = expandWeekly(rows, todayISO());
+
+    await bulkCreate(finalRows, rq);
     return;
 
   } catch(err){
