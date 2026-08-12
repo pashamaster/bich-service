@@ -171,6 +171,23 @@ export default {
       } catch (err) {
         console.error('[bich] scheduled venue review failed:', err.message);
       }
+
+      /* Then the name-first pass, for events that never got a pin at
+         all. Separate try block on purpose: these are two independent
+         jobs and a failure in the first must not stop the second.
+
+         limit 10 rather than 20 because both jobs share one scheduled
+         invocation and each Nominatim call costs 1.1s — 20 + 10 is
+         about 33 seconds of wall time, comfortably inside the limit
+         while leaving room. */
+      try {
+        const req = new Request('https://internal/events/pin?limit=10', { method: 'POST' });
+        const res = await pinEvents(req, env, null);
+        const body = await res.json().catch(() => null);
+        console.log('[bich] scheduled event pin:', JSON.stringify(body));
+      } catch (err) {
+        console.error('[bich] scheduled event pin failed:', err.message);
+      }
     })());
   },
 
@@ -1104,6 +1121,106 @@ async function sbRpcFromWorker(env, fn, args) {
     throw new Error(`${fn} ${r.status} ${t.slice(0, 200)}`);
   }
   return r.json();
+}
+
+/* Give a pin to events that only ever had a venue name.
+
+   An event published without tapping the map has no coordinates, so it
+   never enters the venue canonicalisation pipeline — that one searches
+   AROUND a point and there is no point. It stays off the map forever
+   and has no maps link either, because the link is derived from the
+   coordinates.
+
+   Here the anchor is the community instead: geocode the typed name
+   biased to the town centre. Both tests — name similarity, and inside
+   the town — are recomputed in apply_event_pin rather than trusted
+   from here, the same way apply_venue_match recomputes its own
+   distance. This function proposes; the database decides.
+
+   dry=1 reports what it WOULD do and writes nothing, which is how to
+   check a backfill before letting it near real rows. */
+async function pinEvents(request, env, origin){
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 50);
+  const dry = url.searchParams.get('dry') === '1';
+
+  let queue;
+  try {
+    queue = await supabaseRpc(env, 'events_needing_pin',
+      { p_secret: env.WORKER_SECRET, p_limit: limit });
+  } catch (err) {
+    return json({ error: 'queue unavailable', detail: String(err && err.message) }, 502, origin);
+  }
+  if (!Array.isArray(queue) || !queue.length) return json({ checked: 0, pinned: 0 }, 200, origin);
+
+  const results = [];
+  let pinned = 0;
+
+  for (const row of queue) {
+    /* Nominatim asks for one request a second. 1.1s, same as the venue
+       sweep, and why a run of 20 takes about 22 seconds. */
+    if (results.length) await new Promise(r => setTimeout(r, 1100));
+
+    let hit = null;
+    try {
+      hit = await geocodeNamed(row.venue_name, row.centre_lat, row.centre_lng);
+    } catch (err) {
+      results.push({ short_id: row.short_id, result: 'lookup failed: ' + (err && err.message) });
+      continue;      // deliberately unstamped: a network failure is not an answer
+    }
+
+    if (dry) {
+      results.push({
+        short_id: row.short_id, venue_name: row.venue_name,
+        would_use: hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null
+      });
+      continue;
+    }
+
+    try {
+      const out = await supabaseRpc(env, 'apply_event_pin', {
+        p_secret: env.WORKER_SECRET,
+        p_short_id: row.short_id,
+        p_match: hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null
+      });
+      if (typeof out === 'string' && out.startsWith('pinned')) pinned++;
+      results.push({ short_id: row.short_id, result: out });
+    } catch (err) {
+      results.push({ short_id: row.short_id, result: 'write failed: ' + (err && err.message) });
+    }
+  }
+
+  return json({ checked: queue.length, pinned, dry, results }, 200, origin);
+}
+
+/* Nominatim, biased to a point. viewbox with bounded=1 RESTRICTS the
+   search to a box around the town rather than merely preferring it —
+   without bounded, a name it does not know locally returns the best
+   match on the planet, and "Bar Central" exists in every country on
+   earth. Postgres checks the community radius again anyway; this stops
+   the obviously wrong answers costing a round trip. */
+async function geocodeNamed(name, lat, lng){
+  const d = 0.5;      // ~55km box; the real radius test is server side
+  const u = new URL('https://nominatim.openstreetmap.org/search');
+  u.searchParams.set('q', name);
+  u.searchParams.set('format', 'jsonv2');
+  u.searchParams.set('limit', '1');
+  u.searchParams.set('bounded', '1');
+  u.searchParams.set('viewbox', `${lng - d},${lat + d},${lng + d},${lat - d}`);
+
+  const r = await fetch(u, {
+    headers: { 'User-Agent': 'bich.service/1.0 (https://bich.app)', 'Accept-Language': 'en' }
+  });
+  if (!r.ok) throw new Error('nominatim ' + r.status);
+  const rows = await r.json();
+  const hit = Array.isArray(rows) && rows[0];
+  if (!hit || hit.lat == null) return null;
+
+  return {
+    name: (hit.name && hit.name.trim()) || String(hit.display_name || '').split(',')[0].trim(),
+    lat: Number(hit.lat),
+    lng: Number(hit.lon)
+  };
 }
 
 async function reviewVenues(request, env, origin) {
