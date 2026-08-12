@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-03-54" />
+  <meta name="app-version" content="2026-08-03-57" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2305,38 +2305,90 @@ function renderEventCard(e) {
    Falls back to chronological when there is no score, which is every
    path except feed_ranked. Sorts a copy — EVENTS order is relied on
    elsewhere. */
+/* Which me list is on screen, or null for the ordinary feed. Declared
+   HERE rather than beside openMeList because rankedBucket reads it and
+   is defined hundreds of lines earlier — a `let` is in the temporal
+   dead zone until its declaration runs, so any render that fired
+   before then would throw ReferenceError rather than read null. */
+let meListMode = null;
+
 function rankedBucket(key){
+  /* In the FEED, finished events are map-only: they arrive in the same
+     query now, and bundleFor() drops anything undated into 'personal',
+     so last night's gig would otherwise show under "coming up".
+
+     In a ME LIST the opposite is true. "going", "attended" and
+     "hosting" are history — attended is by definition entirely in the
+     past — so filtering finished events there empties the very list
+     the person asked for. That is exactly what happened: the past
+     filter was added for the feed and silently applied here too,
+     because both render through this function.
+
+     Newest first in a me list, oldest first in the feed. Looking back
+     you want the most recent thing at the top; looking forward you
+     want the next thing at the top. Same list, opposite directions. */
+  const history = Boolean(meListMode);
+
   return EVENTS
-    /* Finished events are map-only. They arrive in the same feed now,
-       and bundleFor() would drop them into 'personal' — its fallback
-       bucket — so last night's gig would appear under "coming up".
-       One test here rather than a rule re-derived per bucket. */
-    .filter(e => e.bundle === key && !eventIsOver(e))
+    .filter(e => e.bundle === key && (history || !eventIsOver(e)))
     .slice()
     .sort((a, b) => {
+      const ta = eventDate(a), tb = eventDate(b);
+      if (history) return (tb ? tb.getTime() : 0) - (ta ? ta.getTime() : 0);
       if (a.score != null && b.score != null && a.score !== b.score){
         return b.score - a.score;
       }
-      const ta = eventDate(a), tb = eventDate(b);
       return (ta ? ta.getTime() : 0) - (tb ? tb.getTime() : 0);
     });
 }
 
-function renderBundles() {
-  document.getElementById('eventListPersonal').innerHTML =
-    rankedBucket('personal').map(renderEventCard).join('');
-  document.getElementById('eventListNearby').innerHTML =
-    rankedBucket('nearby').map(renderEventCard).join('');
-  document.getElementById('eventListWeekend').innerHTML =
-    rankedBucket('weekend').map(renderEventCard).join('');
+/* What the first divider says. In the feed it is "coming up", which is
+   true. In a me list it is NOT: openMeList puts every row into the
+   'personal' bucket, so a list of things you attended in May was being
+   published under a header reading "coming up". The events were there;
+   the label said they could not be. */
+const ME_LIST_HEADING = {
+  going:    'you are going',
+  attended: 'you attended',
+  hosting:  'you are hosting'
+};
 
-  [['Personal','personal'],['Nearby','nearby'],['Weekend','weekend']].forEach(([cap, key]) => {
+function renderBundles() {
+  /* Render ONCE and reuse. The visibility test below used to re-derive
+     its own answer from raw EVENTS — `EVENTS.some(e => e.bundle === key)`
+     — which does not apply rankedBucket's filtering. So in the feed, a
+     bucket holding only finished events counted as non-empty, and the
+     divider was shown above a list with nothing in it. Asking the same
+     function that produced the rows is the only way the two cannot
+     disagree. */
+  const buckets = {
+    Personal: rankedBucket('personal'),
+    Nearby:   rankedBucket('nearby'),
+    Weekend:  rankedBucket('weekend')
+  };
+
+  Object.entries(buckets).forEach(([cap, rows]) => {
+    const list = document.getElementById('eventList' + cap);
+    if (list) list.innerHTML = rows.map(renderEventCard).join('');
+  });
+
+  Object.entries(buckets).forEach(([cap, rows]) => {
     const d = document.getElementById('divider' + cap);
     const l = document.getElementById('eventList' + cap);
-    const empty = !EVENTS.some(e => e.bundle === key);
+    const empty = rows.length === 0;
     if (d) d.hidden = empty;
     if (l) l.hidden = empty;
   });
+
+  /* Say what the list actually is. Restored to "coming up" whenever
+     meListMode is null, so leaving a me list cannot strand the feed
+     under someone else's heading. */
+  const head = document.querySelector('#dividerPersonal .bundle-divider__text');
+  if (head){
+    head.textContent = meListMode
+      ? (ME_LIST_HEADING[meListMode] || meListMode)
+      : 'coming up';
+  }
 
   document.querySelectorAll('.event-card').forEach(el => {
     el.addEventListener('click', () => openDetail(el.dataset.eventId));
@@ -2701,15 +2753,49 @@ async function saveEdit(){
   if (startsAt && !Number.isNaN(startsAt.getTime())) patch.starts_at = startsAt.toISOString();
 
   btn.disabled = true; note.hidden = true;
+
+  /* One id for this save, whether it lands now or from the queue in ten
+     minutes. The direct call and any retry must share it or the retry
+     is a second, unrecognised operation. */
+  const opId = newOperationId();
+  const shortId = editingId;
+
   try {
-    const row = await updateEvent(editingId, patch);
-    const i = EVENTS.findIndex(e => e.id === editingId);
+    const row = await updateEvent(shortId, patch, opId);
+    const i = EVENTS.findIndex(e => e.id === shortId);
     if (i > -1 && row) EVENTS[i] = Object.assign(rowToEvent(row), { bundle: EVENTS[i].bundle });
     renderBundles();
-    if (window._openEventId === editingId) openDetail(editingId);
+    if (window._openEventId === shortId) openDetail(shortId);
     closeEditSheet();
     toast('saved');
   } catch(err){
+    /* A lost connection is not a rejected edit, and it used to be
+       treated as one: the catch painted a message and the change was
+       gone. Attendance and community changes have survived a tunnel
+       for months; edits did not, because nothing ever called
+       outboxAdd for them — the 'event.patch' handler existed and had
+       no callers at all.
+
+       Queue only what can succeed later. A refusal — not yours, no
+       such event, bad value — will refuse identically on every retry,
+       so queueing it would park a permanent failure in the outbox and
+       show the person a warning that never clears. */
+    if (isTransient(err)){
+      const queued = await outboxAdd('event.patch',
+        { short_id: shortId, patch }, opId);
+      if (queued){
+        /* Apply it locally so the change does not appear to vanish
+           while it waits. The next feed load overwrites this with
+           whatever the server actually holds. */
+        const i = EVENTS.findIndex(e => e.id === shortId);
+        if (i > -1) Object.assign(EVENTS[i], rowToEvent(Object.assign(
+          { short_id: shortId, starts_at: EVENTS[i].starts_at }, patch)));
+        renderBundles();
+        closeEditSheet();
+        toast('saved — will sync when you are back online');
+        return;
+      }
+    }
     note.hidden = false;
     note.textContent = explainWriteError(err);
   } finally { btn.disabled = false; }
@@ -2902,9 +2988,15 @@ async function outboxTx(mode, fn){
    That id is what makes a retry safe: the database records it the
    first time and hands back the same answer afterwards instead of
    doing the work twice. */
-async function outboxAdd(type, payload){
+/* opId is optional and matters more than it looks. When a direct call
+   fails and we queue the retry, both must carry the SAME operation id
+   — otherwise the retry replays under a new id, op_replay does not
+   recognise it, and the server applies an operation it has already
+   applied. Letting the caller supply the id is what makes "try now,
+   queue if that fails" safe. */
+async function outboxAdd(type, payload, opId){
   const item = {
-    operation_id: newOperationId(),
+    operation_id: opId || newOperationId(),
     operation_type: type,
     payload,
     created_at: new Date().toISOString(),
@@ -3224,11 +3316,18 @@ async function syncPendingCovers(){
       const out = await r.json();
       if (!out || !out.url) throw new Error('worker replied without a url');
 
+      /* This runs from a retry loop, so it is precisely the case an
+         operation id is for: the same cover write can be attempted
+         again after a response is lost. Derived from the short id
+         rather than random, so every retry of THIS cover carries the
+         same id even across a reload — a fresh uuid each attempt would
+         make each one a new operation and defeat the point. */
       await sbRpc('update_event_as', {
         p_short_id: item.shortId,
         p_user: CURRENT_USER.id,
         p_secret: deviceSecret(),
-        p_patch: { cover_url: out.url }
+        p_patch: { cover_url: out.url },
+        p_operation_id: await stableOpId('cover:' + item.shortId + ':' + out.url)
       });
 
       await dropCover(item.shortId);
@@ -3374,6 +3473,21 @@ document.querySelector('.detail-actions').addEventListener('click', async (e) =>
    (setting the same status twice is the same row), so the id is passed
    for the contract's sake, not for correctness. Sending it from the
    start means the client does not change when the table lands. */
+/* A uuid derived from a string, so the same logical operation produces
+   the same id on every attempt — including after a reload, where a
+   variable holding a random one would be long gone. sha256 then shaped
+   into uuid v5-ish form; op_replay only needs it to be a stable uuid,
+   not a real v5. */
+async function stableOpId(key){
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+    const b = [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, '0')).join('');
+    return `${b.slice(0,8)}-${b.slice(8,12)}-5${b.slice(13,16)}-a${b.slice(17,20)}-${b.slice(20,32)}`;
+  } catch(_){
+    return newOperationId();   // no subtle crypto: a random id still works, just not across reloads
+  }
+}
+
 function newOperationId(){
   return (crypto.randomUUID && crypto.randomUUID()) ||
     'op-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -4794,8 +4908,12 @@ function canvasToBlob(canvas, mime, quality){
    token and compare. There is no update policy on events any more, so
    this is the only way a row can change - which is what closed the
    hole where anyone could rewrite any upcoming event. */
-async function updateEvent(shortId, patch){
+/* opId is passed in rather than made here, so the caller can queue the
+   same operation on failure. Generated when absent so the callers that
+   do not care still get replay protection instead of none. */
+async function updateEvent(shortId, patch, opId){
   await claimDeviceSecret();
+  const operationId = opId || newOperationId();
 
   const mine  = (Store.data.hosting || []).includes(shortId);
   const token = tokenFor(shortId);
@@ -4818,7 +4936,7 @@ async function updateEvent(shortId, patch){
   if (CURRENT_USER.id && Store.data.secretClaimed && mine){
     const r = await attempt('update_event_as', () => sbRpc('update_event_as', {
       p_short_id: shortId, p_user: CURRENT_USER.id,
-      p_secret: deviceSecret(), p_patch: patch
+      p_secret: deviceSecret(), p_patch: patch, p_operation_id: operationId
     }));
     if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
   }
@@ -4836,11 +4954,15 @@ async function updateEvent(shortId, patch){
   if (!mine && CURRENT_USER.id && Store.data.secretClaimed){
     const r = await attempt('update_event_as', () => sbRpc('update_event_as', {
       p_short_id: shortId, p_user: CURRENT_USER.id,
-      p_secret: deviceSecret(), p_patch: patch
+      p_secret: deviceSecret(), p_patch: patch, p_operation_id: operationId
     }));
     if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
   }
 
+  /* admin_update_event and update_event take no operation id. Both are
+     absolute assignment like update_event_as — every field is
+     coalesce(patch, existing) — so a replay converges rather than
+     compounding, and neither is a path the outbox retries. */
   if (token){
     const r = await attempt('update_event (token)', () => sbRpc('update_event', {
       p_short_id: shortId, p_token: token, p_patch: patch
@@ -4880,10 +5002,17 @@ async function cancelEvent(shortId){
   const usePerson = Boolean(CURRENT_USER.id && Store.data.secretClaimed);
   const token = tokenFor(shortId);
   if (!usePerson && !token){ toast('this device did not create that event'); return false; }
+
+  /* Shared by the direct call and by the queued retry, so a cancel that
+     committed and lost its response is recognised rather than reapplied
+     as a fresh operation. */
+  const opId = newOperationId();
+
   try {
     if (usePerson){
       await sbRpc('cancel_event_as', {
-        p_short_id: shortId, p_user: CURRENT_USER.id, p_secret: deviceSecret()
+        p_short_id: shortId, p_user: CURRENT_USER.id, p_secret: deviceSecret(),
+        p_operation_id: opId
       });
     } else {
       await sbRpc('cancel_event', { p_short_id: shortId, p_token: token });
@@ -4924,6 +5053,28 @@ async function cancelEvent(shortId){
         console.error('[bich] token cancel also failed —', err2.status || '', err2.message || err2);
       }
     }
+
+    /* Offline, not refused. Queue it and remove it from view — the
+       person asked for it gone, and having it reappear because a tunnel
+       ate the request is worse than removing it optimistically. The
+       server is still the authority: if the cancel is ultimately
+       refused the next feed load brings it back.
+
+       Only the account path is queued. The token path has no handler
+       and a token is device local anyway, so there is nothing sensible
+       to retry from a queue. */
+    if (usePerson && isTransient(err)){
+      const queued = await outboxAdd('event.cancel', { short_id: shortId }, opId);
+      if (queued){
+        Store.set({ hosting: (Store.data.hosting || []).filter(x => x !== shortId) });
+        const k = EVENTS.findIndex(e => e.id === shortId);
+        if (k > -1) EVENTS.splice(k, 1);
+        renderBundles();
+        toast('removed — will sync when you are back online');
+        return true;
+      }
+    }
+
     toast(explainWriteError(err));
     return false;
   }
@@ -6084,8 +6235,9 @@ function initThemes(){
 
    Past events are included on purpose: "attended" is entirely history,
    and a host wants to find last month's event to copy or correct it.
-   The normal feed hides the past; these lists are the exception. */
-let meListMode = null;
+   The normal feed hides the past; these lists are the exception.
+
+   meListMode itself is declared above rankedBucket, which reads it. */
 
 async function openMeList(kind){
   /* Tapping "attended" used to open an empty list every time, because
