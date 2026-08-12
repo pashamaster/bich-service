@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-03-57" />
+  <meta name="app-version" content="2026-08-04-59" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1723,7 +1723,25 @@ if ('serviceWorker' in navigator) {
       // a new worker took over: the code on screen is stale, so reload once
       let reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloading) return; reloading = true; location.reload();
+        if (reloading) return;
+        /* NEVER reload over unsaved work. This line used to fire
+           unconditionally, and because reg.update() runs on every
+           return to the app, coming back to a half filled create sheet
+           after a deploy destroyed it without asking.
+
+           The new code is already installed and waiting; it takes over
+           on the next launch instead. A user one deploy behind for a
+           few minutes is a far smaller problem than one who lost the
+           event they were typing.
+
+           window.__bichBusy is set by the create sheet and by a
+           non-empty outbox. Optional chaining because this listener is
+           registered in the head, long before that function exists. */
+        if (typeof window.__bichBusy === 'function' && window.__bichBusy()){
+          console.info('[bich] update ready — holding the reload, work in progress');
+          return;
+        }
+        reloading = true; location.reload();
       });
       reg.addEventListener('updatefound', () => {
         const next = reg.installing;
@@ -2802,6 +2820,16 @@ async function saveEdit(){
 }
 
 function openDetail(id) {
+  /* An event still waiting in the outbox has no server row, so the
+     detail screen would fetch nothing, show no owner controls, and
+     offer an edit that cannot be saved. Say what is happening
+     instead. */
+  const _pending = EVENTS.find(e => e.id === id);
+  if (_pending && _pending.pending){
+    toast('this one is still waiting to send');
+    return;
+  }
+
   const e = EVENTS.find(x => x.id === id);
   if (!e) return;
   const hero = document.getElementById('detailHero');
@@ -2950,7 +2978,9 @@ async function syncGoingFromServer(){
 const COVER_DB = 'bich-covers';
 const COVER_STORE = 'pending';
 const OUTBOX_STORE = 'outbox';
-const OUTBOX_DB_VERSION = 2;
+const DRAFT_STORE = 'draft';
+const DRAFT_KEY = 'create';      // one draft, always this key — see below
+const OUTBOX_DB_VERSION = 3;
 
 function coverDb(){
   return new Promise((resolve, reject) => {
@@ -2967,10 +2997,143 @@ function coverDb(){
       if (!db.objectStoreNames.contains(COVER_STORE)){
         db.createObjectStore(COVER_STORE, { keyPath: 'shortId' });
       }
+      /* Version 3. A single record under a fixed key, because the
+         create sheet is a singleton: starting a second event replaces
+         the first rather than accumulating drafts nobody asked to
+         keep. Existing covers and queued operations survive the
+         upgrade — onupgradeneeded only adds what is missing. */
+      if (!db.objectStoreNames.contains(DRAFT_STORE)){
+        db.createObjectStore(DRAFT_STORE, { keyPath: 'key' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror  = () => reject(req.error);
   });
+}
+
+/* ── the create draft ──────────────────────────────────────────────
+   Everything typed into the create sheet, kept in IndexedDB so that
+   losing the page does not lose the work.
+
+   It used to be held only in memory and in the DOM, which meant the
+   service worker's own update path destroyed it: reg.update() runs on
+   every return to the app, a new worker calls skipWaiting immediately,
+   controllerchange fires, and location.reload() wipes a half filled
+   form without asking. iOS killing a backgrounded PWA does the same
+   thing without needing a deploy at all.
+
+   ONE draft, under a fixed key. The create sheet is a singleton, so
+   starting a second event replaces the first rather than accumulating
+   drafts nobody asked to keep.
+
+   The cover is stored as the 1000px rendered blob, never the original
+   bytes. A phone photo is 8MB and a decoded 48MP bitmap is ~190MB;
+   the rendered cover is a couple of hundred KB and is the only version
+   anything downstream actually wants. */
+
+const DRAFT_FIELDS = ['inputTitle','inputDesc','inputVenue','inputDate',
+                      'inputTime','inputPrice','inputCapacity'];
+
+let _draftTimer = null, _draftDirty = false;
+
+function draftTx(mode, fn){
+  return coverDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(DRAFT_STORE, mode);
+    let out;
+    try { out = fn(tx.objectStore(DRAFT_STORE)); } catch(err){ reject(err); return; }
+    tx.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+    tx.onerror    = () => reject(tx.error);
+  }));
+}
+
+/* Is there anything here worth keeping? An empty sheet must not
+   produce a draft, or every accidental tap on the create button would
+   leave a "continue your unfinished event?" prompt behind. */
+function draftHasContent(){
+  if (DRAFT_FIELDS.some(id => {
+    const el = document.getElementById(id);
+    return el && el.value.trim();
+  })) return true;
+  return Boolean(draft.cover || draft.lat != null || window._lastCoverBlob);
+}
+
+async function draftSave(){
+  _draftDirty = false;
+  try {
+    if (!draftHasContent()){ await draftClear(); return; }
+
+    const fields = {};
+    DRAFT_FIELDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) fields[id] = el.value;
+    });
+
+    /* Only the rendered cover, and only if it is small. The ceiling is
+       a guard against a future change that puts originals back here by
+       accident, not a limit anyone should hit: a 1000px webp is around
+       200KB. */
+    let coverBlob = null;
+    const held = window._lastCoverBlob;
+    if (held && held.blob && held.blob.size <= 2 * 1024 * 1024){
+      coverBlob = { blob: held.blob, filename: held.filename || 'cover.webp' };
+    }
+
+    await draftTx('readwrite', st => st.put({
+      key: DRAFT_KEY,
+      saved_at: new Date().toISOString(),
+      fields,
+      /* The draft object minus anything unserialisable. crop is plain
+         numbers and survives; sourceBitmap deliberately does not — it
+         is rebuilt from coverBlob on restore. */
+      state: {
+        lat: draft.lat, lng: draft.lng, city: draft.city,
+        cover: draft.cover, timeFinish: draft.timeFinish, mapsLink: draft.mapsLink,
+        venueId: draft.venueId, venueSource: draft.venueSource,
+        venueAddress: draft.venueAddress, pinSource: draft.pinSource,
+        photoLat: draft.photoLat, photoLng: draft.photoLng,
+        community: draft.community, recurrence: draft.recurrence,
+        contact: draft.contact, lineup: draft.lineup, currency: draft.currency,
+        crop: draft.crop || null
+      },
+      magicArmed: Boolean(window.MAGIC_ARMED),
+      coverBlob
+    }));
+  } catch(err){
+    /* Private mode refuses IndexedDB. Nothing to do about it and
+       nothing worth interrupting anybody over — the sheet still works,
+       it just will not survive a reload. */
+    console.warn('[bich] could not save the draft', err && err.message);
+  }
+}
+
+/* Debounced: this runs on every keystroke, and an IndexedDB write per
+   character would be both wasteful and janky on a slow phone. */
+function draftTouch(){
+  _draftDirty = true;
+  clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(draftSave, 400);
+}
+
+/* A last write on the way out. visibilitychange rather than
+   beforeunload, which iOS Safari does not reliably fire. Synchronous
+   intent, best effort in practice — the 400ms debounce means at most
+   one keystroke is ever at risk. */
+function draftFlushNow(){
+  if (!_draftDirty) return;
+  clearTimeout(_draftTimer);
+  draftSave();
+}
+
+async function draftLoad(){
+  try { return await draftTx('readonly', st => st.get(DRAFT_KEY)); }
+  catch(_){ return null; }
+}
+
+async function draftClear(){
+  clearTimeout(_draftTimer);
+  _draftDirty = false;
+  try { await draftTx('readwrite', st => st.delete(DRAFT_KEY)); }
+  catch(_){}
 }
 
 async function outboxTx(mode, fn){
@@ -3145,7 +3308,16 @@ async function outboxFlush(){
            four states collapse back into "probably fine". */
         await outboxDrop(item.operation_id);
         console.info('[bich] sent', item.operation_type, item.operation_id.slice(0, 8));
-        if (item.operation_type === 'event.create') await loadFeed();
+        if (item.operation_type === 'event.create'){
+          /* The real row exists now. loadFeed replaces the local
+             placeholder wholesale, and refreshMeCounts re-reads the
+             hosting list so iOwn() shows the owner controls on an event
+             that was published from the queue. */
+          const short = result && (result.short_id || (result.event && result.event.short_id));
+          if (short) Store.addHosting(short);
+          await loadFeed();
+          refreshMeCounts();
+        }
       } catch(err){
         if (isTransient(err)){
           item.status = 'pending';
@@ -3171,8 +3343,15 @@ async function outboxFlush(){
    noise, and noise is what people stop reading. */
 async function paintOutboxState(){
   const el = document.getElementById('outboxState');
-  if (!el) return;
   const items = await outboxAll();
+
+  /* Published for __bichBusy, which the service worker consults before
+     reloading. Counts only what could still succeed: a permanently
+     failed item will never send, so holding an update back for it
+     would mean holding it back forever. */
+  window._outboxPending = items.filter(i => i.status !== 'failed').length;
+
+  if (!el) return;
   if (!items.length){ el.hidden = true; return; }
 
   const failed  = items.filter(i => i.status === 'failed');
@@ -4289,7 +4468,99 @@ function recentreMapOnHome(){
 const modal = document.getElementById('createModal');
 const overlay = document.getElementById('modalOverlay');
 
+/* Is there work the app must not lose to a reload? The service worker
+   update path asks this before calling location.reload().
+
+   Two sources: an open create sheet with anything in it, and a
+   non-empty outbox. The outbox survives a reload by design, but a
+   flush that is mid-request does not, and re-sending is only safe
+   because every queued item carries an operation id — no reason to
+   spend that protection when waiting costs nothing. */
+/* Save on every change to the sheet. Delegated from the modal rather
+   than bound per input, so a field added later is covered without
+   anybody remembering to wire it. */
+function wireDraftAutosave(){
+  const modal = document.getElementById('createModal');
+  if (!modal || modal._draftWired) return;
+  modal.addEventListener('input',  draftTouch);
+  modal.addEventListener('change', draftTouch);
+  modal._draftWired = true;
+}
+
+/* A last write when the app goes away. visibilitychange, not
+   beforeunload — iOS Safari fires beforeunload unreliably for a PWA,
+   and hidden is the state that precedes being killed. */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) draftFlushNow();
+});
+
+/* Offer an unfinished draft back rather than silently repopulating the
+   sheet. Silent restore is worse than it sounds: somebody who
+   abandoned an event on purpose would find it waiting for them with no
+   explanation, and could publish it without noticing.
+
+   Runs once at startup. If the person says no the draft is deleted, so
+   the question is never asked twice for the same draft. */
+async function offerDraftRestore(){
+  const d = await draftLoad();
+  if (!d || !d.fields) return;
+
+  const title = (d.fields.inputTitle || '').trim();
+  const when = d.saved_at ? whenLabel(new Date(d.saved_at)) : '';
+  const what = title ? `"${title}"` : 'an event';
+  const ok = await askConfirm(
+    `you have an unfinished draft — ${what}${when ? ', from ' + when : ''}. continue it?`,
+    'continue', { danger: false, cancelLabel: 'discard' });
+
+  if (!ok){ await draftClear(); return; }
+  await applyDraft(d);
+}
+
+async function applyDraft(d){
+  try {
+    DRAFT_FIELDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el && d.fields[id] != null) el.value = d.fields[id];
+    });
+    Object.assign(draft, d.state || {});
+
+    /* Rebuild the working bitmap from the stored 1000px cover. This is
+       why only the rendered blob is kept: it is both what the cover
+       needs and enough to re-crop from. */
+    if (d.coverBlob && d.coverBlob.blob){
+      try {
+        sourceBitmap = await createImageBitmap(d.coverBlob.blob);
+        window._lastCoverBlob = d.coverBlob;
+        if (draft.cover) showCover(draft.cover);
+      } catch(err){
+        console.warn('[bich] draft cover would not decode', err && err.message);
+      }
+    }
+
+    openCreate();
+    /* The pin has to wait for the mini map to exist. openCreate builds
+       it on a timeout, so this follows it rather than racing it. */
+    if (draft.lat != null && draft.lng != null){
+      setTimeout(() => setEventLocation(draft.lat, draft.lng, false), 250);
+    }
+    toast('draft restored');
+  } catch(err){
+    console.error('[bich] could not restore the draft', err);
+    await draftClear();
+  }
+}
+
+window.__bichBusy = function(){
+  try {
+    const sheet = document.getElementById('createModal');
+    if (sheet && sheet.classList.contains('visible') && draftHasContent()) return true;
+    if (window._outboxPending > 0) return true;
+  } catch(_){}
+  return false;
+};
+
 function openCreate() {
+  wireDraftAutosave();
   modal.classList.add('visible');
   overlay.classList.add('visible');
   /* The modal is display:none until the line above, so the picker has
@@ -5289,8 +5560,13 @@ async function saveEvent(spec){
      host's attendance together, and records the operation id so a
      retry after a dropped response returns the original result instead
      of publishing a second event. */
-  const res = await withOwnershipRetry('publish', () => sbRpc('publish_event', {
-    p_payload: {
+  /* One id for this publish, whether it lands now or from the queue.
+     publish_event REQUIRES p_operation_id — no default — because it is
+     the one mutation that creates a row, so a replay without it would
+     duplicate somebody's event. */
+  const operationId = spec.operationId || newOperationId();
+
+  const payload = {
       title: String(spec.title || '').slice(0, 200),
       description: withLineup(spec.description, renderLineup(spec.lineup)) || null,
       venue_name: spec.venueName || null,
@@ -5335,11 +5611,30 @@ async function saveEvent(spec){
       pin_source: (spec.lat == null) ? null : (spec.pinSource || 'manual'),
       needs_review: spec.source === 'photo' || spec.source === 'magic',
       edit_token_hash: hash
-    },
-    p_user: CURRENT_USER.id,
-    p_secret: deviceSecret(),
-    p_operation_id: spec.operationId || newOperationId()
-  }));
+  };
+
+  let res;
+  try {
+    res = await withOwnershipRetry('publish', () => sbRpc('publish_event', {
+      p_payload: payload, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_operation_id: operationId
+    }));
+  } catch(err){
+    /* Offline, not refused. Publish was the LAST mutation that could
+       not survive a bad connection: attendance, community, patch and
+       cancel all queue, and this one threw the whole event away with a
+       message. The handler for 'event.create' has existed in
+       OUTBOX_HANDLERS the entire time and had no callers.
+
+       The queued item carries the same operation id, so if the request
+       actually did commit before the connection dropped, the retry
+       replays instead of publishing a second copy. */
+    if (!isTransient(err)) throw err;
+    const queued = await outboxAdd('event.create', payload, operationId);
+    if (!queued) throw err;      // no IndexedDB: better to fail loudly
+    console.info('[bich] publish queued —', operationId.slice(0, 8));
+    return { queued: true, short_id: null, id: null };
+  }
 
   if (res && res.replayed) console.info('[bich] publish replayed — no duplicate created');
   const saved = res && res.event ? [res.event] : [];
@@ -5968,15 +6263,22 @@ function assertBoot(){
 
    An in-app sheet also gets to look like the rest of the app and
    respects the safe area, which a native dialog never did. */
-function askConfirm(message, confirmLabel){
+function askConfirm(message, confirmLabel, opts){
+  const o = opts || {};
+  /* Every caller until now was destructive — cancel an event, discard
+     a photo — so the confirm button was always red and the other one
+     always said "keep it". Restoring a draft is neither: "keep it"
+     next to "continue" reads as two ways of saying yes. Both the
+     wording and the colour are overridable, with the old behaviour as
+     the default so existing callers are untouched. */
   return new Promise(resolve => {
     const wrap = document.createElement('div');
     wrap.className = 'confirm-sheet';
     wrap.innerHTML = `
       <div class="confirm-sheet__panel" role="alertdialog" aria-modal="true">
         <p class="confirm-sheet__text"></p>
-        <button type="button" class="btn btn--bad" data-yes>${escapeAttr(confirmLabel || 'yes')}</button>
-        <button type="button" class="btn btn--ghost" data-no>keep it</button>
+        <button type="button" class="btn ${o.danger === false ? '' : 'btn--bad'}" data-yes>${escapeAttr(confirmLabel || 'yes')}</button>
+        <button type="button" class="btn btn--ghost" data-no>${escapeAttr(o.cancelLabel || 'keep it')}</button>
       </div>`;
     wrap.querySelector('.confirm-sheet__text').textContent = message;
 
@@ -7015,14 +7317,55 @@ function readExif(buf){
    Everyone else lazy loads a decoder, and only when they actually hit
    a HEIC. No payload for the common case. */
 let _heic = null;
+/* Shrink to COVER_MAX_SIDE immediately and keep NOTHING bigger.
+
+   A modern phone hands over a 48MP HEIC: decoded that is roughly
+   190MB of RGBA sitting in memory, held for as long as the create
+   sheet is open, and on a mid-range Android it is the thing that gets
+   the tab killed. Nothing downstream wants those pixels either — the
+   cover is stored at 1000px and Gemini is sent 768px, so every
+   consumer immediately throws them away.
+
+   Doing it here rather than at each use means the full-size bitmap
+   exists for exactly one function call. Crop still works, on the 1000px
+   copy; a crop of a crop is the only thing lost, and re-cropping from
+   an already-downscaled source is what every consumer did anyway. */
+async function shrinkToCover(bitmap){
+  const side = Math.max(bitmap.width, bitmap.height);
+  if (side <= COVER_MAX_SIDE) return bitmap;
+  const scale = COVER_MAX_SIDE / side;
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  try {
+    const small = await createImageBitmap(bitmap, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
+    if (bitmap.close) bitmap.close();      // release the big one at once
+    return small;
+  } catch(_){
+    /* No resize options on this engine. Go through a canvas instead —
+       slower, same result, and still far cheaper than holding 190MB. */
+    try {
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      const small = await createImageBitmap(c);
+      if (bitmap.close) bitmap.close();
+      return small;
+    } catch(_2){ return bitmap; }          // worst case: behave as before
+  }
+}
+
 async function decodeImage(file){
-  try { return { bitmap: await createImageBitmap(file), converted: false }; }
-  catch(_){}
-  const looksHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
-  if (!looksHeic) throw new Error('unreadable');
-  if (!_heic) _heic = await import('https://cdn.jsdelivr.net/npm/heic-to@1/+esm');
-  const jpeg = await _heic.heicTo({ blob: file, type: 'image/jpeg', quality: 0.92 });
-  return { bitmap: await createImageBitmap(jpeg), converted: true };
+  let bitmap = null, converted = false;
+  try { bitmap = await createImageBitmap(file); }
+  catch(_){
+    const looksHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+    if (!looksHeic) throw new Error('unreadable');
+    if (!_heic) _heic = await import('https://cdn.jsdelivr.net/npm/heic-to@1/+esm');
+    const jpeg = await _heic.heicTo({ blob: file, type: 'image/jpeg', quality: 0.92 });
+    bitmap = await createImageBitmap(jpeg);
+    converted = true;
+  }
+  return { bitmap: await shrinkToCover(bitmap), converted };
 }
 
 /* ── resize ───────────────────────────────────────────────────────
@@ -8049,6 +8392,11 @@ function resetPhotoWorkspace(){
   resetCreateForm();
 }
 
+/* resetCreateForm is the single place the sheet is emptied — after a
+   publish, after a magic batch, and on discard — so clearing the
+   persisted copy from inside it means there is no path that empties
+   the form and leaves a draft behind to be offered back. */
+
 function resetCreateForm(){
   ['inputTitle','inputDesc','inputVenue','inputDate','inputTime','inputPrice','inputCapacity'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('coverImg').hidden = true;
@@ -8082,6 +8430,8 @@ function resetCreateForm(){
   });
   if (sourceBitmap && sourceBitmap.close) sourceBitmap.close();
   sourceBitmap = null; sourceExif = null; photoOrigin = null;
+  window._lastCoverBlob = null;
+  draftClear();
   // restore default date/time
   const t = new Date(); t.setDate(t.getDate()+1);
   // toISOString() is UTC: west of Greenwich late in the day it returns
@@ -8148,12 +8498,29 @@ on('publishBtn', 'click', async () => {
     bundle: 'personal'
   };
 
-  // PRODUCTION: POST /events to your backend here (spec section 9).
-  // The DB record uses the spec shape (price in cents, ISO starts_at, venue_source, etc.).
+  // The cover goes to Cloudflare R2; the row goes straight to Supabase.
+  // No service key exists anywhere in this system.
 
-  // Real save. The cover goes to Cloudflare R2; the row goes straight
-  // to Supabase. No service key exists anywhere in this system.
-  if (SB_READY()){
+  /* SB_READY() only tests that a URL and a key are configured — it says
+     nothing about connectivity. This used to wrap the whole save, so
+     with config missing the block was skipped entirely and execution
+     fell through to `btn.textContent = '✓ event published'`: a green
+     tick for an event that was never written anywhere, living only in
+     the in-memory EVENTS array until the next reload discarded it.
+
+     Refuse plainly instead. A misconfigured build should be obvious to
+     whoever is deploying it, not silently pretend to work. Offline is
+     a different case entirely and is handled inside saveEvent, which
+     queues. */
+  if (!SB_READY()){
+    btn.disabled = false;
+    coverNotice.className = 'cover-notice show err';
+    coverNotice.textContent = 'this build has no database configured — nothing was saved.';
+    console.error('[bich] publish refused: SUPABASE_URL or SUPABASE_ANON_KEY is missing from config.js');
+    return;
+  }
+
+  {
     try {
       const img = await uploadCover();
       const saved = await saveEvent({
@@ -8175,7 +8542,19 @@ on('publishBtn', 'click', async () => {
         coverUrl: img ? img.url : null,
         source: draft.cover ? 'photo' : 'manual'
       });
-      ev.uuid = saved.id; ev.id = saved.short_id;
+      /* Queued rather than published: there is no server row and so no
+         short id yet. The local row keeps its temporary id and is
+         replaced wholesale when the flush succeeds — outboxFlush calls
+         loadFeed() after an event.create, and applyFeedRows empties
+         EVENTS before repopulating it, so the placeholder cannot
+         survive alongside the real one. */
+      if (saved && saved.queued){
+        ev.pending = true;
+        coverNotice.className = 'cover-notice show';
+        coverNotice.textContent = 'saved — it will publish itself once you are back online.';
+      } else {
+        ev.uuid = saved.id; ev.id = saved.short_id;
+      }
 
       /* If you are posting the walk, you are going on the walk. Nothing
          wrote this row before, so every event opened its life reading
@@ -8188,7 +8567,13 @@ on('publishBtn', 'click', async () => {
       Store.setGoing(ev.id, true);
       ev.going = Math.max(1, ev.going || 0);
 
-      if (img) ev.cover = img.url;      // one size, so one field
+      /* Everything below needs a real short id — the cover queue keys
+         on it, and so does the token. A queued publish has none yet;
+         its cover travelled inside the payload as cover_url, or did not
+         make it, in which case the person can add one after it lands. */
+      if (saved && saved.queued){
+        // nothing further to do until the flush
+      } else if (img) ev.cover = img.url;      // one size, so one field
       else if (draft.cover) {
         /* The bucket is unreachable, but the event is live and the
            bytes are still in memory. Keep them rather than throwing
@@ -8904,6 +9289,11 @@ wireVenueSearch();
   await restoreLocalCovers();     // show queued photos before retrying them
   syncPendingCovers();
   await openDeepLink();
+  /* Last, and only when a deep link did not already take over the
+     screen. Asking "continue your draft?" over an event somebody just
+     tapped a link to open would be answering a question they did not
+     ask. */
+  if (!window._openEventId) await offerDraftRestore();
 })();
 </script>
 </body>
