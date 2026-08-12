@@ -38,12 +38,13 @@ const EVENT_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        propertyOrdering: ['event_name','space_name','venue_match','category','venue_address','lineup','duration_source','venue_latitude','venue_longitude',
-          'date_literal','weekday_literal','year_literal','time_start','time_finish',
+        propertyOrdering: ['event_name','name_source','space_name','venue_match','venue_address','lineup','venue_latitude','venue_longitude',
+          'date_literal','weekday_literal','year_literal','time_start','time_finish','duration_source',
           'recurrence','city','community','description','price','currency','contact','location_source'],
         required: ['event_name'],
         properties: {
-          event_name:      { type:'string' },
+          event_name:      { type:'string', description:'The title as printed. If the flyer carries no title, WRITE one from what is there: activity plus venue, e.g. "vinyasa at Casa Verde". Never empty, and never a placeholder like "untitled".' },
+          name_source:     { type:'string', nullable:true, description:'"printed" when the title was on the flyer, "generated" when you wrote it.' },
           space_name:      { type:'string', nullable:true, description:'venue, studio, host or community name' },
           venue_match:     { type:'string', nullable:true, description:'If space_name matches one of the known venues supplied in the prompt, the exact string from that list. Null otherwise, and null when no list was supplied.' },
           lineup:          { type:'array', nullable:true, description:'Set times, programme or timetable INSIDE this one event. Empty or null when the flyer has no schedule. Never use this for separate events.',
@@ -52,8 +53,7 @@ const EVENT_SCHEMA = {
                                act:  { type:'string', description:'performer, act, talk or session name exactly as printed' },
                                stage:{ type:'string', nullable:true, description:'room or stage if the flyer names more than one' }
                              }, required:['act'] } },
-          duration_source: { type:'string', nullable:true, description:'"stated" when the finish time is printed, "inferred" when you derived it from the activity type. Null when there is no finish time.' },
-          category:        { type:'string', nullable:true, description:'exactly one of: music, wellness, food, market, sport, art, talk, film, social, workshop, nightlife, other. Yoga, breathwork and meditation are wellness. A dj night is nightlife. A gig is music. Null only if genuinely unclear.' },
+          duration_source: { type:'string', nullable:true, description:'"stated" when the finish time was printed on the photo, "inferred" when you worked it out from the kind of event. Null when there is no finish time at all.' },
           venue_address:   { type:'string', nullable:true, description:'street address as printed, without the venue name. Null if no address is printed.' },
           venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
           venue_longitude: { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
@@ -62,7 +62,7 @@ const EVENT_SCHEMA = {
           year_literal:    { type:'string', nullable:true, description:'year ONLY if printed' },
           time_start:      { type:'string', nullable:true, description:'24 hour HH:MM' },
           time_finish:     { type:'string', nullable:true, description:'24 hour HH:MM if printed' },
-          recurrence:      { type:'string', nullable:true, description:'plain words if stated, e.g. every sunday' },
+          recurrence:      { type:'string', nullable:true, description:'ONLY when the photo claims the event repeats, e.g. "every sunday". Plain words such as "weekly on sunday". A timetable of different weekly classes is not such a claim: leave null there. The app creates four weeks from whatever is written here.' },
           city:            { type:'string', nullable:true },
           community:       { type:'string', nullable:true, description:'wider local area, coarse and stable' },
           description:     { type:'string', nullable:true, description:'two or three short phrases. No dashes of any kind.' },
@@ -75,10 +75,11 @@ const EVENT_SCHEMA = {
     },
     read_quality: {
       type: 'object',
-      propertyOrdering: ['is_event','legibility','unreadable','crop_would_help'],
+      propertyOrdering: ['is_event','layout','legibility','unreadable','crop_would_help'],
       required: ['is_event','legibility'],
       properties: {
-        is_event:        { type:'boolean' },
+        is_event:        { type:'boolean', description:'True ONLY when the photo carries a time cue AND a location cue together. The system prompt states the bar.' },
+        layout:          { type:'string', nullable:true, description:'single, multi_date or recurring_schedule. Null when is_event is false.' },
         legibility:      { type:'string', description:'clear, partial, or poor' },
         unreadable:      { type:'array', nullable:true, items:{ type:'string' } },
         crop_would_help: { type:'boolean', nullable:true }
@@ -87,23 +88,57 @@ const EVENT_SCHEMA = {
   }
 };
 
-const systemPrompt = (today) => `You are a data formatting analyst. You read one uploaded photo and turn it into structured event records.
+/* Kept deliberately tight: every character here is an input token on
+   every extraction, and this used to be 7,259 of them — roughly 1,800
+   tokens, three quarters of the cost of reading a photo.
 
-The photo is whatever was in someone's camera roll: a printed flyer photographed at an angle, a poster on a wall, a screenshot of a social post or a map pin, a chalkboard, a handwritten sign, or something that is not about an event at all. Judge before you extract.
+   Two rules are NOT compressed, on purpose. The is_event bar and the
+   "EXIF is not the venue" rule are the two places where terseness
+   costs correctness, and both were written after real failures. Field
+   level detail lives in the responseSchema descriptions instead, which
+   Gemini reads at decode time, so repeating it here is paying twice
+   for the same instruction. */
+const systemPrompt = (today) => `You read one photo and return structured event data. Today is ${today}.
 
-Read everything visible, including text that is rotated, handwritten, or running around an edge. Expect perspective distortion, glare, shadow and clutter that is not part of the flyer.
+The photo is whatever was in someone's camera roll: a flyer shot at an angle, a poster, a WhatsApp or social screenshot, a chalkboard, a handwritten sign, a studio timetable, a place, a selfie, or nothing to do with an event. Read rotated, handwritten and edge-wrapped text. Expect distortion, glare and clutter.
 
-Report dates and times EXACTLY as printed. Do not convert them, do not work out the year, do not work out which weekday comes next. Put the printed characters in date_literal and weekday_literal and leave the arithmetic to us. If no year is printed, leave year_literal null rather than guessing.
+IS THIS AN EVENT?
+Set is_event true ONLY when the photo carries BOTH, together:
+  · a TIME cue: a date, a weekday, or a clock time
+  · a LOCATION cue: a venue name, a place name, or an address
+Neither alone qualifies. A date with no hint of where is not enough; a bar's frontage with no time is not enough. A title is not required, and neither is a printed flyer: "yoga tomorrow 9am at Casa Verde" in a screenshot passes, because it has both.
+If either cue is missing, set is_event false, return an empty events array and stop. Do not stretch to find an event. A photo that is not an event is an ordinary outcome the app handles well; inventing a vague one to seem useful is far worse than returning nothing.
 
-Venue coordinates come only from coordinates or a map pin printed in the image. If none are printed, leave them null. Any EXIF location supplied is where the PHOTO was taken, which is not where the event happens: a flyer in a cafe window advertises something elsewhere. Use EXIF only to name the city and the wider community. EXIF capture time is never the event time.
+LAYOUT
+  single — one event, one occurrence.
+  multi_date — one named event on several printed dates: one record PER DATE.
+  recurring_schedule — a timetable of different sessions tied to weekdays: one record PER SESSION LISTED.
+Emit each occurrence once. If something repeats weekly, say so in recurrence and still emit ONE record; the app creates the repeats.
 
-One record per distinct event date. A flyer listing four dates produces four records with shared fields repeated.
+DATES
+Report as printed, into date_literal / weekday_literal / year_literal. No conversion, no year guessing, no calendar arithmetic; we resolve against today deterministically. Relative words ("tomorrow", "this saturday") go into date_literal verbatim. Only fill year_literal if a year is printed.
+When the photo gives only a weekday, weekday_literal is the whole of the date and must be filled.
 
-Never invent coordinates, names, prices or dates the photo does not support. A blank field prompts the user; a wrong field does not.
+TIMES
+24 hour HH:MM. "7pm" is 19:00, "half seven" is 19:30 — that is reading a clock, and you should do it.
+If a finish time is printed, use it and set duration_source "stated". If not, work one out from the kind of thing this is, add it to time_start, and set duration_source "inferred":
+  yoga, pilates, fitness, breathwork, meditation → 60 min
+  class, workshop, talk, small group session → 90 min
+  concert, gig, dj set, performance → 3 h
+  party, festival, larger gathering → 4 h
+  dinner, supper, long meal → 2 h 30
+Fits none of these clearly? Leave time_finish and duration_source null rather than force a guess.
+"Opens 19:00" and "doors 8pm" are DOOR times: time_start only, finish null. Doors say nothing about length.
 
-Judge legibility honestly. If text was cut off, too small, blurred or lost to glare, say so and name what you could not read. Do not pretend a hard photo was easy.
+LOCATION
+venue_latitude and venue_longitude come ONLY from coordinates or a map pin printed inside the image. If none are printed, leave both null.
+Any EXIF location supplied with the photo is where the PHOTO WAS TAKEN, which is not where the event happens: a flyer in a cafe window advertises something across town. Never copy it into venue_latitude or venue_longitude. Its only jobs are naming city and community when the photo does not state them, and sanity checking a place name you did read. If the photo contradicts the supplied location, trust the photo and say so in location_note.
+community — the town, city or island. The single most useful location field.
 
-Today's date is ${today}.`;
+Never invent coordinates, names, prices or dates. A blank field prompts the person; a wrong one is believed and published. event_name is the one exception: write a short plain title when none is printed.
+
+LEGIBILITY
+Judge honestly, and only when is_event is true. Name what you could not read. On a timetable, extract the rows you can read and list the ones you cannot rather than dropping the whole photo to "poor". Do not soften a genuinely unreadable photo to "partial".`;
 
 const cors = (o) => ({
   'Access-Control-Allow-Origin': o,

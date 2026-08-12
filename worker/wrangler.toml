@@ -10,6 +10,23 @@ pattern = "api.bich.app"
 custom_domain = true
 
 # Covers live in R2: zero egress cost at any volume.
+# ─────────────────────────────────────────────────────────────────────
+# Cron. worker.js has had a scheduled() handler since venue
+# canonicalisation was added, and Cloudflare NEVER CALLED IT, because a
+# scheduled handler without a trigger here is dead code. The comment in
+# worker.js calls it "the safety net"; there was no net.
+#
+# So the only thing driving venue correction was the app's own poke
+# after a publish, at limit=3. If that request failed — offline, worker
+# cold start, tab closed — nothing ever retried, and the 30 day
+# recheck in venues_needing_review() could not happen at all.
+#
+# Every 15 minutes, limit 20. Overpass is called at most once every
+# 1.1s inside the handler, so a full run is ~22s of wall time.
+# ─────────────────────────────────────────────────────────────────────
+[triggers]
+crons = ["*/15 * * * *"]
+
 [[r2_buckets]]
 binding = "COVERS"
 bucket_name = "bich-covers"
