@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-05-61" />
+  <meta name="app-version" content="2026-08-05-64" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1061,6 +1061,16 @@ body.is-admin .detail-owner::before {
 .cover-notice { font-size: 0.62rem; letter-spacing: 0.04em; color: var(--accent); margin-top: 8px; display: none; }
 .cover-notice.show { display: block; }
 .cover-notice.err { color: var(--red); }
+/* Links inside a description. Underlined as well as coloured, because
+   colour alone is not an affordance for anybody who cannot see it, and
+   break-word so a long url cannot push the sheet sideways. */
+.desc-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
 .venue-list { margin-top: 6px; display: flex; flex-direction: column; }
 .venue-hit {
   display: flex; flex-direction: column; gap: 2px; text-align: left;
@@ -2839,7 +2849,7 @@ function openDetail(id) {
   hero.style.backgroundImage = shown ? `url('${shown}')` : '';
   hero.classList.toggle('detail-hero--nocover', !shown);
   document.getElementById('detailTitle').textContent = e.title;
-  document.getElementById('detailDesc').textContent = e.desc;
+  document.getElementById('detailDesc').innerHTML = linkifyDescription(e.desc);
   document.getElementById('detailWhen').textContent = e.when;
   /* events_public DOES expose host_handle now, and rowToEvent carries
      it. Our own handle still wins on our own events — "you" is more
@@ -5511,6 +5521,74 @@ function showBulkResult(made, failed, over, rq){
   };
 }
 
+/* Turn bare urls in a description into links.
+
+   This is the one place user text becomes HTML, so it is written to be
+   safe rather than clever:
+
+     · URLs are matched in the RAW text and everything AROUND them is
+       escaped. Escaping first and matching after would be worse than it
+       sounds — escapeHtml turns & into &amp;, so every query string
+       would be mangled inside its own link.
+     · only http and https survive. javascript: and data: are the
+       obvious attacks, and `new URL()` deciding the protocol is far
+       harder to fool than a regex trying to spot them.
+     · the match cannot contain < > " or ', so nothing it produces can
+       break out of the attribute or the tag.
+     · rel="noopener noreferrer nofollow" — noopener because a
+       target=_blank page can otherwise reach back through
+       window.opener, and this is a link a stranger typed.
+
+   Trailing punctuation is trimmed off the link: "see bich.app." should
+   not send anybody to a url ending in a full stop. */
+function linkifyDescription(text){
+  const s = String(text == null ? '' : text);
+  const re = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  let out = '', last = 0, m;
+
+  while ((m = re.exec(s)) !== null){
+    out += escapeHtml(s.slice(last, m.index));
+
+    let raw = m[0], tail = '';
+    const trail = raw.match(/[.,;:!?)\]}'"]+$/);
+    if (trail){ tail = trail[0]; raw = raw.slice(0, raw.length - tail.length); }
+
+    const href = /^www\./i.test(raw) ? 'https://' + raw : raw;
+    let ok = false;
+    try {
+      const u = new URL(href);
+      ok = (u.protocol === 'http:' || u.protocol === 'https:');
+    } catch(_){ ok = false; }
+
+    out += ok
+      ? `<a class="desc-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${escapeHtml(raw)}</a>`
+      : escapeHtml(raw);
+    out += escapeHtml(tail);
+    last = m.index + m[0].length;
+  }
+  out += escapeHtml(s.slice(last));
+  return out;
+}
+
+/* utm_source is added ON CLICK rather than baked into the href, so what
+   somebody sees on hover — and what they get if they copy the link — is
+   the url the host actually wrote. It also degrades honestly: if this
+   listener never runs, the link still works, just untagged.
+
+   An existing utm_source is left alone. If a host has already tagged
+   their own link, overwriting it would quietly break their analytics. */
+document.addEventListener('click', (e) => {
+  const a = e.target && e.target.closest && e.target.closest('a.desc-link');
+  if (!a) return;
+  let u;
+  try { u = new URL(a.href); } catch(_){ return; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+
+  e.preventDefault();
+  if (!u.searchParams.has('utm_source')) u.searchParams.set('utm_source', 'bich.app');
+  window.open(u.toString(), '_blank', 'noopener,noreferrer');
+});
+
 function escapeHtml(t){
   return String(t == null ? '' : t)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -5529,13 +5607,74 @@ function numOrNull(v){
   return Number.isFinite(n) ? n : null;
 }
 
+/* The same table the Gemini prompt uses, kept deliberately in step:
+   when one changes the other should. Only reached when no time was
+   printed AND the model did not supply one. */
+/* Whatever the poster printed, into HH:MM.
+
+   The prompt asks Gemini for 24 hour HH:MM and it usually obliges, but
+   when it echoes the poster verbatim the whole row dies: every one of
+   "22.00 h", "23.30 h", "8.55 h", "10.00h", "00.45 h" makes
+   new Date() return Invalid, and that is the entire event lost over a
+   separator. Portuguese posters use a dot and an h almost universally.
+
+   Deliberately permissive: this only ever runs on a string that was
+   going to fail anyway. */
+function normaliseTime(v){
+  if (v == null) return '';
+  let t = String(v).trim().toLowerCase();
+  if (!t) return '';
+
+  // 7pm / 7.30pm / 7:30 pm
+  const ampm = t.match(/^(\d{1,2})(?:[:.h](\d{2}))?\s*(am|pm)$/);
+  if (ampm){
+    let h = Number(ampm[1]) % 12;
+    if (ampm[3] === 'pm') h += 12;
+    return String(h).padStart(2,'0') + ':' + (ampm[2] || '00');
+  }
+
+  // 22.00 h · 22:00 · 22h00 · 22h · 8.55 h · 10.00h
+  const m = t.match(/^(\d{1,2})\s*[:.h]?\s*(\d{2})?\s*h?\.?$/);
+  if (m){
+    const h = Number(m[1]), mm = m[2] ? Number(m[2]) : 0;
+    if (h >= 0 && h <= 23 && mm >= 0 && mm <= 59){
+      return String(h).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+    }
+  }
+  return '';
+}
+
+function guessStartTime(title, desc){
+  const t = ((title || '') + ' ' + (desc || '')).toLowerCase();
+  if (/yoga|pilates|movement|meditation|breathwork/.test(t)) return '09:00';
+  if (/market|fair|feira|mercado/.test(t))                   return '10:00';
+  if (/brunch/.test(t))                                      return '11:00';
+  if (/workshop|class|talk|exhibition|opening|atelier|exposi/.test(t)) return '18:00';
+  if (/dinner|supper|jantar/.test(t))                        return '19:30';
+  if (/concert|gig|live|dj|party|club|noite|festa|m[uú]sica/.test(t)) return '21:00';
+  return '19:00';
+}
+
 async function saveEvent(spec){
   await ensureUser();
   if (!assertBoot()) return;   // a stated failure beats a blank screen
   await loadCommunities();
 
-  const startsAt = new Date(`${spec.date}T${spec.timeStart || '00:00'}`);
-  if (Number.isNaN(startsAt.getTime())) throw new Error('that date and time did not parse');
+  /* A missing TIME must never lose an event. The prompt now asks Gemini
+     to guess one from the kind of event, but this is the backstop for
+     when it declines or the row came from somewhere else — and it is
+     what turned seven perfectly readable rows of a monthly schedule
+     into seven "did not parse" failures.
+
+     19:00 is the same catch-all the prompt uses. A date, though, is not
+     recoverable: without one there is nothing to place the event on. */
+  const timeStart = normaliseTime(spec.timeStart) || guessStartTime(spec.title, spec.desc);
+  const startsAt = spec.date ? new Date(`${spec.date}T${timeStart}`) : new Date(NaN);
+  if (Number.isNaN(startsAt.getTime())){
+    throw new Error(spec.date
+      ? 'that date and time did not parse'
+      : 'no date could be read for this one');
+  }
   const endsAt = endsAtFor(startsAt, spec.timeFinish);
 
   const slug = communityForCoords(spec.lat, spec.lng) || resolveCommunity(spec.community);
@@ -7553,7 +7692,75 @@ function openCropper(bitmap, hint){
    arithmetic, which they do badly. So the model returns what is printed
    and we do the maths here: deterministic, free, and testable. */
 const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+
+/* Months in the languages posters here are actually printed in. This
+   was English only, so a festival programme headed AGOSTO resolved to
+   nothing at all — "ago" is not "aug", and every one of its thirty odd
+   events was lost over three letters.
+
+   Keyed on the first three letters after accents are stripped, which is
+   how they abbreviate. Collisions are all harmless: mar, abr, jun, jul,
+   nov are the same month in every language here, and feb/fev and
+   set/sep/sept differ only in spelling. */
+const MONTH_ALIASES = {
+  // portuguese
+  jan:0, fev:1, mar:2, abr:3, mai:4, jun:5,
+  jul:6, ago:7, set:8, out:9, nov:10, dez:11,
+  // spanish
+  ene:0, feb:1, may:4, sep:8, oct:9, dic:11,
+  // english already covered by MONTHS, but harmless to repeat
+  apr:3, aug:7, dec:11
+};
+
+function monthIndexFrom(word){
+  const w = deaccent(word).slice(0,3);
+  const en = MONTHS.indexOf(w);
+  if (en > -1) return en;
+  return (w in MONTH_ALIASES) ? MONTH_ALIASES[w] : -1;
+}
 const DAYS   = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+/* Weekdays as they are actually printed around here. DAYS was English
+   only, so a Portuguese poster reading "Sex 21 / Sáb 22 / Dom 23" —
+   which is most posters in Ericeira — matched nothing, and every row
+   failed with "that date and time did not parse".
+
+   Three letter keys, because that is how these are abbreviated in
+   practice. "sex" is Friday in Portuguese and is not a weekday in any
+   of the others, so one shared table is safe. */
+const DAY_ALIASES = {
+  dom:0, seg:1, ter:2, qua:3, qui:4, sex:5, sab:6,       // portuguese
+  lun:1, mie:3, jue:4, vie:5, sáb:6,                      // spanish
+  sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6         // english short
+};
+
+/* "Sáb" -> "sab". Lowercasing leaves accents alone and every one of
+   these words carries one. */
+function deaccent(t){
+  return String(t || '').toLowerCase()
+    .replace(/[áàâãä]/g,'a').replace(/[éèêë]/g,'e').replace(/[íìîï]/g,'i')
+    .replace(/[óòôõö]/g,'o').replace(/[úùûü]/g,'u').replace(/ç/g,'c');
+}
+
+function dayIndexFrom(text){
+  const t = deaccent(text);
+
+  /* Portuguese names its weekdays by number: 2ª feira is Monday and
+     6ª feira is Friday, and posters print them exactly that way. The
+     three letter table below never sees these because the word is
+     "feira" every time — the day is in the digit. */
+  const feira = t.match(/(\d)\s*[aª°º]?\s*[-\s]*feira/);
+  if (feira){
+    const n = Number(feira[1]);          // 2..6 -> monday..friday
+    if (n >= 2 && n <= 6) return n - 1;
+  }
+  const full = DAYS.findIndex(d => new RegExp('\\b' + d.slice(0,3)).test(t));
+  if (full > -1) return full;
+  for (const k of Object.keys(DAY_ALIASES)){
+    if (new RegExp('\\b' + deaccent(k)).test(t)) return DAY_ALIASES[k];
+  }
+  return -1;
+}
 
 function resolveDate(row, today){
   const now = today ? new Date(today + 'T00:00:00') : new Date();
@@ -7581,7 +7788,7 @@ function resolveDate(row, today){
     if (named){
       const nm = (named[1] || named[4] || '').slice(0,3);
       const dd = named[2] || named[3];
-      const idx = MONTHS.indexOf(nm);
+      const idx = monthIndexFrom(nm);
       if (idx > -1 && dd){ mo = idx; d = parseInt(dd,10); }
     }
     // "16.08", "16/08", "2026-08-16"
@@ -7638,8 +7845,24 @@ function resolveDate(row, today){
      date_literal is searched too, because "this saturday" and "every
      sunday" are date_literal text that contains a weekday and no
      number, and those used to fall through to '' and lose the event. */
-  const wd = ((row.weekday_literal || '') + ' ' + lit).toLowerCase().trim();
-  const wi = DAYS.findIndex(x => new RegExp('\\b' + x.slice(0,3)).test(wd));
+  /* A bare day number with no month: "Sex 21" on a poster whose month
+     lives in the title. Resolve to the next occurrence of that day of
+     the month — this month if it is still ahead, otherwise next. The
+     prompt now asks Gemini to fold the header month into each row, so
+     this is the fallback for when it cannot. */
+  const bare = lit.match(/^(?:[^\d]*?)(\d{1,2})(?:st|nd|rd|th)?[^\d]*$/);
+  if (bare && !row.weekday_literal){
+    const d = Number(bare[1]);
+    if (d >= 1 && d <= 31){
+      const here = new Date(now.getFullYear(), now.getMonth(), d);
+      if (here.getDate() === d && here >= now) return iso(here);
+      const next = new Date(now.getFullYear(), now.getMonth() + 1, d);
+      if (next.getDate() === d) return iso(next);
+    }
+  }
+
+  const wd = (row.weekday_literal || '') + ' ' + lit;
+  const wi = dayIndexFrom(wd);
   if (wi > -1){
     // ||7 so "sunday" on a Sunday means next Sunday, not this morning
     const delta = ((wi - now.getDay()) + 7) % 7 || 7;
