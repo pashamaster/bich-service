@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-04-59" />
+  <meta name="app-version" content="2026-08-05-61" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -4600,7 +4600,17 @@ function initMiniMap() {
     subdomains: 'abcd', maxZoom: 19
   }).addTo(m);
   addLabels(m);
-  m.on('click', (e) => setEventLocation(e.latlng.lat, e.latlng.lng, false));
+  m.on('click', (e) => {
+    /* A tap is a person saying where it is. pin_source has to record
+       that, because the gazetteer trigger maps it to a manual_pin
+       observation — and because an event whose pin was already
+       recalibrated carries pin_source 'venue', which the trigger
+       deliberately ignores. Without this line, dragging the pin on such
+       an event would change nothing anybody could learn from. */
+    draft.pinSource = 'manual';
+    draft.pinFromExif = false;
+    setEventLocation(e.latlng.lat, e.latlng.lng, false);
+  });
   window._miniMap = m;
   window._miniReady = true;
 
@@ -5988,19 +5998,32 @@ async function linkKnownVenue(name){
        (`- distance * 0.02`) contributed nothing. A flyer naming "Bar
        Central" was matched against every Bar Central in the table with
        no idea which town it meant. */
-    const rows = await sbRpc('search_venues', {
-      q: name,
-      near_lat: draft.lat ?? draft.photoLat ?? null,
-      near_lng: draft.lng ?? draft.photoLng ?? null,
-      community: (Store.data.home && Store.data.home.slug) || null, max_results: 1
+    /* resolve_venue_coords, not search_venues. The old code required
+       name EQUALITY — rows[0].name.toLowerCase() === name.toLowerCase()
+       — so "Bar Central" never matched the venue held as "Bar Central
+       Ericeira", which is exactly the spelling OSM returns. It scored
+       nothing on how sure we are about that venue either.
+
+       The new one is trigram based, accent insensitive, and multiplies
+       by the venue's own confidence, so a place five people have agreed
+       on outranks one somebody guessed at once. */
+    const rows = await sbRpc('resolve_venue_coords', {
+      p_name: name,
+      p_community: (Store.data.home && Store.data.home.slug) || null,
+      p_bias_lat: draft.lat ?? draft.photoLat ?? null,
+      p_bias_lng: draft.lng ?? draft.photoLng ?? null
     });
-    if (rows && rows[0] && rows[0].name.toLowerCase() === name.toLowerCase()){
-      draft.venueId = rows[0].id;
-      if (draft.lat == null && rows[0].lat != null){
-        setEventLocation(rows[0].lat, rows[0].lng, false);
+    const hit = rows && rows[0];
+    if (hit && hit.venue_id){
+      draft.venueId = hit.venue_id;
+      if (draft.lat == null && hit.lat != null){
+        setEventLocation(hit.lat, hit.lng, false);
+        /* 'venue' both marks it a guess in the UI and stops the
+           gazetteer trigger recording it — this pin came FROM a venue
+           and feeding it back would freeze that venue's estimate. */
         draft.pinSource = 'venue';
       }
-      console.info('[bich] matched known venue:', rows[0].name);
+      console.info(`[bich] venue "${hit.matched_name}" (confidence ${Number(hit.confidence).toFixed(2)})`);
       return draft.lat != null;
     }
   } catch(err){ console.warn('[bich] venue link failed', err.message); }
