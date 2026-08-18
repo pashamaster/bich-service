@@ -1154,24 +1154,47 @@ async function pinEvents(request, env, origin){
   if (!Array.isArray(queue) || !queue.length) return json({ checked: 0, pinned: 0 }, 200, origin);
 
   const results = [];
-  let pinned = 0;
+  let pinned = 0, lastVia = null;
 
   for (const row of queue) {
-    /* Nominatim asks for one request a second. 1.1s, same as the venue
-       sweep, and why a run of 20 takes about 22 seconds. */
-    if (results.length) await new Promise(r => setTimeout(r, 1100));
+    /* Nominatim asks for one request a second. Waited only when the
+       PREVIOUS row actually went to the network — a run answered
+       entirely from the gazetteer now costs no wall time at all, where
+       before every row paid 1.1s whether it needed to or not. */
+    if (lastVia === 'nominatim') await new Promise(r => setTimeout(r, 1100));
 
-    let hit = null;
+    /* Ask our own gazetteer FIRST. It is free, instant, needs no
+       network, and a venue several locals have independently agreed on
+       is better evidence than a Nominatim guess. Nominatim is the
+       fallback for places we have never seen. */
+    let hit = null, via = 'gazetteer';
     try {
-      hit = await geocodeNamed(row.venue_name, row.centre_lat, row.centre_lng);
+      const known = await supabaseRpc(env, 'resolve_venue_coords', {
+        p_name: row.venue_name, p_community: row.community,
+        p_bias_lat: row.centre_lat, p_bias_lng: row.centre_lng
+      });
+      const k = Array.isArray(known) && known[0];
+      if (k && k.lat != null) hit = { name: k.matched_name, lat: k.lat, lng: k.lng };
     } catch (err) {
-      results.push({ short_id: row.short_id, result: 'lookup failed: ' + (err && err.message) });
-      continue;      // deliberately unstamped: a network failure is not an answer
+      // a gazetteer miss is not fatal; fall through to the network
+      console.warn('[bich] gazetteer lookup failed:', err && err.message);
     }
+
+    if (!hit) {
+      via = 'nominatim';
+      try {
+        hit = await geocodeNamed(row.venue_name, row.centre_lat, row.centre_lng);
+      } catch (err) {
+        results.push({ short_id: row.short_id, result: 'lookup failed: ' + (err && err.message) });
+        continue;    // deliberately unstamped: a network failure is not an answer
+      }
+    }
+
+    lastVia = via;
 
     if (dry) {
       results.push({
-        short_id: row.short_id, venue_name: row.venue_name,
+        short_id: row.short_id, venue_name: row.venue_name, via,
         would_use: hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null
       });
       continue;
@@ -1184,7 +1207,7 @@ async function pinEvents(request, env, origin){
         p_match: hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null
       });
       if (typeof out === 'string' && out.startsWith('pinned')) pinned++;
-      results.push({ short_id: row.short_id, result: out });
+      results.push({ short_id: row.short_id, result: out, via });
     } catch (err) {
       results.push({ short_id: row.short_id, result: 'write failed: ' + (err && err.message) });
     }
