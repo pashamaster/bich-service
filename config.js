@@ -79,14 +79,20 @@ window.BICH_CONFIG = {
    every request would add a network hop and a failure mode for no
    benefit.
 
-   It does not need to, either: the worker talks to Gemini and R2 and
-   has no Supabase code in it at all. There is nothing to share.
+   It does not need to, either. The worker does reach Supabase — for
+   the magic cohort check and the two background sweeps — but it holds
+   its OWN copy of the url and the same public anon key, set at deploy
+   time. Nothing about that is shared with this file, and there is
+   still no service_role key anywhere in the system.
 
    Worker settings live in wrangler.toml:
      ALLOWED_ORIGINS    https://bich.app,https://www.bich.app
      PUBLIC_IMG_BASE    https://img.bich.app
      GEMINI_MODEL       gemini-3.5-flash-lite
      BICH_INVITE_CODES  (comma separated, blank = open)
-   and its secret with:
+     SUPABASE_URL       same project as above
+     SUPABASE_ANON_KEY  the same public key as above
+   and its secrets with:
      wrangler secret put GEMINI_API_KEY
+     wrangler secret put WORKER_SHARED_SECRET
    ────────────────────────────────────────────────────────────────── */

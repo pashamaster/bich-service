@@ -3248,6 +3248,9 @@ const OUTBOX_HANDLERS = {
       p_secret: deviceSecret(), p_operation_id: opId
     }));
     if (res && res.replayed) console.info('[bich] publish replayed, not duplicated');
+    /* The offline case the cron used to be the only answer for: this
+       publish happened with no network, so its poke never went out. */
+    pokeVenueJobs('queued publish');
     return res;
   },
   'attendance.set': async (payload, opId) => sbRpc('set_attendance', {
@@ -3259,10 +3262,14 @@ const OUTBOX_HANDLERS = {
      then lost its response would be reapplied, and a community update
      re-sent. Harmless for these three in practice, but "harmless in
      practice" is not a property you want to be relying on per-endpoint. */
-  'event.patch': async (payload, opId) => sbRpc('update_event_as', {
-    p_short_id: payload.short_id, p_user: CURRENT_USER.id,
-    p_secret: deviceSecret(), p_patch: payload.patch, p_operation_id: opId
-  }),
+  'event.patch': async (payload, opId) => {
+    const res = await sbRpc('update_event_as', {
+      p_short_id: payload.short_id, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_patch: payload.patch, p_operation_id: opId
+    });
+    pokeVenueJobs('queued edit');     // same reason as event.create above
+    return res;
+  },
   'event.cancel': async (payload, opId) => sbRpc('cancel_event_as', {
     p_short_id: payload.short_id, p_user: CURRENT_USER.id,
     p_secret: deviceSecret(), p_operation_id: opId
@@ -5199,6 +5206,36 @@ function canvasToBlob(canvas, mime, quality){
    token and compare. There is no update policy on events any more, so
    this is the only way a row can change - which is what closed the
    hole where anyone could rewrite any upcoming event. */
+/* ── nudge the two venue jobs ──────────────────────────────────────
+   Both correct the same thing from opposite ends: /venues/review takes
+   a venue that HAS coordinates and asks OpenStreetMap what it is
+   really called; /events/pin takes a venue that has only a NAME and
+   asks where it is. A publish or an edit can create work for either,
+   so both are poked and the worker's own queue decides which of them
+   actually has anything to do — an empty queue costs one indexed query
+   and never touches OSM.
+
+   Fire and forget, always after the write is already committed, and
+   completely invisible: no spinner, no toast, no result. If a match is
+   found the venue is corrected in the background; if not, nothing
+   happens and nobody is told anything. The tab closing before these
+   return costs nothing — the daily sweep is the net underneath.
+
+   THIS IS THE "within 10 minutes" PATH, and in practice it is seconds.
+   The cron is only the retry for the pokes that never arrived: an
+   offline publish that syncs later, a tab closed mid-request, and the
+   7 day / 30 day rechecks that neither endpoint can schedule itself.
+
+   Limits are small on purpose. This is one person's event, not a
+   backfill; the sweep is where bulk belongs. */
+function pokeVenueJobs(why){
+  if (!WORKER_URL) return;
+  for (const path of ['/venues/review?limit=3', '/events/pin?limit=3']){
+    fetch(WORKER_URL + path, { method: 'POST' }).catch(() => {});
+  }
+  console.info('[bich] venue jobs poked after', why);
+}
+
 /* opId is passed in rather than made here, so the caller can queue the
    same operation on failure. Generated when absent so the callers that
    do not care still get replay protection instead of none. */
@@ -5224,12 +5261,21 @@ async function updateEvent(shortId, patch, opId){
     }
   };
 
+  /* Every success leaves through here, so the venue nudge cannot be
+     forgotten by whichever of the four paths happened to win. An edit
+     can move a pin or rename a venue, which is new work for both
+     jobs — the same reason a publish pokes them. */
+  const done = (r) => {
+    pokeVenueJobs('edit');
+    return Array.isArray(r.row) ? r.row[0] : r.row;
+  };
+
   if (CURRENT_USER.id && Store.data.secretClaimed && mine){
     const r = await attempt('update_event_as', () => sbRpc('update_event_as', {
       p_short_id: shortId, p_user: CURRENT_USER.id,
       p_secret: deviceSecret(), p_patch: patch, p_operation_id: operationId
     }));
-    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
+    if (r.ok) return done(r);
   }
 
   /* An admin may correct anything — including their own event whose
@@ -5239,7 +5285,7 @@ async function updateEvent(shortId, patch, opId){
       p_user: CURRENT_USER.id, p_secret: deviceSecret(),
       p_short_id: shortId, p_patch: patch
     }));
-    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
+    if (r.ok) return done(r);
   }
 
   if (!mine && CURRENT_USER.id && Store.data.secretClaimed){
@@ -5247,7 +5293,7 @@ async function updateEvent(shortId, patch, opId){
       p_short_id: shortId, p_user: CURRENT_USER.id,
       p_secret: deviceSecret(), p_patch: patch, p_operation_id: operationId
     }));
-    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
+    if (r.ok) return done(r);
   }
 
   /* admin_update_event and update_event take no operation id. Both are
@@ -5258,7 +5304,7 @@ async function updateEvent(shortId, patch, opId){
     const r = await attempt('update_event (token)', () => sbRpc('update_event', {
       p_short_id: shortId, p_token: token, p_patch: patch
     }));
-    if (r.ok) return Array.isArray(r.row) ? r.row[0] : r.row;
+    if (r.ok) return done(r);
   }
 
   const e = new Error(tried.length
@@ -5797,17 +5843,7 @@ async function saveEvent(spec){
   claimDeviceSecret().then(() => maybeOfferPasskey()).catch(() => {});
   refreshMeCounts();         // one more hosted, and the host is going
 
-  /* Nudge the worker to check this venue's name against OpenStreetMap.
-     Fire and forget, after the event is already live, and completely
-     invisible: no spinner, no toast, no result. If it finds a
-     confident match the venue is corrected in the background; if it
-     does not, nothing happens and nobody is told anything.
-
-     The tab closing before this returns costs nothing — the worker
-     sweeps the queue every ten minutes anyway. */
-  if (WORKER_URL){
-    fetch(`${WORKER_URL}/venues/review?limit=3`, { method: 'POST' }).catch(() => {});
-  }
+  pokeVenueJobs('publish');
   /* Signal three: publishing somewhere makes it your community, every
      time, not just the first time. Deliberate enough to be silent. */
   if (spec.lat != null && spec.lng != null){
