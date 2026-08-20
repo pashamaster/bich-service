@@ -6,15 +6,33 @@
 <meta name="theme-color" content="#0d0c0a" />
 <title>bich.service</title>
 <style>
-  html,body{height:100%;margin:0;background:#0d0c0a;color:#e8e2d9;
+  /* Paper is the app's default theme, so this page defaults to paper
+     too. It used to be hardcoded dark, which meant every share link
+     opened on a black flash before landing in a light app. The script
+     below swaps it for anyone whose stored theme is night, before
+     paint. */
+  html,body{height:100%;margin:0;background:#f2ede4;color:#2b2722;
     font-family:'Geist Mono',ui-monospace,monospace;
     display:flex;align-items:center;justify-content:center}
-  p{font-family:'Playfair Display',Georgia,serif;font-style:italic;
+  html[data-theme="night"],html[data-theme="night"] body{background:#0d0c0a;color:#e8e2d9}
+  /* Playfair is never loaded here — no stylesheet, and adding one would
+     put a Google Fonts request in front of a page that lives for 50ms.
+     Georgia is the fallback that actually renders. */
+  p{font-family:Georgia,'Times New Roman',serif;font-style:italic;
     font-size:1.1rem;opacity:.55;letter-spacing:.02em}
 </style>
 </head>
 <body>
   <p>one moment</p>
+<script>
+/* Match the app's theme before anything paints. Same storage key and
+   shape the app uses; wrapped because a corrupt or absent value must
+   never stop the redirect below from running. */
+try {
+  var st = JSON.parse(localStorage.getItem('bich.local.v1') || '{}');
+  if (st && st.theme === 'night') document.documentElement.setAttribute('data-theme','night');
+} catch (e) {}
+</script>
 <script>
 /* GitHub Pages has no server side routing, so a share link like
    bich.app/e/xf3k9q2m lands here instead of on the app. Pages serves
