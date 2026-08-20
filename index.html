@@ -918,6 +918,22 @@ body.is-admin .detail-owner::before {
 .edit-sheet__note { font-family: var(--font-mono); font-size: 0.6rem; color: var(--red); margin-top: 12px; }
 
 .map-filter-bar--cat { border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.pin-row__c {
+  margin-left: auto;
+  font-family: var(--font-serif); font-style: italic;
+  font-size: 0.85rem; color: var(--accent);
+}
+.pin-more {
+  display: block; width: 100%;
+  background: none; border: none; cursor: pointer;
+  padding: var(--space-md);
+  font-family: var(--font-mono); font-size: 0.6rem;
+  letter-spacing: 0.14em; text-transform: lowercase;
+  color: var(--muted); text-align: center;
+  border-top: 1px solid var(--border);
+}
+.pin-more:hover { color: var(--accent); }
+
 .pin-list {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 1550;
   max-height: 62dvh; overflow-y: auto; background: var(--bg);
@@ -2039,7 +2055,7 @@ if ('serviceWorker' in navigator) {
 
       <div class="me-block">
         <span class="text-label">magic</span>
-        <p class="me-note" id="magicState">magic is invite only right now.</p>
+        <p class="me-note" id="magicState">checking…</p>
         <div class="me-row" id="magicCodeRow">
           <input class="input" id="magicCode" placeholder="invite code"
                  autocapitalize="none" autocorrect="off" spellcheck="false" />
@@ -4244,6 +4260,14 @@ function initMap() {
   map.on('zoomend', zoomClass);
   zoomClass();
 
+  /* The map asks for its own data whenever it settles. Debounced, and
+     skipped entirely when the new box is already inside the one we
+     hold — see loadMapView. A programmatic move counts: framing the
+     map on a community should load that community. */
+  map.on('moveend', () => scheduleMapLoad(false));
+  map.on('zoomend', () => scheduleMapLoad(true));   // budget changes with zoom
+  scheduleMapLoad(true);                            // and once, on first open
+
   // NOTE: For production, swap to Protomaps self-hosted or Stadia per spec.
   // This is dev-only use of OSM public tiles for the prototype.
   const tiles = currentTiles();
@@ -4269,6 +4293,121 @@ function initMap() {
    The four chips existed in the markup and did nothing except swap a
    CSS class. Nothing read data-filter, so "today" and "next week"
    showed the same pins. */
+/* ═══════════════════════════════════════════════════════════════════
+   THE MAP'S OWN DATA
+
+   The map used to draw the EVENTS array — the FEED's result set — so
+   every spatial limit it had was inherited from a query that was never
+   about space. A Lisbon account could not see Ericeira 36km away
+   because feed_ranked scopes to a 25km radius or a matching community
+   slug, and the widening ladder only steps when a rung comes back
+   nearly empty.
+
+   Now the map asks by VIEWPORT and keeps its own array. The separate
+   array is not a detail: if map results landed in EVENTS, panning to
+   Ericeira would rewrite the Lisbon feed underneath the person.
+
+   Community is no longer the filter. It is the label on the status
+   line, which is what it was always good for.
+   ═══════════════════════════════════════════════════════════════════ */
+
+let MAP_EVENTS = [];          // the map's own rows, never the feed's
+let _mapFetchSeq = 0;         // guards against a slow response landing last
+let _mapLastBox = null;       // the box we already hold, for the skip test
+let _mapFetchTimer = null;
+
+/* Pin budget by zoom. The number of DISTINGUISHABLE positions grows
+   with zoom — at country zoom two events 5km apart are one pixel, at
+   street zoom they are opposite edges — so a constant is either noise
+   at the top or artificial scarcity at the bottom.
+
+   These count PINS, not events. One venue with forty classes is one
+   pin, so 60 pins is routinely 150+ events. */
+function pinBudget(zoom){
+  if (zoom == null) return 60;
+  if (zoom <= 9)  return 25;   // country / region
+  if (zoom <= 12) return 40;   // metro
+  if (zoom <= 15) return 60;   // town / district
+  return 90;                   // a few streets
+}
+
+/* Does the box we already hold contain the one being asked for? Panning
+   inside an area already loaded must cost nothing, or one drag across a
+   city is dozens of queries. */
+function boxCovers(held, want){
+  if (!held) return false;
+  return held.s <= want.s && held.n >= want.n && held.w <= want.w && held.e >= want.e;
+}
+
+function viewBox(map, pad){
+  const b = map.getBounds().pad(pad == null ? 0.25 : pad);
+  return { s: b.getSouth(), w: b.getWest(), n: b.getNorth(), e: b.getEast() };
+}
+
+async function loadMapView(force){
+  const map = window._map;
+  if (!map || !SB_READY()) return;
+
+  /* A "me" list owns the map while it is open — those are a record, not
+     a recommendation, and they are never capped or re-ranked. */
+  if (meListMode) return;
+
+  const want = viewBox(map, 0.25);
+  if (!force && boxCovers(_mapLastBox, want)) return;
+
+  const [from, to] = filterRange(mapFilter);
+  const seq = ++_mapFetchSeq;
+  try {
+    const rows = await sbRpc('map_events_in_view', {
+      p_viewer:   CURRENT_USER.id || null,
+      p_min_lat:  want.s, p_min_lng: want.w,
+      p_max_lat:  want.n, p_max_lng: want.e,
+      p_from:     from ? new Date(from).toISOString()
+                       : new Date(Date.now() - MAP_PAST_MS).toISOString(),
+      p_to:       to ? new Date(to).toISOString() : null,
+      p_max_pins: pinBudget(map.getZoom())
+    });
+    /* A slower earlier request must never overwrite a newer answer. */
+    if (seq !== _mapFetchSeq) return;
+    MAP_EVENTS = (rows || []).map(rowToEvent).map((e, i) => {
+      const r = rows[i];
+      e.crossed    = r.crossed || 0;
+      e.pinKey     = r.pin_key;
+      e.stackRank  = r.stack_rank;
+      e.stackSize  = r.stack_size;
+      e.isPast     = r.is_past === true || undefined;
+      return e;
+    });
+    _mapLastBox = want;
+    paintMap();
+    mapStatusForCentre(map);
+  } catch(err){
+    console.warn('[bich] map view query failed —', err.message);
+  }
+}
+
+/* Community as the LABEL, not the filter. Resolving the centre says
+   "ericeira" on the status line; it decides nothing about what is
+   drawn. */
+async function mapStatusForCentre(map){
+  try {
+    const c = map.getCenter();
+    const slug = await sbRpc('community_for_point', { p_lat: c.lat, p_lng: c.lng });
+    const known = (KNOWN_COMMUNITIES || []).find(k => k.slug === slug);
+    const where = known ? known.name : slug;
+    /* Stored, not written. paintMap() is the single owner of the footer
+       count — two writers on one element is how it ends up flickering
+       between two truths. */
+    window._mapWhere = where ? String(where).toLowerCase() : null;
+    paintMap();
+  } catch(_){ /* a label is not worth an error */ }
+}
+
+function scheduleMapLoad(force){
+  clearTimeout(_mapFetchTimer);
+  _mapFetchTimer = setTimeout(() => loadMapView(force), 400);
+}
+
 let mapFilter = 'any';
 
 function filterRange(name){
@@ -4343,7 +4482,11 @@ function eventIsOver(e){
 function mappableEvents(){
   const [from, to, includesNow, tail] = filterRange(mapFilter);
   const now = Date.now();
-  return EVENTS.filter(e => {
+  /* MAP_EVENTS while the map owns itself; EVENTS when a "me" list is
+     open, because those lists are a record and are plotted exactly as
+     they stand — uncapped, unranked, nothing dropped. */
+  const source = meListMode ? EVENTS : (MAP_EVENTS.length ? MAP_EVENTS : EVENTS);
+  return source.filter(e => {
     /* A pin is required. L.marker([null, null]) throws "Invalid
        LatLng" and takes the whole map down with it, and plenty of
        events publish without coordinates. */
@@ -4387,21 +4530,78 @@ function mappableEvents(){
    never appeared, and anything removed stayed forever. */
 /* What a stacked pin opens. Forty classes at one studio need a list,
    not a marker that silently picks one. */
+/* How many of a stack to show before asking. A venue with forty
+   classes is a scrolling wall in which the two worth knowing about are
+   buried. */
+const PIN_PREVIEW = 5;
+
+/* Rank inside one pin.
+
+   Distance is deliberately absent, and cannot be otherwise: every event
+   in a stack shares coordinates — that is what put them in the stack —
+   so distance is identical for all of them and can discriminate
+   nothing. Distance ranks pins against each other; time and audience
+   rank events within one.
+
+   map_events_in_view already computes this in SQL and returns
+   stackRank, so this is the fallback for rows that arrived some other
+   way — a "me" list, or the feed array before the map has loaded. */
+function stackScore(e){
+  const d = eventDate(e);
+  if (!d) return 0;
+  const days = Math.max(0, (d.getTime() - Date.now()) / 86400000);
+  const imminence = Math.exp(-days / 6);
+  const crossed = Math.min(1, (e.crossed || 0) / 5);
+  const going   = Math.min(1, (e.going || e.going_count || 0) / 30);
+  return imminence * (1 + 0.6 * crossed + 0.3 * going);
+}
+
+function stackOrder(group){
+  return group.slice().sort((a, b) => {
+    /* Upcoming always beats finished, as an absolute gate — the same
+       rule the feed applies with over_now before score. */
+    const pa = a.isPast ? 1 : 0, pb = b.isPast ? 1 : 0;
+    if (pa !== pb) return pa - pb;
+    if (a.stackRank && b.stackRank) return a.stackRank - b.stackRank;
+    return stackScore(b) - stackScore(a);
+  });
+}
+
 function openPinList(group){
   const panel = document.getElementById('pinList');
   const body  = document.getElementById('pinListBody');
   const head  = document.getElementById('pinListHead');
   if (!panel) return;
-  const sorted = group.slice().sort((a, b) => (eventDate(a) || 0) - (eventDate(b) || 0));
-  head.textContent = `${sorted.length} at ${sorted[0].venue || 'this pin'}`;
-  body.innerHTML = sorted.map(e => {
+
+  const ranked = stackOrder(group);
+  head.textContent = `${ranked.length} at ${ranked[0].venue || 'this pin'}`;
+
+  const row = (e) => {
     const d = eventDate(e) || new Date();
+    const c = (e.crossed || 0) >= 3
+      ? `<span class="pin-row__c">${e.crossed}</span>` : '';
     return `<button type="button" class="pin-row" data-id="${escapeHtml(e.id)}">
       <span class="pin-row__when">${escapeHtml(whenLabel(d))}</span>
-      <span class="pin-row__t">${escapeHtml(e.title)}</span>
+      <span class="pin-row__t">${escapeHtml(e.title)}</span>${c}
     </button>`;
-  }).join('');
+  };
+
+  const draw = (all) => {
+    /* Ranked while trimmed, chronological once expanded: past the point
+       where somebody asked for all forty, they are reading a timetable,
+       and timetables are read in time order. */
+    const list = all
+      ? ranked.slice().sort((a, b) => (eventDate(a) || 0) - (eventDate(b) || 0))
+      : ranked.slice(0, PIN_PREVIEW);
+    body.innerHTML = list.map(row).join('')
+      + (!all && ranked.length > PIN_PREVIEW
+          ? `<button type="button" class="pin-more" id="pinMore">show all ${ranked.length} →</button>`
+          : '');
+  };
+  draw(false);
+
   body.onclick = (ev) => {
+    if (ev.target.closest('#pinMore')){ draw(true); return; }
     const b = ev.target.closest('[data-id]');
     if (!b) return;
     panel.hidden = true;
@@ -4509,7 +4709,12 @@ function paintMap(){
   });
 
   byPin.forEach(group => {
-    const first = group[0];
+    /* The marker advertises the strongest event in its stack, by the
+       SAME function the list opens with. This read group[0] — whatever
+       order the array happened to be in — while openPinList re-sorted
+       chronologically, so a pin could advertise one event and the list
+       it opened could lead with another. */
+    const first = stackOrder(group)[0];
     const n = group.length;
 
     /* Priority. e.crossed is circle_count: how many people this viewer
@@ -4584,9 +4789,16 @@ function paintMap(){
 
   const count = document.querySelector('.map-footer-sheet__count');
   if (count){
-    const pinless = EVENTS.length - EVENTS.filter(e => e.lat != null && e.lng != null).length;
+    /* Counted from the SAME source the markers came from. This read
+       EVENTS — the feed's array — so once the map got its own query it
+       would have reported "3 without a pin" about events that were
+       never in view. */
+    const src = (meListMode ? EVENTS : (MAP_EVENTS.length ? MAP_EVENTS : EVENTS));
+    const pinless = src.length - src.filter(e => e.lat != null && e.lng != null).length;
+    const where = !meListMode && window._mapWhere ? ` in ${escapeHtml(window._mapWhere)}` : '';
     count.innerHTML = `<span class="num">${rows.length}</span> `
       + (rows.length === 1 ? 'event' : 'events')
+      + where
       + (byPin.size && byPin.size !== rows.length ? ` at ${byPin.size} place${byPin.size === 1 ? '' : 's'}` : '')
       + (mapFilter === 'any' ? '' : ' ' + document.querySelector('.map-chip.active').textContent.trim())
       + (pinless ? ` · ${pinless} without a pin` : '');
@@ -5678,10 +5890,66 @@ async function bulkCreate(rows, rq){
   try { img = await uploadCover(); }
   catch(_){ /* a shared cover is nice to have, not a reason to stop */ }
 
-  const made = [], failed = [];
+  const made = [], failed = [], skipped = [];
+  /* Every start time we have already created in THIS run, keyed by
+     venue+day+title, so one photo cannot produce the same session twice
+     — a programme with a repeated header does exactly that. */
+  const seenHere = new Set();
+
   for (let i = 0; i < list.length; i++){
     const r = list[i];
     coverNotice.textContent = `creating ${i + 1} of ${list.length}…`;
+
+    /* ── DEDUPE ──────────────────────────────────────────────────────
+       You photographed a flyer; you did not type forty events. So a
+       row that already exists is SKIPPED silently and counted, rather
+       than warned about — re-uploading the same timetable should say
+       "18 added · 22 already listed" and create nothing.
+
+       Manual publishing does not behave this way and must not: somebody
+       typing an event knows what they meant, and a hard block on a
+       heuristic is how the app becomes unusable at the one venue that
+       genuinely runs two things at once. */
+    /* Built exactly as saveEvent() builds it a few lines below, so the
+       dedupe check tests the timestamp that will actually be written —
+       including the 19:00 fallback for a row whose time did not parse. */
+    const _t = normaliseTime(r.time_start) || guessStartTime(r.event_name, r.description);
+    const _d = r.date ? new Date(`${r.date}T${_t}`) : new Date(NaN);
+    const startsAt = Number.isNaN(_d.getTime()) ? null : _d;
+    const localKey = [
+      (r.space_name || '').trim().toLowerCase(),
+      (r.date || ''), _t,
+      (r.event_name || '').trim().toLowerCase()
+    ].join('|');
+
+    if (seenHere.has(localKey)){
+      skipped.push({ title: r.event_name || '(untitled)', why: 'twice on this photo' });
+      continue;
+    }
+    seenHere.add(localKey);
+
+    if (startsAt && SB_READY()){
+      try {
+        const hit = await sbRpc('find_duplicate_event', {
+          p_title: r.event_name || '',
+          p_starts_at: startsAt.toISOString(),
+          p_venue_name: r.space_name || null,
+          p_venue_lat: r.venue_latitude === '' ? null : r.venue_latitude,
+          p_venue_lng: r.venue_longitude === '' ? null : r.venue_longitude,
+          p_venue_id: null, p_exclude: null
+        });
+        const dupe = Array.isArray(hit) ? hit[0] : hit;
+        if (dupe && dupe.short_id){
+          skipped.push({ title: r.event_name || '(untitled)', why: 'already listed' });
+          continue;
+        }
+      } catch(err){
+        /* A dedupe check that could not run must never stop a publish.
+           A duplicate is a tidiness problem; a lost event is not. */
+        console.warn('[bich] dupe check skipped —', err.message);
+      }
+    }
+
     try {
       const saved = await saveEvent({
         title: r.event_name,
@@ -5715,7 +5983,7 @@ async function bulkCreate(rows, rq){
 
   coverBusy.classList.remove('show');
   await loadFeed();
-  showBulkResult(made, failed, over, rq);
+  showBulkResult(made, failed, over, rq, skipped);
 }
 
 /* The one popup that ends the photo flow, whichever way it went.
@@ -5728,7 +5996,8 @@ async function bulkCreate(rows, rq){
 
    `made` empty and `failed` empty means "nothing was created and
    nothing went wrong": the step 6 fallback. */
-function showBulkResult(made, failed, over, rq){
+function showBulkResult(made, failed, over, rq, skipped){
+  skipped = skipped || [];
   const scrim = document.getElementById('bulkScrim');
   const panel = document.getElementById('bulkResult');
   const body  = document.getElementById('bulkResultList');
@@ -5737,11 +6006,17 @@ function showBulkResult(made, failed, over, rq){
   if (!scrim || !panel || !body) return;
 
   const created  = made.length > 0;
-  const fellBack = !created && !failed.length;
+  /* Skipped duplicates are not failures, so they must not turn the
+     "nothing went wrong" case into an error. Re-uploading a timetable
+     you already published creates nothing and breaks nothing. */
+  const fellBack = !created && !failed.length && !skipped.length;
 
   const head = created
     ? `${made.length} event${made.length === 1 ? '' : 's'} created`
-    : (fellBack ? 'photo attached' : 'nothing could be created');
+      + (skipped.length ? ` · ${skipped.length} already listed` : '')
+    : (skipped.length && !failed.length
+        ? `already listed · nothing to add`
+        : (fellBack ? 'photo attached' : 'nothing could be created'));
 
   if (msg){
     msg.textContent = created
@@ -5766,6 +6041,10 @@ function showBulkResult(made, failed, over, rq){
     failed.map(f => `<div class="bulk-row bulk-row--bad">
         <span class="bulk-row__t">${escapeHtml(f.title)}</span>
         <span class="bulk-row__d">${escapeHtml(f.why)}</span>
+      </div>`).join('') +
+    skipped.map(k => `<div class="bulk-row">
+        <span class="bulk-row__t">${escapeHtml(k.title)}</span>
+        <span class="bulk-row__d">${escapeHtml(k.why)}</span>
       </div>`).join('') +
     (over > 0 ? `<div class="bulk-row bulk-row--bad"><span class="bulk-row__t">${over} more on the photo were not created</span><span class="bulk-row__d">${BULK_MAX} is the limit per photo</span></div>` : '') +
     ((rq && rq.legibility && rq.legibility !== 'clear')
@@ -6315,6 +6594,12 @@ async function loadCommunities(){
    Ericeira resident's feed. So islands show the whole island, once,
    and stop.                                                        */
 const FEED_MIN_EVENTS = 20;
+/* The default feed's budget. A list scrolls, so this is not a display
+   limit the way the map's pin budget is — it is a RELEVANCE limit: past
+   this the ranking has stopped being confident and is padding.
+   The "me" lists ignore it entirely; they are a record, not a
+   recommendation. */
+const FEED_MAX_EVENTS = 40;
 
 function reachLadder(c){
   const start = c.radius_km || 25;
@@ -6839,11 +7124,40 @@ async function feedAnchor(){
    anybody without a community. That is not a bug you fix by adding the
    missing call; it is a bug you fix by making it impossible to forget,
    because a fourth path would have forgotten it too. */
+/* At most this many events from one venue, per date bucket, before the
+   rest are pushed to the end of their bucket.
+
+   This becomes urgent the moment the feed is capped, and magic makes it
+   likely rather than hypothetical: ONE photo of a studio timetable
+   produces twenty events at one venue in one publish, and without this
+   they occupy the entire feed. review.md §5.7 has carried it as an open
+   question since the ranking landed. */
+const VENUE_RUN_MAX = 2;
+
+function capVenueRuns(rows){
+  const seen = new Map();          // venue key -> how many kept so far
+  const keep = [], demoted = [];
+  rows.forEach(e => {
+    const k = (e.venueId || e.venue || '').toString().trim().toLowerCase();
+    if (!k){ keep.push(e); return; }
+    const n = (seen.get(k) || 0) + 1;
+    seen.set(k, n);
+    (n <= VENUE_RUN_MAX ? keep : demoted).push(e);
+  });
+  /* Demoted, never dropped. A venue's third event is still a real event
+     and somebody may be looking for exactly it — it just stops crowding
+     out everywhere else. */
+  return keep.concat(demoted);
+}
+
 function applyFeedRows(rows){
   EVENTS.length = 0;
-  (rows || []).forEach(r => EVENTS.push(rowToEvent(r)));
+  capVenueRuns((rows || []).map(rowToEvent)).forEach(e => EVENTS.push(e));
   renderBundles();
-  if (window._mapReady) paintMap();
+  /* The map no longer draws this array — it has its own query and its
+     own array. Repaint only when a "me" list is driving the map, which
+     is the one case where the two still share. */
+  if (window._mapReady && meListMode) paintMap();
 }
 
 async function loadFeed(){
@@ -6862,7 +7176,7 @@ async function loadFeed(){
         const args = {
           viewer: CURRENT_USER.id || null,
           near_lat: anchor.centre_lat, near_lng: anchor.centre_lng,
-          radius_km: km, community: anchor.slug, max_results: 60
+          radius_km: km, community: anchor.slug, max_results: FEED_MAX_EVENTS
         };
         rows = window._noRanking
           ? await sbRpc('feed_near', args)
@@ -8699,7 +9013,7 @@ async function refreshMagicAccess(){
   if (magicBtn) magicBtn.hidden = !on;
   if (note) note.textContent = on
     ? 'magic is on for this account. it reads a photo and posts what it finds.'
-    : 'magic is invite only right now. got a code?';
+    : 'magic is not on for this account yet. got a code?';
   if (row) row.hidden = on;
   return on;
 }
