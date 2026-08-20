@@ -1,25 +1,40 @@
 /**
  * bich.service — Cloudflare Worker
  *
- * Holds exactly two things the browser must never see:
+ * Holds three things the browser must never see:
  *   1. the Gemini API key
  *   2. write access to the image bucket
+ *   3. WORKER_SHARED_SECRET, which the database checks before it will
+ *      hand over a work queue or accept a correction
  *
- * It deliberately holds NO Supabase credentials. Events go straight
- * from the browser to Supabase with the publishable key, and the
- * database's own row policies decide what is allowed. That keeps the
- * one genuinely dangerous credential, the service role key, out of
- * every system: not in the repo, not in the browser, not here.
+ * It deliberately holds NO SERVICE ROLE key. Events go straight from
+ * the browser to Supabase with the publishable key, and the database's
+ * own row policies decide what is allowed. That keeps the one genuinely
+ * dangerous credential out of every system: not in the repo, not in the
+ * browser, not here.
+ *
+ * It does hold SUPABASE_ANON_KEY — the same publishable string already
+ * in config.js — because three things here need to reach Postgres: the
+ * magic cohort check, the venue sweep, and the event pin sweep. That
+ * key grants nothing the public does not already have; the two sweeps
+ * are gated by WORKER_SHARED_SECRET on top of it.
  *
  * Setup:
  *   wrangler r2 bucket create bich-covers
  *   wrangler secret put GEMINI_API_KEY
+ *   wrangler secret put WORKER_SHARED_SECRET   # and set_worker_secret() in SQL
  *   wrangler deploy
  *
  * Endpoints:
- *   POST /extract-event   image -> event records
+ *   POST /extract-event   image -> event records          (magic only)
  *   POST /upload          image -> stored in R2, returns a url
  *   GET  /img/<key>       serves a stored image
+ *   GET  /health[?deep=1] is this deployment wired up correctly
+ *   GET  /geocode         lat,lng -> coarse community
+ *   GET  /places          name    -> venue suggestions from OSM
+ *   POST /venues/review   canonicalise hand-typed venues  (worker secret)
+ *   POST /events/pin      pin events that only have a name (worker secret)
+ *   POST /passkey/{register,auth}/{begin,finish}
  */
 
 import {
@@ -28,6 +43,15 @@ import {
 } from './passkey.js';
 
 const MAGIC_LOCKED = 'magic is invite only right now';
+
+/* The worker's own ceiling on the venue shortlist, not an expectation.
+   index.html sends VENUE_CANDIDATES = 12, ranked by how busy each place
+   is; every name past that is prompt text on every extraction for a
+   case that almost never fires. This was 40, left behind when the
+   client dropped 30 to 12, so a client bug or a crafted request could
+   have quietly tripled the prompt. Keep the two numbers equal — the
+   worker pays the tokens, so the worker gets the last word. */
+const MAX_KNOWN_VENUES = 12;
 
 const EVENT_SCHEMA = {
   type: 'object',
@@ -39,7 +63,7 @@ const EVENT_SCHEMA = {
       items: {
         type: 'object',
         propertyOrdering: ['event_name','name_source','space_name','venue_match','venue_address','lineup','venue_latitude','venue_longitude',
-          'date_literal','weekday_literal','year_literal','time_start','time_finish','duration_source',
+          'date_literal','weekday_literal','year_literal','time_start','time_source','time_finish','duration_source',
           'recurrence','city','community','description','price','currency','contact','location_source'],
         required: ['event_name'],
         properties: {
@@ -53,6 +77,7 @@ const EVENT_SCHEMA = {
                                act:  { type:'string', description:'performer, act, talk or session name exactly as printed' },
                                stage:{ type:'string', nullable:true, description:'room or stage if the flyer names more than one' }
                              }, required:['act'] } },
+          time_source:     { type:'string', nullable:true, description:'"stated" when a start time was printed, "inferred" when you guessed it from the kind of event. Never leave time_start empty.' },
           duration_source: { type:'string', nullable:true, description:'"stated" when the finish time was printed on the photo, "inferred" when you worked it out from the kind of event. Null when there is no finish time at all.' },
           venue_address:   { type:'string', nullable:true, description:'street address as printed, without the venue name. Null if no address is printed.' },
           venue_latitude:  { type:'number', nullable:true, description:'ONLY from coordinates or a pin printed in the image' },
@@ -79,7 +104,7 @@ const EVENT_SCHEMA = {
       required: ['is_event','legibility'],
       properties: {
         is_event:        { type:'boolean', description:'True ONLY when the photo carries a time cue AND a location cue together. The system prompt states the bar.' },
-        layout:          { type:'string', nullable:true, description:'single, multi_date or recurring_schedule. Null when is_event is false.' },
+        layout:          { type:'string', nullable:true, description:'single, multi_date, recurring_schedule or programme. Null when is_event is false.' },
         legibility:      { type:'string', description:'clear, partial, or poor' },
         unreadable:      { type:'array', nullable:true, items:{ type:'string' } },
         crop_would_help: { type:'boolean', nullable:true }
@@ -113,14 +138,40 @@ LAYOUT
   single — one event, one occurrence.
   multi_date — one named event on several printed dates: one record PER DATE.
   recurring_schedule — a timetable of different sessions tied to weekdays: one record PER SESSION LISTED.
+  programme — a multi day event programme: one date range in the header ("7 a 16 AGOSTO"), then a block per DAY, each listing several different acts at their own times. Village festas, festivals, fair programmes. One record PER TIMED ITEM, not per day: a day showing 22.00 ESPETACULO COM X and 23.30 BAILE COM Y is TWO events. This is the layout for anything where each date has its own distinct line up — multi_date is only for ONE event repeated, and a programme is not that.
 Emit each occurrence once. If something repeats weekly, say so in recurrence and still emit ONE record; the app creates the repeats.
+Never return more than 50 events. If the photo lists more, return the 50 soonest and say so in read_quality.unreadable.
+
+ONE EVENT OR SEVERAL? The judgement the layout names cannot make on their own.
+Return ONE event with a filled lineup when ALL of these hold: the same calendar date; the same venue; the listed times sit inside one continuous span; the rows read as performers, acts, stages or sessions rather than as event titles; one door time or one price covers all of them. Headings like "line up", "set times", "programme", "timetable", "stages", "schedule" mean ONE event — put every row in lineup, in printed order.
+Return SEPARATE events when ANY of these hold: the dates differ; the venues differ; a row carries its own price or ticket link; the gaps between rows are days rather than hours. Headings like "what's on", "this month", "upcoming", "programme for September", or a calendar grid, mean SEVERAL events, one record per date.
+If it is genuinely ambiguous, return ONE event with a lineup. Merging can be undone later; splitting cannot — three cards for the same night get shared and marked going and can never be quietly recombined.
 
 DATES
 Report as printed, into date_literal / weekday_literal / year_literal. No conversion, no year guessing, no calendar arithmetic; we resolve against today deterministically. Relative words ("tomorrow", "this saturday") go into date_literal verbatim. Only fill year_literal if a year is printed.
 When the photo gives only a weekday, weekday_literal is the whole of the date and must be filled.
+CARRY THE HEADER DOWN. A schedule prints shared facts ONCE, large, at the top — the month "AGOSTO", the year, the town, the venue "Largo das Ribas" — then each row shows only a day number and a name. Copy every one of those into EVERY record: date_literal becomes "21 agosto 2026", not "21", and space_name and community are filled from the header too. You are reading them off the same image, not calculating. A bare day number with no month is the commonest reason a row is unusable, and a row with no venue cannot be placed on a map.
+
+DATE RANGES AND WEEKDAY COLUMNS. The case most often got wrong.
+A timetable usually carries a date range in its header, like "29.12 - 04.01", with columns labelled only MONDAY, TUESDAY and so on. Those columns are SPECIFIC DATES inside that range, not a repeating weekly pattern. Work out each weekday's actual date within the range and use it. Leave recurrence null.
+The range may cross a year boundary: "29.12 - 04.01" beginning in December means the December dates are one year and the January dates are the NEXT. Use the EXIF capture date, or today's date, to decide which year the range starts in, then let the rollover follow.
+CROSS CHECK THE WEEKDAYS, because they pin the year on their own. The first day of the printed range must fall on the weekday of the first column. For "29.12 - 04.01" over MONDAY to SUNDAY, 29 December has to be a Monday — true in 2025, not in 2024 or 2026. If the year you chose does not line up, you chose wrong: try adjacent years until the weekdays match. If none match, the range and the columns disagree — use the range, and say so in read_quality.unreadable.
+Set recurrence ONLY when the flyer itself says the schedule repeats: "every week", "weekly", "every monday", "ongoing". A date range in the header is the opposite of a recurrence — it says this schedule applies to these dates and no others.
+If a grid has neither a date range nor an explicit recurrence, treat each weekday as the next upcoming occurrence of that weekday and say so in read_quality.unreadable.
+
+AFTER MIDNIGHT BELONGS TO THE NEXT DAY. Programmes list the small hours under the evening they belong to: a day headed 08 showing 22.00, 23.30 then 00.00 means that 00.00 is the 9th. Any time before 05:00 that follows later times in the same day block takes the NEXT day's date. Write that resolved day into date_literal — this one you do have to think about, because the poster is stating it by position rather than in words.
 
 TIMES
 24 hour HH:MM. "7pm" is 19:00, "half seven" is 19:30 — that is reading a clock, and you should do it.
+NO START TIME PRINTED? Guess one and say so, with time_source "inferred". A monthly schedule often lists only what is on and which day; refusing those loses the whole photo, and a sensible guess somebody corrects in two taps beats nothing:
+  yoga, pilates, movement, meditation, breathwork → 09:00
+  market, fair → 10:00
+  brunch → 11:00
+  workshop, class, talk, exhibition, opening → 18:00
+  dinner, supper → 19:30
+  concert, gig, live music, dj set, party, club night → 21:00
+  cannot place it → 19:00
+time_source is "stated" whenever a time IS printed, which is always better. NEVER leave time_start empty: a row with a date and no time is still a usable event; a row with neither is nothing.
 If a finish time is printed, use it and set duration_source "stated". If not, work one out from the kind of thing this is, add it to time_start, and set duration_source "inferred":
   yoga, pilates, fitness, breathwork, meditation → 60 min
   class, workshop, talk, small group session → 90 min
@@ -129,10 +180,11 @@ If a finish time is printed, use it and set duration_source "stated". If not, wo
   dinner, supper, long meal → 2 h 30
 Fits none of these clearly? Leave time_finish and duration_source null rather than force a guess.
 "Opens 19:00" and "doors 8pm" are DOOR times: time_start only, finish null. Doors say nothing about length.
+An event crossing midnight is normal and expected: give the finish as a clock time and the app resolves the date.
 
 LOCATION
 venue_latitude and venue_longitude come ONLY from coordinates or a map pin printed inside the image. If none are printed, leave both null.
-Any EXIF location supplied with the photo is where the PHOTO WAS TAKEN, which is not where the event happens: a flyer in a cafe window advertises something across town. Never copy it into venue_latitude or venue_longitude. Its only jobs are naming city and community when the photo does not state them, and sanity checking a place name you did read. If the photo contradicts the supplied location, trust the photo and say so in location_note.
+Any EXIF location supplied with the photo is where the PHOTO WAS TAKEN, which is not where the event happens: a flyer in a cafe window advertises something across town. Never copy it into venue_latitude or venue_longitude. Its only jobs are naming city and community when the photo does not state them, and sanity checking a place name you did read. If the photo contradicts the supplied location, trust the photo.
 community — the town, city or island. The single most useful location field.
 
 Never invent coordinates, names, prices or dates. A blank field prompts the person; a wrong one is believed and published. event_name is the one exception: write a short plain title when none is printed.
@@ -152,15 +204,19 @@ const json = (b, s, o) => new Response(JSON.stringify(b), {
 });
 
 export default {
-  /* The safety net. The app pokes /venues/review after each publish,
-     which handles the common case immediately — but a tab closed too
-     early, an offline publish that syncs later, or a worker deploy
-     mid-flight all leave venues unchecked. This sweeps them up.
+  /* The safety net, and ONLY the net. Correction is event driven:
+     index.html's pokeVenueJobs() calls both endpoints the moment a
+     publish or an edit commits, including from the outbox when one of
+     those was made offline, so the normal case is handled in seconds.
 
-     Every ten minutes, which is the agreed tolerance: a correction
-     that lands within ten minutes of publishing is invisible to
-     everybody. The queue is naturally tiny — only hand-typed venues,
-     each checked once — so most runs find nothing and cost nothing. */
+     This runs once a day — wrangler.toml's [triggers] block is the
+     authority on that, not this comment — and exists for the pokes
+     that never arrived: a tab closed before the fetch left, a worker
+     deploy mid-flight, and the 7 day / 30 day recheck windows that
+     neither endpoint can schedule for itself.
+
+     Most runs find both queues empty, which costs one indexed query
+     and never reaches OpenStreetMap. */
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
       try {
@@ -239,6 +295,19 @@ export default {
       return reviewVenues(request, env, origin);
     }
 
+    /* Name-first pins. Same shape and same reasoning as /venues/review
+       directly above: no model, no invite gate, POST only because a GET
+       would let a pasted URL start ten Nominatim lookups.
+
+       It existed only inside scheduled() before, which meant the one
+       thing it was built with — dry=1, "report what you WOULD pin and
+       write nothing" — could not be reached at all. A backfill you
+       cannot rehearse is a backfill you find out about afterwards. */
+    if (path.endsWith('/events/pin')) {
+      if (request.method !== 'POST') return json({ error: 'post only' }, 405, origin);
+      return pinEvents(request, env, origin);
+    }
+
     if (request.method !== 'POST') return json({ error: 'nothing here' }, 405, origin);
 
     /* Passkeys sit ABOVE the invite gate. That gate exists to ration
@@ -298,6 +367,14 @@ async function health(request, env, origin) {
     gemini_key_present: Boolean(env.GEMINI_API_KEY),
     gemini_model: env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
     kv_quota_bound: Boolean(env.BICH_KV),
+    /* The two background sweeps refuse to run without this, and the
+       refusal is a 503 nobody sees because both are called by cron and
+       by fire-and-forget pokes. Reported here so "why is nothing being
+       pinned" has an answer you can read in a browser. Presence only —
+       never the value. */
+    worker_secret_present: Boolean(env.WORKER_SHARED_SECRET),
+    supabase_configured: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY),
+    venue_jobs_ready: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY && env.WORKER_SHARED_SECRET),
     invite_gate_on: Boolean((env.BICH_INVITE_CODES || '').trim()),
     public_img_base: env.PUBLIC_IMG_BASE || '(falling back to /img on this worker)',
     allowed_origins: allowed,
@@ -545,86 +622,18 @@ async function extractEvent(request, env, origin) {
      often partly obscured, and a near miss ("Casa Eyra") creates a
      duplicate that never merges. Giving the model the real strings
      turns an open transcription into a much easier multiple choice. */
-  /* One event or several? This is the judgement the schema cannot
-     express on its own, and getting it wrong in the splitting
-     direction is the expensive one: three cards for the same night
-     get shared and marked going and can never be quietly recombined. */
-  const shapeRules = `
+  /* NOTE: the "shapeRules" block that used to live here — how many
+     events are in one photo, date ranges vs weekday columns, and a
+     SECOND duration table — was appended to the user turn on every
+     call. It is all static text, so it belongs in the system prompt
+     with the rest, and its duration table CONTRADICTED the one there
+     (party 5-6h vs 4h, workshop 2-3h vs 90min, and "anything else 90
+     minutes" against "leave it null rather than guess"). Folded into
+     systemPrompt above; one prompt, one duration table, one place. */
 
-DECIDING HOW MANY EVENTS ARE IN THIS PHOTO.
-
-Return ONE event with a filled "lineup" when ALL of these hold:
-  · the same calendar date
-  · the same venue
-  · the listed times sit inside one continuous span
-  · the rows read as performers, acts, stages or sessions, not as event titles
-  · one door time or one price covers all of them
-Headings like "line up", "set times", "programme", "timetable", "stages",
-"schedule" mean ONE event. Put every row in "lineup", in printed order.
-
-Return SEPARATE events when ANY of these hold:
-  · the dates differ
-  · the venues differ
-  · a row carries its own price or its own ticket link
-  · the gaps between rows are days rather than hours
-Headings like "what's on", "this month", "upcoming", "programme for
-September", or a calendar grid, mean SEVERAL events. One record per date.
-
-If it is genuinely ambiguous, return ONE event with a lineup. Merging can be
-undone later; splitting cannot.
-
-DATE RANGES AND WEEKDAY COLUMNS. This is the case most often got wrong.
-
-A timetable usually carries a date range in its header, like "29.12 - 04.01",
-with columns labelled only MONDAY, TUESDAY and so on. Those columns are
-SPECIFIC DATES inside that range. They are not a repeating weekly pattern.
-Work out each weekday's actual date within the range and use it. Leave
-recurrence null.
-
-The range may cross a year boundary. "29.12 - 04.01" beginning in December
-means the December dates are one year and the January dates are the NEXT.
-Use the EXIF capture date, or today's date, to decide which year the range
-starts in, then let the rollover follow.
-
-CROSS CHECK THE WEEKDAYS, because they pin the year on their own. The first
-day of the printed range must fall on the weekday of the first column. For
-"29.12 - 04.01" over MONDAY to SUNDAY, 29 December has to be a Monday, and
-that is true in 2025 but not in 2024 or 2026. If the year you chose does not
-line up, you chose wrong: try the adjacent years until the weekdays match. If
-none match, the range and the columns disagree - use the range, and say so in
-location_note.
-
-Set recurrence ONLY when the flyer itself says the schedule repeats: "every
-week", "weekly", "every monday", "ongoing". A date range in the header is
-the opposite of a recurrence - it is a statement that this schedule applies
-to these dates and no others.
-
-If a grid has neither a date range nor an explicit recurrence, treat each
-weekday as the next upcoming occurrence of that weekday and say so in
-read_quality.unreadable.
-
-Never return more than 50 events. If the photo lists more, return the 50
-soonest and say so in read_quality.unreadable.
-
-DURATION. When a finish time is printed, use it and set duration_source
-"stated". When none is printed, infer from the activity and set
-duration_source "inferred":
-  club night or party      5 to 6 hours
-  gig or live set          2 to 3 hours
-  dj set listed in lineup  finish at the last slot plus 90 minutes
-  yoga or fitness class    60 minutes
-  workshop                 2 to 3 hours
-  market or fair           4 to 6 hours
-  dinner or supper club    2 to 3 hours
-  exhibition opening       2 to 3 hours
-  talk or screening        90 minutes
-  anything else            90 minutes
-A door or opening hour such as "opens 5pm" is not a session length: leave the
-finish empty. An event crossing midnight is normal and expected; give the
-finish as a clock time and the app will resolve the date.`;
 
   const venueList = Array.isArray(known_venues)
-    ? known_venues.filter(v => typeof v === 'string' && v.length < 120).slice(0, 40)
+    ? known_venues.filter(v => typeof v === 'string' && v.length < 120).slice(0, MAX_KNOWN_VENUES)
     : [];
   const venueLine = venueList.length
     ? `\n\nVenues already known near these coordinates:\n` +
@@ -645,7 +654,7 @@ finish as a clock time and the app will resolve the date.`;
         system_instruction: { parts: [{ text: systemPrompt(today) }] },
         contents: [{ role: 'user', parts: [
           { inline_data: { mime_type: mime, data: image } },
-          { text: 'Extract every event in this photo as records.' + exifLine + venueLine + shapeRules }
+          { text: 'Extract every event in this photo as records.' + exifLine + venueLine }
         ]}],
         generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EVENT_SCHEMA }
       })
@@ -1140,14 +1149,22 @@ async function sbRpcFromWorker(env, fn, args) {
    dry=1 reports what it WOULD do and writes nothing, which is how to
    check a backfill before letting it near real rows. */
 async function pinEvents(request, env, origin){
+  /* Same preflight as reviewVenues. Without it a missing secret reaches
+     Postgres as an explicit NULL, is_worker() returns false, and the
+     failure arrives as a 42501 "not the worker" buried in a 502 body —
+     which reads like a broken grant rather than an unset variable. */
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.WORKER_SHARED_SECRET) {
+    return json({ error: 'event pinning is not configured' }, 503, origin);
+  }
+
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 50);
   const dry = url.searchParams.get('dry') === '1';
 
   let queue;
   try {
-    queue = await supabaseRpc(env, 'events_needing_pin',
-      { p_secret: env.WORKER_SECRET, p_limit: limit });
+    queue = await sbRpcFromWorker(env, 'events_needing_pin',
+      { p_secret: env.WORKER_SHARED_SECRET, p_limit: limit });
   } catch (err) {
     return json({ error: 'queue unavailable', detail: String(err && err.message) }, 502, origin);
   }
@@ -1169,7 +1186,7 @@ async function pinEvents(request, env, origin){
        fallback for places we have never seen. */
     let hit = null, via = 'gazetteer';
     try {
-      const known = await supabaseRpc(env, 'resolve_venue_coords', {
+      const known = await sbRpcFromWorker(env, 'resolve_venue_coords', {
         p_name: row.venue_name, p_community: row.community,
         p_bias_lat: row.centre_lat, p_bias_lng: row.centre_lng
       });
@@ -1201,8 +1218,8 @@ async function pinEvents(request, env, origin){
     }
 
     try {
-      const out = await supabaseRpc(env, 'apply_event_pin', {
-        p_secret: env.WORKER_SECRET,
+      const out = await sbRpcFromWorker(env, 'apply_event_pin', {
+        p_secret: env.WORKER_SHARED_SECRET,
         p_short_id: row.short_id,
         p_match: hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null
       });
