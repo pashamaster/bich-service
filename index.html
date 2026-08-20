@@ -968,6 +968,36 @@ body.is-admin .detail-owner::before {
   box-shadow: 0 18px 50px var(--scrim-strong);
   animation: slideup 0.22s ease both;
 }
+/* ── mark to cancel ────────────────────────────────────────────────
+   The quietest thing on the detail page, and that is the design: a
+   border-less muted link sitting under everything else. It must never
+   read like the host's own "cancel it", which is two tones louder and
+   actually removes the event. */
+.detail-flag {
+  margin-top: 32px; padding-top: 16px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+.detail-flag__btn {
+  background: none; border: none; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.62rem;
+  letter-spacing: 0.06em; text-transform: lowercase;
+  color: var(--muted); text-decoration: underline;
+  text-underline-offset: 3px; padding: 6px 10px;
+}
+.detail-flag__btn:disabled { text-decoration: none; cursor: default; opacity: 0.75; }
+.detail-flag__note {
+  margin-top: 6px;
+  font-family: var(--font-mono); font-size: 0.6rem;
+  line-height: 1.5; color: var(--muted);
+}
+.mark-body { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 8px; }
+.mark-why { width: 100%; font-size: 0.8rem; }
+.mark-count {
+  margin: 0; text-align: right;
+  font-family: var(--font-mono); font-size: 0.58rem; color: var(--muted);
+}
+
 .bulk-result__msg {
   padding: 16px 16px 4px;
   font-family: var(--font-mono); font-size: 0.68rem;
@@ -1220,12 +1250,110 @@ body.is-admin .detail-owner::before {
   z-index: 2000;
   display: none;
   flex-direction: column;
-  justify-content: center;
   align-items: center;
-  padding: var(--space-2xl);
+  /* Scrolls when the content is taller than the phone. Paired with
+     `margin: auto 0` on the inner block, which centres it when there IS
+     room — justify-content: center would put the top out of reach the
+     moment there is not. */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(var(--safe-top) + var(--space-xl)) var(--space-xl)
+           calc(var(--safe-bottom) + var(--space-xl));
   text-align: center;
 }
 .onboard.visible { display: flex; animation: fadein 0.6s ease both; }
+.onboard__inner {
+  margin: auto 0;
+  width: 100%; max-width: 320px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.onboard__rule {
+  width: 40px; height: 1px; background: var(--border);
+  margin: var(--space-xl) 0;
+}
+
+/* The opening line carries the idea, so it gets the serif and a size
+   the rest does not. Everything after it is even, quiet body copy. */
+.onboard__lead {
+  font-family: var(--font-serif);
+  font-size: 1.02rem; line-height: 1.5;
+  color: var(--text);
+  margin: var(--space-lg) 0 0;
+}
+.onboard__copy {
+  font-size: 0.78rem; line-height: 1.65;
+  color: var(--muted);
+  margin: var(--space-lg) 0 0;
+}
+
+/* A miniature of the real event card. Same surface, border and radius,
+   same serif title over mono meta — so the shape is already familiar
+   the first time a real one loads. */
+.demo-card {
+  width: 100%;
+  margin-top: var(--space-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  text-align: left;
+}
+/* Half the height of a real card's cover — 32/7 rather than 16/7 — so
+   the sample reads as a taste of the feed rather than competing with
+   the copy around it.
+
+   The photo is INLINED as a data URI, not linked. A hotlinked image
+   would put a third-party request on the very first screen a new person
+   sees, handing their IP to a CDN before they have done anything — in
+   an app that proxies Nominatim through its own worker precisely so
+   nobody's data reaches a third party. It also means the card cannot
+   404, cannot change under us, and renders with no network at all,
+   which matters on a first open over bad signal. 11KB of JPEG.
+
+   Photo: Unsplash, free licence, no attribution required. */
+.demo-card__media {
+  aspect-ratio: 32 / 7;
+  background-image: url("data:image/jpeg;base64,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");
+  background-size: cover;
+  background-position: center;
+  display: flex; align-items: flex-end; padding: var(--space-sm);
+}
+.demo-card__tag {
+  font-family: var(--font-mono);
+  font-size: 0.55rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+}
+.demo-card__body { padding: var(--space-md); }
+.demo-card__title {
+  font-family: var(--font-serif);
+  font-size: 1.05rem; line-height: 1.25; color: var(--text);
+  margin-bottom: 6px;
+}
+.demo-card__meta {
+  display: flex; gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted);
+}
+.demo-card__circle {
+  margin-top: var(--space-sm); padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+  font-size: 0.68rem; line-height: 1.5; color: var(--muted);
+}
+.demo-card__circle strong {
+  font-family: var(--font-serif); font-style: italic; font-weight: 400;
+  font-size: 0.95rem; color: var(--accent);
+}
+
+.onboard__tip {
+  margin-top: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 0.55rem; letter-spacing: 0.12em;
+  color: var(--subtle);
+}
 .onboard__brand {
   font-family: var(--font-serif);
   font-style: italic;
@@ -1260,11 +1388,12 @@ body.is-admin .detail-owner::before {
   color: var(--muted);
   line-height: 1.6;
   max-width: 280px;
-  margin-bottom: var(--space-2xl);
+  margin: var(--space-md) 0 0;
 }
 .onboard__actions {
   display: flex; flex-direction: column; gap: var(--space-sm);
   width: 100%; max-width: 280px;
+  margin-top: var(--space-xl);
 }
 .onboard__reroll {
   background: none; border: none;
@@ -1883,6 +2012,10 @@ if ('serviceWorker' in navigator) {
           <strong id="meAttended">0</strong><span class="text-label">attended</span></button>
         <button type="button" class="me-stat" data-list="hosting">
           <strong id="meHosting">0</strong><span class="text-label">hosting</span></button>
+        <!-- Admin only. Shown by refreshMeCounts() when is_admin() says so,
+             so a non-admin never learns the filter exists. -->
+        <button type="button" class="me-stat" id="meReviewStat" data-list="review" hidden>
+          <strong id="meReview">0</strong><span class="text-label">review</span></button>
       </div>
 
       <div class="me-block">
@@ -2146,6 +2279,16 @@ if ('serviceWorker' in navigator) {
       <div class="text-label" style="margin-bottom: 8px;">hosted by</div>
       <div style="font-family: var(--font-serif); font-style: italic; font-size: 1.1rem; color: var(--accent);" id="detailHost"></div>
     </div>
+
+    <!-- Anybody, on any event. A VOTE, not an action: nothing about the
+         event changes and nobody is told. Deliberately the last thing on
+         the page and deliberately quiet — it is not an action we are
+         inviting, it is one we are not hiding. The host's own "cancel
+         it" sits far above, in .detail-owner. -->
+    <div class="detail-flag">
+      <button type="button" class="detail-flag__btn" id="markCancelBtn">mark to cancel</button>
+      <p class="detail-flag__note" id="markCancelNote" hidden></p>
+    </div>
   </div>
   <div class="detail-actions">
     <button class="btn btn--attend" id="attendBtn">i'm going</button>
@@ -2160,20 +2303,67 @@ if ('serviceWorker' in navigator) {
 
 <!-- ONBOARDING -->
 <div class="onboard" id="onboard">
-  <div class="onboard__brand">bich</div>
-  <div class="onboard__tagline">events that find their people</div>
+  <!-- Wrapped so `margin: auto 0` can centre it on a tall screen and let
+       it scroll on a short one. justify-content: center would clip the
+       top out of reach the moment the content is taller than the
+       viewport, which it is on a small phone. -->
+  <div class="onboard__inner">
+    <div class="onboard__brand">bich</div>
+    <div class="onboard__tagline">events that find their people</div>
 
-  <div class="onboard__welcome">you're</div>
-  <div class="onboard__handle-display" id="onboardHandle">slide tem</div>
-  <button class="onboard__reroll" id="rerollBtn">↺ try another name</button>
+    <div class="onboard__welcome">you're</div>
+    <div class="onboard__handle-display" id="onboardHandle">slide tem</div>
+    <button class="onboard__reroll" id="rerollBtn">↺ try another name</button>
 
-  <p class="onboard__sub" style="margin-top: var(--space-2xl);">
-    no accounts, no email, no tracking.<br/>
-    save a passkey so your history follows you to other devices — later, whenever you want.
-  </p>
+    <p class="onboard__lead">
+      a quiet event list for the place you're in: the gigs, classes,
+      markets and nights out that don't make it onto the big platforms.
+    </p>
 
-  <div class="onboard__actions">
-    <button class="btn btn--primary btn--block" id="onboardContinue">start exploring</button>
+    <p class="onboard__copy">
+      add an event, or upload a flyer. point your camera at a flyer and
+      let Magic read it: date, place, time, done. bich.app turns it into
+      an event listing for you.
+    </p>
+
+    <p class="onboard__copy">
+      stay yourself: we don't track your contact data and don't require
+      registration.
+    </p>
+
+    <p class="onboard__copy">
+      find your people, slowly. as you go to things, bich starts noticing
+      who you keep crossing paths with and shows you when they're
+      interested in the same event.
+    </p>
+
+    <!-- The idea in the paragraph above, as the thing it produces. Same
+         surface, border, radius and serif-over-mono as a real feed card,
+         at half the cover height so it reads as a taste rather than a
+         listing. The two numbers roll on every load. -->
+    <div class="demo-card" role="group" aria-label="what an event looks like">
+      <div class="demo-card__media">
+        <span class="demo-card__tag" id="demoWhen">fri 22 · 19:30</span>
+      </div>
+      <div class="demo-card__body">
+        <div class="demo-card__title">sunset session at casa verde</div>
+        <div class="demo-card__meta">
+          <span id="demoWhere">ericeira</span><span>free</span>
+        </div>
+        <div class="demo-card__circle">
+          <strong id="demoGoing">24</strong> going ·
+          <strong id="demoCircle">3</strong> you have crossed paths with
+        </div>
+      </div>
+    </div>
+
+    <div class="onboard__actions">
+      <button class="btn btn--primary btn--block" id="onboardContinue">start exploring</button>
+    </div>
+
+    <p class="onboard__tip">
+      add bich to your home screen and it opens like an app.
+    </p>
   </div>
 </div>
 
@@ -2256,6 +2446,30 @@ if ('serviceWorker' in navigator) {
       check your events →
     </button>
     <div id="bulkResultList"></div>
+  </div>
+</div>
+
+<!-- WHY? — the one question this feature asks. Reuses the bulk-scrim
+     shell so there is one modal idiom in the app, not two. -->
+<div class="bulk-scrim" id="markScrim" hidden>
+  <div class="bulk-result" role="alertdialog" aria-modal="true" aria-labelledby="markHead">
+    <div class="bulk-result__head">
+      <span class="text-label" id="markHead">mark to cancel</span>
+      <button type="button" class="edit-sheet__x" id="markClose">close</button>
+    </div>
+    <p class="bulk-result__msg" id="markIntro">
+      why should this be cancelled? an admin reads these by hand.
+    </p>
+    <div class="mark-body">
+      <!-- One line, 37 characters. Prefilled with the common case so the
+           usual report is two taps; everything else is a short edit. -->
+      <input class="input mark-why" id="markWhy" type="text" maxlength="37"
+             placeholder="why should this be cancelled?"
+             autocapitalize="sentences" autocomplete="off" spellcheck="true" />
+      <p class="mark-count"><span id="markCount">0</span>/37</p>
+      <p class="cover-notice" id="markErr"></p>
+      <button class="btn" id="markSubmit">send it</button>
+    </div>
   </div>
 </div>
 
@@ -2378,7 +2592,8 @@ function rankedBucket(key){
 const ME_LIST_HEADING = {
   going:    'you are going',
   attended: 'you attended',
-  hosting:  'you are hosting'
+  hosting:  'you are hosting',
+  review:   'marked to cancel'
 };
 
 function renderBundles() {
@@ -2874,6 +3089,7 @@ function openDetail(id) {
   const mine = iOwn(e.id);
   document.getElementById('detailOwner').hidden = !mine;
   document.getElementById('detailStats').hidden = !mine;
+  paintMarkButton(e.id);
   document.getElementById('detailScreen').classList.add('visible');
 
   /* Deduped server side, so opening the same event four times is one
@@ -3270,6 +3486,12 @@ const OUTBOX_HANDLERS = {
     pokeVenueJobs('queued edit');     // same reason as event.create above
     return res;
   },
+  /* Marking an event to cancel. Queued like everything else so a report
+     made on a train is not silently lost. */
+  'event.mark_cancel': async (payload, opId) => sbRpc('mark_event_to_cancel', {
+    p_short_id: payload.short_id, p_user: CURRENT_USER.id,
+    p_secret: deviceSecret(), p_reason: payload.reason, p_operation_id: opId
+  }),
   'event.cancel': async (payload, opId) => sbRpc('cancel_event_as', {
     p_short_id: payload.short_id, p_user: CURRENT_USER.id,
     p_secret: deviceSecret(), p_operation_id: opId
@@ -6750,7 +6972,24 @@ async function openMeList(kind){
      moved server side. Ask Postgres, which is the only place that
      knows. */
   let wanted = [];
-  if (kind === 'hosting'){
+  let reviewRows = null;
+
+  if (kind === 'review'){
+    /* The admin queue. Comes from its own RPC rather than my_going,
+       because these are not events this person has any relationship
+       with — they are events other people have voted on. */
+    if (!IS_ADMIN){ toast('not yours'); return; }
+    try {
+      reviewRows = await sbRpc('admin_events_to_review', {
+        p_user: CURRENT_USER.id, p_secret: deviceSecret(), p_limit: 100
+      });
+    } catch(err){
+      toast('could not load the review list');
+      console.warn('[bich] review list —', err.message);
+      return;
+    }
+    wanted = (reviewRows || []).map(r => r.short_id).filter(Boolean);
+  } else if (kind === 'hosting'){
     wanted = Store.data.hosting || [];
   } else if (SB_READY() && CURRENT_USER.id){
     try {
@@ -6763,14 +7002,25 @@ async function openMeList(kind){
     wanted = kind === 'going' ? Object.keys(Store.data.going || {}) : [];
   }
 
-  if (!wanted.length){ toast(`nothing ${kind} yet`); return; }
+  if (!wanted.length){
+    toast(kind === 'review' ? 'nothing marked to cancel' : `nothing ${kind} yet`);
+    return;
+  }
 
   meListMode = kind;
   document.querySelector('.tab[data-screen="home"]').click();
-  setFeedStatus(`your ${kind} · ${wanted.length}`, false);
+  setFeedStatus(kind === 'review'
+    ? `marked to cancel · ${wanted.length}`
+    : `your ${kind} · ${wanted.length}`, false);
   document.getElementById('meListBar').hidden = false;
-  document.getElementById('meListBarText').textContent =
-    `showing what you are ${kind}, past included`;
+  document.getElementById('meListBarText').textContent = kind === 'review'
+    /* Says where the reasons are rather than implying they are on the
+       card. They are not: the cards are ordinary event cards and there
+       is deliberately no marker on them. The reasons live in
+       event_cancel_votes, one row per person, read in the table
+       editor. */
+    ? 'marked to cancel · reasons are in event_cancel_votes'
+    : `showing what you are ${kind}, past included`;
 
   /* Anything already loaded, plus whatever the feed does not carry -
      past events, other communities. events_public has no time filter
@@ -6785,7 +7035,12 @@ async function openMeList(kind){
     } catch(err){ console.warn('[bich] could not load your list', err.message); }
   }
 
-  const rows = [...have.values()].sort((a, b) => (eventDate(b) || 0) - (eventDate(a) || 0));
+  /* Review sorts by MOST RECENTLY MARKED, which is the order an admin
+     works in; every other list sorts by when the event is. Reusing the
+     order the RPC already returned rather than re-deriving it. */
+  const rows = kind === 'review'
+    ? wanted.map(id => have.get(id)).filter(Boolean)
+    : [...have.values()].sort((a, b) => (eventDate(b) || 0) - (eventDate(a) || 0));
   EVENTS.length = 0;
   rows.forEach(e => EVENTS.push(Object.assign(e, { bundle: 'personal' })));
   renderBundles();
@@ -6823,8 +7078,56 @@ function paintMeCounts(c){
    "going" and "attended" come from one call — and attended is the one
    the browser cannot know, because promote_attendance() sets it hours
    after the event on a schedule nobody here sees. */
+/* Re-read this device's own marks from the database. The Store copy is
+   only a cache so the button can paint without a round trip; a restored
+   passkey brings a uid whose marks live on the server and not in this
+   browser's localStorage, and without this the button would invite a
+   duplicate report on every one of them. Returns only the caller's own
+   rows — my_cancel_votes is not a way to read anyone else's. */
+async function syncCancelMarks(){
+  if (!SB_READY() || !CURRENT_USER.id || !Store.data.secretClaimed) return;
+  try {
+    const rows = await sbRpc('my_cancel_votes', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret()
+    });
+    if (!Array.isArray(rows)) return;
+    const map = {};
+    rows.forEach(r => { map[r.short_id] = { reason: r.reason, at: r.created_at }; });
+    Store.set({ markedCancel: map });
+    if (window._openEventId) paintMarkButton(window._openEventId);
+  } catch(err){
+    // a cache that failed to refresh is not worth interrupting anyone for
+    console.warn('[bich] could not read your marks —', err.message);
+  }
+}
+
+/* The admin's review count, and the only thing that reveals the filter
+   exists. A non-admin never sees the button: the RPC would refuse them
+   anyway, but a control that is visible and then refuses is worse than
+   one that was never there. */
+async function refreshReviewCount(){
+  const stat = document.getElementById('meReviewStat');
+  if (!stat) return;
+  if (!IS_ADMIN || !SB_READY() || !CURRENT_USER.id || !Store.data.secretClaimed){
+    stat.hidden = true;
+    return;
+  }
+  try {
+    const rows = await sbRpc('admin_events_to_review', {
+      p_user: CURRENT_USER.id, p_secret: deviceSecret(), p_limit: 500
+    });
+    document.getElementById('meReview').textContent = String((rows || []).length);
+    stat.hidden = false;
+  } catch(err){
+    stat.hidden = true;
+    console.warn('[bich] review count —', err.message);
+  }
+}
+
 async function refreshMeCounts(){
   if (!SB_READY() || !CURRENT_USER.id) return;
+  syncCancelMarks();
+  refreshReviewCount();
   try {
     const rows = await sbRpc('my_going', { p_viewer: CURRENT_USER.id, p_event_ids: null });
     if (!Array.isArray(rows)) return;
@@ -8350,6 +8653,11 @@ async function refreshAdmin(){
   } catch(_){}
   Store.set({ admin: IS_ADMIN });
   document.body.classList.toggle('is-admin', IS_ADMIN);
+  /* The review filter can only appear once we know. refreshMeCounts may
+     well have run before this resolved, and it hides the button when
+     IS_ADMIN is still false — so ask again here rather than leaving an
+     admin looking at three filters. */
+  refreshReviewCount();
   return IS_ADMIN;
 }
 
@@ -9010,7 +9318,37 @@ function showHandle() {
   onboardHandle.textContent = currentHandle;
 }
 
+/* The sample card's two numbers, rolled fresh on every load.
+
+   Random on purpose: a fixed pair starts to read as a real event people
+   half-remember, and this one has never happened. The crossed-paths
+   figure is derived from the going count rather than drawn separately,
+   so it can never be the larger of the two — which would be nonsense,
+   since the people you have crossed paths with are a subset of the
+   people going. */
+function rollDemoNumbers(){
+  const going = 12 + Math.floor(Math.random() * 29);           // 12-40
+  /* A quarter of the room, capped at five. Drawing the two numbers
+     independently produced "8 going · 4 you have crossed paths with",
+     which is half the room and reads as invented — the people you keep
+     running into are a minority of any crowd, and the sample should
+     look like the real thing. */
+  const ceiling = Math.max(1, Math.min(5, Math.floor(going / 4)));
+  const circle  = 1 + Math.floor(Math.random() * ceiling);
+  const el = (id, v) => { const n = document.getElementById(id); if (n) n.textContent = v; };
+  el('demoGoing', String(going));
+  el('demoCircle', String(circle));
+
+  /* A near-future Friday, so the sample never reads as something that
+     already happened. */
+  const d = new Date();
+  d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7));
+  const day = ['sun','mon','tue','wed','thu','fri','sat'][d.getDay()];
+  el('demoWhen', `${day} ${d.getDate()} · 19:30`);
+}
+
 if (!Store.data.onboarded) {
+  rollDemoNumbers();
   onboard.classList.add('visible');
   showHandle();
 } else {
@@ -9531,6 +9869,155 @@ on('editEventBtn', 'click', () => {
   const e = EVENTS.find(x => x.id === window._openEventId);
   if (e) openEditSheet(e);
 });
+/* ═══════════════════════════════════════════════════════════════════
+   MARK TO CANCEL
+
+   Anybody, any event, one vote each. It is a REPORT: nothing about the
+   event changes, no count is shown to anyone, the host is not told, and
+   no feed hides anything. The row lands in event_cancel_votes and an
+   admin reads that table by hand.
+
+   Not to be confused with the two other things called cancel in here:
+   the host's own "cancel it" (cancel_event_as, a real soft delete), and
+   attendances.status = 'cancelled' (somebody un-RSVPing).
+
+   The set of events THIS device has marked is kept in the Store so the
+   button can be honest on a second visit without a round trip. The
+   database is the authority and is re-read on load.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const MARK_DEFAULT_REASON = 'event will not be happening';
+
+function markedCancel(){ return Store.data.markedCancel || {}; }
+
+function rememberMark(shortId, reason){
+  Store.set({ markedCancel: Object.assign({}, markedCancel(),
+    { [shortId]: { reason, at: new Date().toISOString() } }) });
+}
+
+function paintMarkButton(shortId){
+  const btn  = document.getElementById('markCancelBtn');
+  const note = document.getElementById('markCancelNote');
+  const wrap = document.querySelector('.detail-flag');
+  if (!btn || !wrap) return;
+
+  /* Hidden for anybody who can already act on this event. A host and an
+     admin both get "cancel it" in .detail-owner, which actually removes
+     it — offering them a vote as well would be offering a slower way to
+     do something they can already do outright, and two buttons a line
+     apart with the word "cancel" in both is how somebody presses the
+     wrong one. iOwn() covers host, admin and a legacy edit token. */
+  if (iOwn(shortId)){ wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  const prior = markedCancel()[shortId];
+  btn.disabled = false;
+  if (prior){
+    btn.textContent = 'you marked this to cancel';
+    note.hidden = false;
+    note.textContent = 'an admin will review it. press to change what you said.';
+  } else {
+    btn.textContent = 'mark to cancel';
+    note.hidden = true;
+    note.textContent = '';
+  }
+}
+
+let _markingId = null;
+
+function openMarkSheet(shortId){
+  _markingId = shortId;
+  const prior = markedCancel()[shortId];
+  const why = document.getElementById('markWhy');
+  /* Prefilled with the overwhelmingly common reason, so the usual case
+     is open-and-send. It is a starting point, not a fixed choice: the
+     field is editable and the 37 character cap keeps whatever replaces
+     it readable in the table. */
+  why.value = prior && prior.reason ? prior.reason : MARK_DEFAULT_REASON;
+  document.getElementById('markCount').textContent = String(why.value.length);
+  document.getElementById('markErr').className = 'cover-notice';
+  document.getElementById('markErr').textContent = '';
+  document.getElementById('markIntro').textContent = prior
+    ? 'you already marked this. change what you said, or close.'
+    : 'why should this be cancelled? an admin reads these by hand.';
+  document.getElementById('markSubmit').disabled = false;
+  document.getElementById('markSubmit').textContent = prior ? 'update it' : 'send it';
+  document.getElementById('markScrim').hidden = false;
+  setTimeout(() => why.focus(), 50);
+}
+
+function closeMarkSheet(){
+  document.getElementById('markScrim').hidden = true;
+  _markingId = null;
+}
+
+on('markCancelBtn', 'click', () => {
+  if (window._openEventId) openMarkSheet(window._openEventId);
+});
+on('markClose', 'click', closeMarkSheet);
+on('markScrim', 'click', (ev) => { if (ev.target.id === 'markScrim') closeMarkSheet(); });
+
+document.getElementById('markWhy').addEventListener('input', (ev) => {
+  document.getElementById('markCount').textContent = String(ev.target.value.length);
+});
+
+on('markSubmit', 'click', async () => {
+  const shortId = _markingId;
+  const err = document.getElementById('markErr');
+  const btn = document.getElementById('markSubmit');
+  const reason = document.getElementById('markWhy').value.trim();
+
+  /* The question is the whole feature. A blank one tells the admin
+     nothing and is worse than no report at all. */
+  if (!reason){
+    err.className = 'cover-notice show err';
+    err.textContent = 'say why — one line is enough.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'sending…';
+  try {
+    await claimDeviceSecret();
+    /* One id whether it lands now or from the queue later. A retry must
+       share it, or the retry is a second unrecognised operation. */
+    const opId = newOperationId();
+    await sbRpc('mark_event_to_cancel', {
+      p_short_id: shortId, p_user: CURRENT_USER.id,
+      p_secret: deviceSecret(), p_reason: reason, p_operation_id: opId
+    });
+    rememberMark(shortId, reason);
+    closeMarkSheet();
+    paintMarkButton(shortId);
+    /* The agreed wording, and it is exactly true: it is recorded, and
+       an admin reads the table. It deliberately does NOT say anybody
+       was notified — nothing notifies anyone, there is no channel to
+       do it with, and saying so would be a promise the app cannot
+       keep. */
+    toast('reported. an admin will review this.');
+  } catch(e2){
+    /* Same rule as every other mutation: queue what can succeed later,
+       never queue a refusal. "say why" and "not yours" refuse
+       identically for ever, so queueing one parks a permanent failure
+       showing a warning that never clears. */
+    if (isTransient(e2)){
+      const queued = await outboxAdd('event.mark_cancel',
+        { short_id: shortId, reason }, newOperationId());
+      if (queued){
+        rememberMark(shortId, reason);
+        closeMarkSheet();
+        paintMarkButton(shortId);
+        toast('reported — will send when you are back online');
+        return;
+      }
+    }
+    err.className = 'cover-notice show err';
+    err.textContent = explainWriteError(e2);
+    btn.disabled = false;
+    btn.textContent = 'send it';
+  }
+});
+
 on('cancelEventBtn', 'click', async () => {
   const id = window._openEventId;
   if (!id) return;
