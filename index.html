@@ -6674,7 +6674,12 @@ async function loadFeed(){
   }
 
   try {
-    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    /* 36 hours, matching feed_ranked's past_hours default and
+       MAP_PAST_MS above. This read 60 minutes, so on the one path that
+       matters — both RPCs down, reading events_public directly — the
+       map silently lost everything from last night, which is exactly
+       when somebody opening it wants to see what has been going on. */
+    const since = new Date(Date.now() - MAP_PAST_MS).toISOString();
     const rows = await sbGet(
       `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
     applyFeedRows(rows);
@@ -7373,24 +7378,59 @@ function setInvite(c){ Store.set({ invite: c }); }
 /* ═══════════════════════════════════════════════════════════════════
    THE UPLOAD PIPELINE
 
-   Every photo enters here and walks the same numbered steps. The order
-   is not cosmetic — step 1 must happen before step 3, because canvas
-   re-encoding strips EXIF and there is no way back once the bytes are
-   gone.
+   A photo arrives from somebody's phone. It may be a JPEG or HEIC with
+   GPS in it, a JPEG whose GPS the OS or a share sheet already stripped,
+   or a PNG, which essentially never has any. All three are normal, and
+   the pipeline treats "no coordinates" as an ordinary outcome rather
+   than a failure.
 
-     0  validate      is this actually an image, and can we open it
-     1  read geo      pull GPS off the untouched bytes
-     2  photo origin  valid coordinates become their own entity, which
-                      resolves community and centres the map
+   Every photo walks the same numbered steps, IN THIS ORDER:
+
+     0  validate      is this really an image, AND does it open?
+                      Both questions, both answered here. Nothing
+                      corrupt gets past this line.
+     1  read geo      pull GPS off the untouched original bytes
+     2  photo origin  coordinates become their own entity, which
+                      resolves the community and centres the map, and
+                      offers a default pin to correct
      3  attach        the picture becomes the event card's cover
-     4  CORE COMPLETE — magic off, we stop here and that is a success
-     5  flyer check   magic only: does Gemini see an event in this
-     6  not a flyer   fall back to core, which already finished at 4
+     4  CORE COMPLETE — magic off, we stop here, and that is a success
+     5  flyer check   magic only: does Gemini see an event in this?
+     6  not a flyer   continue as core, which already finished at 4
      7  is a flyer    the magic flow takes over
 
-   Steps 0-4 are synchronous and always run. Steps 5-7 run only with
-   magic armed, and only after the cover is already on the card — so a
-   slow model call never holds up the picture appearing. */
+   Steps 0-4 are SYNCHRONOUS and always run. Steps 5-7 run only with
+   magic armed, and only after the cover is already on the card, so a
+   slow model call never holds up the picture appearing.
+
+   THREE RULES HOLD THE ORDER TOGETHER. Each was written after a real
+   failure; none is cosmetic.
+
+   1. REFUSE AT 0, OR NOT AT ALL. Sniffing the header proves a file
+      claims to be an image; only decoding proves it is one. A
+      truncated JPEG has a perfect header. So step 0 does both, and
+      everything after it can assume a photo that works — which is
+      what makes it safe for step 2 to act immediately.
+
+   2. READ GPS BEFORE RE-ENCODING. Step 3 renders through a canvas and
+      that strips EXIF permanently. Step 1 therefore reads the original
+      buffer, which the decode in step 0 leaves untouched. Once those
+      bytes are re-encoded the coordinates are gone for good.
+
+   3. THE PHOTO'S COORDINATES ARE NOT THE EVENT'S. They say where the
+      picture was taken. A flyer shot in a cafe window advertises
+      something across town. So they are kept as a SEPARATE entity and
+      used for three things only: resolving the community, centring the
+      map, and offering a default pin that is marked a guess and can be
+      dragged. With magic armed even that pin is withheld until step 6
+      confirms the photo was not a flyer.
+
+   (0,0) is not a location. A zeroed or failed GPS chip writes Null
+   Island, a real coordinate in the Gulf of Guinea, and somebody in
+   Lisbon would silently join a community 4,000km out to sea. Anything
+   off-earth or at 0,0 is treated as no coordinates at all. Longitude
+   exactly 0 with a real latitude is KEPT — the Greenwich meridian runs
+   through four countries. */
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;   // a 48MP HEIC is ~8MB; 25 is generous
 
@@ -7717,9 +7757,6 @@ function openCropper(bitmap, hint){
   });
 }
 
-/* The 10-field record, as a Gemini responseSchema. Identical to the Worker's
-   copy — keep them in sync, or better, have the Worker serve it. Never repeat
-   these fields in the prompt: duplicating the schema lowers output quality. */
 
 
 /* ── date resolution, in code ─────────────────────────────────────
@@ -8612,23 +8649,27 @@ coverInput.addEventListener('change', async (e) => {
   try { buf = await file.arrayBuffer(); }
   catch(_){ return fail("couldn't read that file. try picking it again?"); }
 
+  /* ── STEP 0 · validate, and REFUSE HERE OR NOWHERE ────────────────
+     Nothing corrupt may enter the pipeline. Two different questions,
+     and the header sniff only answers the first:
+
+       does it CLAIM to be an image  → magic bytes, not the filename
+                                       and not file.type, both of which
+                                       are supplied by whatever made
+                                       the file
+       IS it one                     → only opening it can say. A
+                                       truncated or half-written JPEG
+                                       has a perfect header and fails
+                                       on decode.
+
+     So the decode belongs HERE, in validation, not later as a side
+     effect of attaching. That is what lets step 2 act on coordinates
+     the moment it has them: by the time it runs, the photo is known
+     good, so nothing downstream can be undone by a file that turns out
+     not to open. */
   const problem = rejectUpload(file, buf);
   if (problem) return fail(problem);
 
-  /* ── STEP 1 · read geo ────────────────────────────────────────────
-     Off the untouched bytes, before anything decodes or re-encodes.
-     Works for HEIC too, which is what an iPhone actually hands over.
-     A PNG will essentially never have GPS and that is not a failure —
-     it is simply a photo with no coordinates, which is step 2's null
-     case and completely normal. */
-  try { sourceExif = readExif(buf); } catch(_){ sourceExif = null; }
-  const origin = geoFromExif(sourceExif);
-
-  /* ── STEP 3 (before 2 deliberately) · attach ──────────────────────
-     Decode first, because step 2 centres the mini map and there is no
-     point moving a map for a photo that turns out not to open. This is
-     also the last chance to refuse: a file can pass the header sniff
-     and still be truncated or corrupt inside. */
   coverBusy.classList.add('show');
   try {
     const dec = await decodeImage(file);
@@ -8638,21 +8679,41 @@ coverInput.addEventListener('change', async (e) => {
   }
   coverBusy.classList.remove('show');
 
+  /* ── STEP 1 · read geo ────────────────────────────────────────────
+     Off the UNTOUCHED bytes. Decoding above produced a bitmap and left
+     `buf` alone, so the original EXIF is still here to read — but the
+     re-encode in step 3 destroys it permanently, and there is no way
+     back once those bytes are gone. This must stay ahead of that.
+
+     Works for HEIC too, which is what an iPhone actually hands over.
+     A PNG essentially never carries GPS, and neither does a JPEG that
+     the OS, the app or a share sheet stripped on export. That is not a
+     failure — it is simply a photo with no coordinates, which is
+     step 2's null case and completely normal. */
+  try { sourceExif = readExif(buf); } catch(_){ sourceExif = null; }
+  const origin = geoFromExif(sourceExif);
+
   /* ── STEP 2 · photo origin ────────────────────────────────────────
-     Valid coordinates become their own entity and resolve the
-     community. This now runs for EVERY photo, core included.
+     Valid coordinates become their own entity — kept apart from the
+     event's own pin, because they answer a different question: where
+     the PHOTO was taken, never where the event happens. From that
+     entity two things follow: the community is resolved (signal 3 of
+     3), and the map is centred.
 
-     It did not before: readPhoto() returned early on the core path and
-     setPhotoOrigin was only ever reached from inside magic, so a core
-     photo carrying GPS resolved no community and never centred the
-     map. The `if (!MAGIC_ARMED …)` pin branch inside setPhotoOrigin
-     was written for exactly this case and could never run.
+     Runs for EVERY photo, core included. It did not before:
+     readPhoto() returned early on the core path and setPhotoOrigin was
+     only ever reached from inside magic, so a core photo carrying GPS
+     resolved no community and never centred the map.
 
-     The pin is withheld while magic is armed and released at step 6 if
-     the photo turns out not to be a flyer. */
+     The pin is only ever a DEFAULT to correct, never an answer: it
+     fills an empty pin, is marked a guess, and says so on screen. It
+     is withheld while magic is armed and released at step 6 if the
+     photo turns out not to be a flyer. */
   if (origin) setPhotoOrigin(origin, !MAGIC_ARMED);
 
-  // Straight through, no crop. The crop is offered afterwards, only if needed.
+  /* ── STEPS 3-7 · attach, then core stops and magic continues ──────
+     Straight through, no crop. The crop is offered afterwards, only if
+     needed. */
   readPhoto(null);
 });
 
