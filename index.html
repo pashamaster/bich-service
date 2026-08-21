@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-66" />
+  <meta name="app-version" content="2026-08-21-71" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2145,7 +2145,7 @@ if ('serviceWorker' in navigator) {
       </div>
 
       <div class="me-block">
-        <span class="text-label">recovery</span>
+        <span class="text-label">history</span>
         <div class="me-row">
           <span class="me-row__label" id="passkeyState">no passkey saved</span>
           <button class="btn" id="mePasskey">save a passkey</button>
@@ -2154,12 +2154,16 @@ if ('serviceWorker' in navigator) {
           <span class="me-row__label">already have one?</span>
           <button class="btn btn--ghost" id="meRestore">restore from passkey</button>
         </div>
-        <p class="me-note">your history lives on this device. a passkey lets it follow you to another one. no email, no password — just your face or fingerprint.</p>
-      </div>
+        <p class="me-note">your history lives on this browser. a passkey lets it follow you to any new session on this device or other synced devices.</p>
+        <!-- One line for everybody. The platform rules do differ — iOS has a
+             seven day cap, Chrome evicts under storage pressure — but naming
+             them meant maintaining four strings to say the same useful thing:
+             the browser can throw this away, and the home screen stops it.
 
-      <div class="me-block">
-        <span class="text-label">storage</span>
-        <p class="me-note" id="persistState">checking…</p>
+             paintPersistState() only hides this once the browser has actually
+             promised to keep the data, because at that point it is no longer
+             true. -->
+        <p class="me-note" id="persistState">browser might clear your data storage. adding bich.app to your home screen helps with that.</p>
       </div>
     </div>
   </main>
@@ -2432,7 +2436,7 @@ if ('serviceWorker' in navigator) {
     </p>
 
     <p class="onboard__copy">
-      we don't track your contacts data and don't require registrations.
+      we don't track your contact data and don't require registration.
     </p>
 
     <p class="onboard__copy">
@@ -2579,12 +2583,34 @@ if ('serviceWorker' in navigator) {
 
 <script>
 /* ─── WORDLIST FOR HANDLE GENERATION ─── */
-const WORDS_A = ['slide','oak','wisp','bram','linen','clove','flint','moss','rye','sage','vale','dusk','reed','dune','ivy','silk','wren','plume','tide','cove','elm','fawn','glen','heath','jade','lark','marsh','nook','onyx','pine'];
-const WORDS_B = ['tem','fern','toad','lin','star','blue','hum','low','dim','spar','tune','wave','rest','glow','flow','cast','tide','hush','arc','vow','peak','calm','wild','soft','near','far','quill','myrrh','seam','flax'];
+const WORDS_A = [
+  'oak', 'elm', 'pine', 'birch', 'cedar', 'aspen', 'alder', 'holly',
+  'briar', 'gorse', 'heath', 'ivy', 'moss', 'reed', 'rush', 'sage', 'thyme',
+  'clove', 'bay', 'hazel', 'larch', 'lilac', 'olive', 'palm', 'plum',
+  'rowan', 'yew', 'maple', 'beech', 'teak', 'balsa', 'ebony', 'furze'
+];
+const WORDS_B = [
+  'tem', 'toad', 'lin', 'star', 'hum', 'low', 'dim', 'tune', 'rest', 'cast',
+  'hush', 'arc', 'vow', 'calm', 'wild', 'soft', 'near', 'far', 'quill',
+  'myrrh', 'echo', 'gale', 'haze', 'iris', 'jetty', 'lull', 'north', 'opal',
+  'pearl', 'quiet', 'trace', 'verve', 'song'
+];
 
 /* Kept only as an offline / older-database fallback. The real
    vocabulary is public.handle_words, which grows with an INSERT
-   instead of a redeploy — see schema 17. */
+   instead of a redeploy.
+
+   33 x 33 = 1,089 here, against 228 x 233 = 53,124 in Postgres, and the
+   gap is the point rather than an oversight.
+
+   This list only runs when the database is UNREACHABLE — which means it
+   also cannot check whether a handle is already taken. A bigger pool
+   would not make it collide less; it would only ship more bytes to every
+   visitor for a path that ends in create_account() renaming the account
+   properly the moment the connection returns.
+
+   A subset of the Postgres words, never a separate vocabulary, so the
+   two cannot drift. */
 function genHandle() {
   return WORDS_A[Math.floor(Math.random()*WORDS_A.length)] + ' ' +
          WORDS_B[Math.floor(Math.random()*WORDS_B.length)];
@@ -7626,35 +7652,97 @@ async function feedAnchor(){
    anybody without a community. That is not a bug you fix by adding the
    missing call; it is a bug you fix by making it impossible to forget,
    because a fourth path would have forgotten it too. */
-/* At most this many events from one venue, per date bucket, before the
-   rest are pushed to the end of their bucket.
+/* ═══════════════════════════════════════════════════════════════════
+   FEED DIVERSITY
 
-   This becomes urgent the moment the feed is capped, and magic makes it
-   likely rather than hypothetical: ONE photo of a studio timetable
-   produces twenty events at one venue in one publish, and without this
-   they occupy the entire feed. review.md §5.7 has carried it as an open
-   question since the ranking landed. */
-const VENUE_RUN_MAX = 2;
+   Two different problems, and they were being treated as one.
 
-function capVenueRuns(rows){
-  const seen = new Map();          // venue key -> how many kept so far
-  const keep = [], demoted = [];
-  rows.forEach(e => {
-    const k = (e.venueId || e.venue || '').toString().trim().toLowerCase();
-    if (!k){ keep.push(e); return; }
-    const n = (seen.get(k) || 0) + 1;
-    seen.set(k, n);
-    (n <= VENUE_RUN_MAX ? keep : demoted).push(e);
+   1. A SERIES is the same event happening again. A weekly class
+      published four weeks ahead is four rows with one title at one
+      venue; ranked individually they score almost identically, so they
+      arrive as a block. Only the SOONEST is news. The rest go to the
+      end.
+
+   2. A VENUE with several DIFFERENT events is not a series — a bar with
+      a gig, a quiz and a market is three things worth seeing. The old
+      rule capped that at two per venue and demoted the third, which
+      punished the venues doing the most.
+
+   feed_ranked now collapses series in SQL, before the LIMIT, which is
+   the half that actually matters: twenty Monday yogas used to take
+   twenty of the forty slots before this code ever ran. What is left
+   here is display order, plus a safety net for feed_near, which has no
+   series logic of its own.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Same venue AND near-enough the same name. Recurrence expansion
+   produces identical titles, so exact matching catches the stated case;
+   the token test also catches "sunset yoga" against "sunset yoga
+   session", which a person would file as the same thing. */
+function seriesKey(e){
+  const venue = (e.venueId || e.venue || '').toString().trim().toLowerCase();
+  const title = (e.title || '').toString().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return venue + '|' + title;
+}
+
+function sameSeries(a, b){
+  if (a.venueKey !== b.venueKey) return false;
+  if (a.title === b.title) return true;
+  const A = new Set(a.title.split(' ').filter(Boolean));
+  const B = new Set(b.title.split(' ').filter(Boolean));
+  if (!A.size || !B.size) return false;
+  let hit = 0; A.forEach(t => { if (B.has(t)) hit++; });
+  return hit / Math.min(A.size, B.size) >= 0.6;
+}
+
+function diversifyFeed(rows){
+  const norm = rows.map(e => {
+    const k = seriesKey(e);
+    const cut = k.indexOf('|');
+    return { e, venueKey: k.slice(0, cut), title: k.slice(cut + 1) };
   });
-  /* Demoted, never dropped. A venue's third event is still a real event
-     and somebody may be looking for exactly it — it just stops crowding
-     out everywhere else. */
-  return keep.concat(demoted);
+
+  /* ── one per series; repeats parked ───────────────────────────── */
+  const leaders = [], parked = [];
+  norm.forEach(n => {
+    const led = leaders.find(l => sameSeries(l, n));
+    (led ? parked : leaders).push(n);
+  });
+
+  /* ── round robin across venues ────────────────────────────────────
+     Not a cap. Take the best from each distinct venue, then the second
+     from each, and so on — so the top of the list is as many different
+     places as the community actually has, and a venue with four
+     genuinely different events still shows all four, just spread out
+     rather than stacked. */
+  const byVenue = new Map();
+  leaders.forEach(n => {
+    const k = n.venueKey || ('@' + Math.random());   // no venue: never grouped
+    if (!byVenue.has(k)) byVenue.set(k, []);
+    byVenue.get(k).push(n);
+  });
+
+  const queues = [...byVenue.values()];
+  const out = [];
+  for (let round = 0; out.length < leaders.length; round++){
+    let moved = false;
+    for (const q of queues){
+      if (round < q.length){ out.push(q[round]); moved = true; }
+    }
+    if (!moved) break;                                // nothing left to take
+  }
+
+  /* Parked, never dropped. The third Monday of a weekly class is still a
+     real event somebody may be looking for; it just stops standing in
+     front of everywhere else. */
+  return out.concat(parked).map(n => n.e);
 }
 
 function applyFeedRows(rows){
   EVENTS.length = 0;
-  capVenueRuns((rows || []).map(rowToEvent)).forEach(e => EVENTS.push(e));
+  diversifyFeed((rows || []).map(rowToEvent)).forEach(e => EVENTS.push(e));
   renderBundles();
   /* The map no longer draws this array — it has its own query and its
      own array. Repaint only when a "me" list is driving the map, which
@@ -7759,7 +7847,7 @@ function applyTheme(name){
   Store.set({ theme: t });
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = t === 'paper' ? '#f4efe6' : '#0a0908';
-  applyMapTheme(t);
+  applyMapTheme();          // it reads the theme itself, via currentTiles()
   document.querySelectorAll('.theme-switch button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
 }
@@ -8130,9 +8218,13 @@ async function renderMe(){
 
   const persisted = (navigator.storage && navigator.storage.persisted)
     ? await navigator.storage.persisted().catch(() => false) : false;
-  document.getElementById('persistState').textContent = persisted
-    ? 'your history is protected on this device.'
-    : 'safari clears app storage after seven days without a visit. keeping bich on your home screen avoids that.';
+
+  /* The warning is in the markup and true by default. The only thing to
+     decide here is whether it has stopped being true: once the browser
+     has granted persistent storage there is nothing left to warn about,
+     so the line goes rather than being contradicted. */
+  const el = document.getElementById('persistState');
+  if (el) el.hidden = persisted;
 }
 /* ── share links & deep links ──────────────────────────────────────
    404.html turns bich.app/e/xf3k9q2m into /?e=xf3k9q2m, because
