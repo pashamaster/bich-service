@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-65" />
+  <meta name="app-version" content="2026-08-21-66" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -413,6 +413,34 @@ body.is-admin .detail-owner::before {
   color: var(--text);
 }
 .search-bar input::placeholder { color: var(--subtle); letter-spacing: 0.05em; }
+
+/* ── iOS ZOOMS INTO ANY FIELD UNDER 16px ───────────────────────────
+   Safari on iPhone auto-zooms the page when a text field with a font
+   smaller than 16px takes focus, and it does NOT zoom back out — so
+   tapping search left the whole app at a strange scale until you
+   pinched it back.
+
+   Every field here was under the line: the search bar at 12px, the
+   form inputs at 13.6px, the mark-to-cancel box at 12.8px.
+
+   The fix is the font size, not the viewport. Adding
+   `maximum-scale=1` to the viewport meta also stops the zoom and is
+   what most answers suggest, but it disables PINCH ZOOM for everybody,
+   permanently — an accessibility trade nobody should make for a
+   cosmetic bug.
+
+   Scoped to coarse pointers so the desktop layout keeps its smaller
+   type; 16px on a phone reads better anyway. */
+@media (pointer: coarse) {
+  .search-bar input,
+  .input,
+  .textarea,
+  .mark-why,
+  input[type="text"], input[type="search"], input[type="number"],
+  input[type="date"], input[type="time"], textarea, select {
+    font-size: 16px;
+  }
+}
 /* The browser's own clear affordance is inconsistent across engines and
    invisible in the dark theme, so it is suppressed and replaced. */
 .search-bar input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
@@ -3133,18 +3161,53 @@ async function saveEdit(){
   } finally { btn.disabled = false; }
 }
 
-function openDetail(id) {
+/* Find an event by short id, wherever it currently lives.
+
+   This exists because the map stopped sharing the feed's array. Before
+   that, everything on screen was in EVENTS and looking there was
+   enough; now a pin can be for an event the feed never loaded — a
+   different town, a different week — and openDetail's `EVENTS.find`
+   returned undefined and silently did NOTHING. Tapping a map pin
+   looked broken because it was.
+
+   Falls through: the feed, then the map's own rows, then the search
+   results, and finally the server. */
+function findLoadedEvent(id){
+  return EVENTS.find(x => x.id === id)
+      || MAP_EVENTS.find(x => x.id === id)
+      || null;
+}
+
+async function fetchEventById(id){
+  if (!SB_READY()) return null;
+  try {
+    const row = await sbRpc('public_event', { p_short_id: id });
+    const r = Array.isArray(row) ? row[0] : row;
+    return r ? rowToEvent(r) : null;
+  } catch(err){
+    console.warn('[bich] could not load event', id, err.message);
+    return null;
+  }
+}
+
+async function openDetail(id) {
   /* An event still waiting in the outbox has no server row, so the
      detail screen would fetch nothing, show no owner controls, and
      offer an edit that cannot be saved. Say what is happening
      instead. */
-  const _pending = EVENTS.find(e => e.id === id);
+  const _pending = findLoadedEvent(id);
   if (_pending && _pending.pending){
     toast('this one is still waiting to send');
     return;
   }
 
-  const e = EVENTS.find(x => x.id === id);
+  let e = findLoadedEvent(id);
+  if (!e){
+    /* Not in any array we hold — a map pin from a town the feed never
+       loaded. Ask for it rather than doing nothing. */
+    e = await fetchEventById(id);
+    if (e) EVENTS.push(e);        // so the rest of this function, and edit, can find it
+  }
   if (!e) return;
   const hero = document.getElementById('detailHero');
   /* A cover held locally because the upload has not happened yet counts
@@ -4427,6 +4490,38 @@ const BUBBLE_ABOVE_KM = 35;
 let MAP_BUBBLES = [];      // one entry per community, when zoomed out
 let MAP_MODE = 'pins';     // 'pins' | 'bubbles'
 
+/* Group raw event rows into one bubble per community, in the browser.
+
+   Only used when map_communities_in_view is unavailable. Positions come
+   from KNOWN_COMMUNITIES where the community is one we know, so the
+   bubble sits on the town rather than on the average of whatever
+   happens to be listed there; otherwise the centroid of its own
+   events. */
+function bubblesFromEvents(rows){
+  const by = new Map();
+  (rows || []).forEach(r => {
+    const key = r.community_slug || ('at:' + Number(r.venue_lat).toFixed(1) + ',' + Number(r.venue_lng).toFixed(1));
+    if (!by.has(key)) by.set(key, { key, slug: r.community_slug || null, rows: [], pins: new Set() });
+    const g = by.get(key);
+    g.rows.push(r);
+    g.pins.add(r.pin_key || (r.venue_lat + ',' + r.venue_lng));
+  });
+
+  return [...by.values()].map(g => {
+    const known = g.slug && (KNOWN_COMMUNITIES || []).find(c => c.slug === g.slug);
+    const lat = known ? known.centre_lat : g.rows.reduce((a, r) => a + Number(r.venue_lat), 0) / g.rows.length;
+    const lng = known ? known.centre_lng : g.rows.reduce((a, r) => a + Number(r.venue_lng), 0) / g.rows.length;
+    return {
+      key: g.key, slug: g.slug,
+      name: known ? known.name : '',
+      centre_lat: lat, centre_lng: lng,
+      radius_km: known ? known.radius_km : 10,
+      n_events: g.rows.length,
+      n_places: g.pins.size
+    };
+  }).sort((a, b) => b.n_events - a.n_events);
+}
+
 /* How wide the map is, in kilometres, right now. */
 function viewWidthKm(map){
   const b = map.getBounds();
@@ -4456,23 +4551,57 @@ async function loadMapView(force){
   const seq = ++_mapFetchSeq;
 
   if (mode === 'bubbles'){
+    const fromIso = from ? new Date(from).toISOString()
+                         : new Date(Date.now() - MAP_PAST_MS).toISOString();
+    const toIso   = to ? new Date(to).toISOString() : null;
+
+    let rows = null;
     try {
-      const rows = await sbRpc('map_communities_in_view', {
+      rows = await sbRpc('map_communities_in_view', {
         p_min_lat: want.s, p_min_lng: want.w,
         p_max_lat: want.n, p_max_lng: want.e,
-        p_from: from ? new Date(from).toISOString()
-                     : new Date(Date.now() - MAP_PAST_MS).toISOString(),
-        p_to:   to ? new Date(to).toISOString() : null
+        p_from: fromIso, p_to: toIso
       });
-      if (seq !== _mapFetchSeq) return;
-      MAP_BUBBLES = rows || [];
-      MAP_EVENTS = [];
-      MAP_MODE = 'bubbles';
-      _mapLastBox = want;
-      paintMap();
     } catch(err){
-      console.warn('[bich] community view failed —', err.message);
+      /* The old version stopped here with a console.warn, left MAP_MODE
+         as 'pins', and the map silently kept drawing individual pins —
+         so a schema that had not been re-run looked exactly like a
+         feature that did not work.
+
+         Say so plainly, then do the job anyway from the events we can
+         already ask for. */
+      if (!window._noBubbleRpc){
+        window._noBubbleRpc = true;
+        console.warn('[bich] map_communities_in_view is missing — run supabase-schema.sql. '
+                   + 'Grouping in the browser instead; counts are capped by the pin budget.');
+      }
+      rows = null;
     }
+
+    if (rows === null){
+      /* FALLBACK. Ask for the events and group them here. A generous pin
+         cap because these are being counted, not drawn — the point of
+         the bubble is that its number is true. */
+      try {
+        const evs = await sbRpc('map_events_in_view', {
+          p_viewer: CURRENT_USER.id || null,
+          p_min_lat: want.s, p_min_lng: want.w,
+          p_max_lat: want.n, p_max_lng: want.e,
+          p_from: fromIso, p_to: toIso, p_max_pins: 200
+        });
+        rows = bubblesFromEvents(evs || []);
+      } catch(err2){
+        console.warn('[bich] community view unavailable —', err2.message);
+        return;
+      }
+    }
+
+    if (seq !== _mapFetchSeq) return;
+    MAP_BUBBLES = rows || [];
+    MAP_EVENTS = [];
+    MAP_MODE = 'bubbles';
+    _mapLastBox = want;
+    paintMap();
     return;
   }
 
