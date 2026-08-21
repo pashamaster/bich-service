@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-05-64" />
+  <meta name="app-version" content="2026-08-21-65" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -413,6 +413,23 @@ body.is-admin .detail-owner::before {
   color: var(--text);
 }
 .search-bar input::placeholder { color: var(--subtle); letter-spacing: 0.05em; }
+/* The browser's own clear affordance is inconsistent across engines and
+   invisible in the dark theme, so it is suppressed and replaced. */
+.search-bar input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.search-bar__x {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 1.1rem; line-height: 1;
+  padding: 0 2px; min-width: 24px; min-height: 24px;
+}
+.search-bar__x:hover { color: var(--accent); }
+.search-bar__x[hidden] { display: none; }
+
+/* why a row is in the results — title / venue / place / host */
+.event-card__hit {
+  font-family: var(--font-mono);
+  font-size: 0.52rem; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--subtle);
+}
 
 .section-header {
   padding: var(--space-lg) var(--space-md) var(--space-sm);
@@ -619,6 +636,38 @@ body.is-admin .detail-owner::before {
 /* A pin plus its time. The label is positioned off the dot rather than
    inside the icon box, so the dot itself stays exactly on the
    coordinate and the text hangs beside it. */
+/* ── community bubbles (zoomed out) ────────────────────────────────
+   Deliberately NOT styled like a pin. A pin says "an event is here";
+   a bubble says "this many things are in this town" and is a place to
+   go rather than a thing to open. Bigger, softer, and labelled. */
+.map-bubble-wrap { background: none; border: none; }
+.map-bubble {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--bg);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
+              0 4px 14px var(--scrim);
+  cursor: pointer;
+  transition: transform var(--ease);
+}
+.map-bubble:active { transform: scale(0.94); }
+.map-bubble__n {
+  font-family: var(--font-serif); font-style: italic;
+  font-size: 0.95rem; line-height: 1;
+}
+.map-bubble__label {
+  position: absolute; left: 50%; top: 100%;
+  transform: translateX(-50%);
+  margin-top: 5px;
+  white-space: nowrap;
+  font-family: var(--font-mono); font-size: 0.54rem;
+  letter-spacing: 0.1em; text-transform: lowercase;
+  color: var(--text);
+  background: var(--bg);
+  padding: 2px 6px; border-radius: 3px;
+}
+
 .map-pin { position: relative; width: var(--pin-size, 14px); height: var(--pin-size, 14px); }
 .map-pin__label {
   position: absolute; left: 20px; top: 50%;
@@ -1948,7 +1997,11 @@ if ('serviceWorker' in navigator) {
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color: var(--muted);">
           <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
         </svg>
-        <input type="text" placeholder="search events, venues, vibes" />
+        <input type="search" id="searchInput" autocomplete="off"
+               autocapitalize="none" spellcheck="false" enterkeyhint="search"
+               placeholder="search events, venues, people" />
+        <button type="button" class="search-bar__x" id="searchClear" hidden
+                aria-label="clear search">×</button>
       </div>
 
     </div>
@@ -2553,6 +2606,7 @@ function renderEventCard(e) {
           <span class="event-card__meta-item">${icon.pin} ${e.venue}</span>
           <span class="event-card__meta-item">${icon.clock} ${e.when}</span>
           ${e.price > 0 ? `<span class="event-card__meta-item">${icon.euro} €${e.price}</span>` : '<span class="event-card__meta-item tag--accent" style="color:var(--accent);">FREE</span>'}
+          ${e.hit && e.hit !== 'title' ? `<span class="event-card__hit">matched ${escapeHtml(e.hit)}</span>` : ''}
         </div>
       </div>
     </article>`;
@@ -2616,7 +2670,11 @@ const ME_LIST_HEADING = {
   going:    'you are going',
   attended: 'you attended',
   hosting:  'you are hosting',
-  review:   'marked to cancel'
+  review:   'marked to cancel',
+  /* Search reuses the me-list machinery: same exit bar, same "this is
+     not the feed" framing, same rule that the map follows the list
+     rather than its own viewport query while one is open. */
+  search:   'search results'
 };
 
 function renderBundles() {
@@ -2755,13 +2813,21 @@ function paintDetail(e){
     if (!window._detailMap){
       window._detailMap = L.map('detailMap', {
         zoomControl: false, attributionControl: false,
-        scrollWheelZoom: false, dragging: true
+        /* Both off at creation. guardMapScroll() turns dragging back on
+           for the gestures that are genuinely the map's — see the
+           directional lock above. */
+        scrollWheelZoom: false, dragging: false
       });
       window._detailBase = L.tileLayer(TILE_URL(currentTiles().base), {
         subdomains: 'abcd', maxZoom: 19
       }).addTo(window._detailMap);
       addLabels(window._detailMap);      // after the base, so it sits on top
+      guardMapScroll(document.getElementById('detailMap'), window._detailMap);
     }
+    attachMapParallax(
+      document.querySelector('.detail-body'),
+      document.getElementById('detailMapBlock'),
+      document.getElementById('detailMap'));
     const m = window._detailMap;
     if (window._detailMarker) m.removeLayer(window._detailMarker);
     window._detailMarker = L.marker([e.lat, e.lng], {
@@ -4344,19 +4410,74 @@ function viewBox(map, pad){
   return { s: b.getSouth(), w: b.getWest(), n: b.getNorth(), e: b.getEast() };
 }
 
+/* Above this much visible width the map draws COMMUNITIES, below it
+   draws events.
+
+   Expressed in kilometres rather than as a zoom level on purpose: the
+   same zoom is a different distance on a phone, a tablet and at
+   different latitudes, and what decides whether pins are readable is
+   the distance they are spread over, not the number Leaflet calls it.
+
+   35km is about one town across. Above that, a town's events collapse
+   into a few pixels — the screenshot that prompted this had Lisbon as
+   five overlapping dots and Ericeira as three circles stacked on each
+   other, at roughly 90km wide. */
+const BUBBLE_ABOVE_KM = 35;
+
+let MAP_BUBBLES = [];      // one entry per community, when zoomed out
+let MAP_MODE = 'pins';     // 'pins' | 'bubbles'
+
+/* How wide the map is, in kilometres, right now. */
+function viewWidthKm(map){
+  const b = map.getBounds();
+  const lat = map.getCenter().lat;
+  return Math.abs(b.getEast() - b.getWest()) * 111.32 *
+         Math.max(Math.cos(lat * Math.PI / 180), 0.01);
+}
+
 async function loadMapView(force){
   const map = window._map;
   if (!map || !SB_READY()) return;
 
   /* A "me" list owns the map while it is open — those are a record, not
-     a recommendation, and they are never capped or re-ranked. */
+     a recommendation, and they are never capped, re-ranked or rolled up
+     into bubbles. */
   if (meListMode) return;
 
   const want = viewBox(map, 0.25);
-  if (!force && boxCovers(_mapLastBox, want)) return;
+  const wide = viewWidthKm(map) > BUBBLE_ABOVE_KM;
+  const mode = wide ? 'bubbles' : 'pins';
+
+  /* Crossing the threshold is always a refetch: the two modes ask
+     different questions and one cannot be derived from the other. */
+  if (!force && mode === MAP_MODE && boxCovers(_mapLastBox, want)) return;
 
   const [from, to] = filterRange(mapFilter);
   const seq = ++_mapFetchSeq;
+
+  if (mode === 'bubbles'){
+    try {
+      const rows = await sbRpc('map_communities_in_view', {
+        p_min_lat: want.s, p_min_lng: want.w,
+        p_max_lat: want.n, p_max_lng: want.e,
+        p_from: from ? new Date(from).toISOString()
+                     : new Date(Date.now() - MAP_PAST_MS).toISOString(),
+        p_to:   to ? new Date(to).toISOString() : null
+      });
+      if (seq !== _mapFetchSeq) return;
+      MAP_BUBBLES = rows || [];
+      MAP_EVENTS = [];
+      MAP_MODE = 'bubbles';
+      _mapLastBox = want;
+      paintMap();
+    } catch(err){
+      console.warn('[bich] community view failed —', err.message);
+    }
+    return;
+  }
+
+  MAP_MODE = 'pins';
+  MAP_BUBBLES = [];
   try {
     const rows = await sbRpc('map_events_in_view', {
       p_viewer:   CURRENT_USER.id || null,
@@ -4484,8 +4605,14 @@ function mappableEvents(){
   const now = Date.now();
   /* MAP_EVENTS while the map owns itself; EVENTS when a "me" list is
      open, because those lists are a record and are plotted exactly as
-     they stand — uncapped, unranked, nothing dropped. */
-  const source = meListMode ? EVENTS : (MAP_EVENTS.length ? MAP_EVENTS : EVENTS);
+     they stand — uncapped, unranked, nothing dropped.
+
+     The fall back to EVENTS is for the moment BEFORE the map's first
+     query returns, and only then: once _mapLastBox is set the map has
+     answered for itself and an empty MAP_EVENTS means "nothing here",
+     not "show me the feed". */
+  const source = meListMode ? EVENTS
+               : (_mapLastBox ? MAP_EVENTS : (MAP_EVENTS.length ? MAP_EVENTS : EVENTS));
   return source.filter(e => {
     /* A pin is required. L.marker([null, null]) throws "Invalid
        LatLng" and takes the whole map down with it, and plenty of
@@ -4687,9 +4814,82 @@ function pinTier(crossed){
   return PIN_TIERS.find(t => c >= t.min) || PIN_TIERS[PIN_TIERS.length - 1];
 }
 
+/* Bubble size by how much is inside it. Bounded at both ends: small
+   enough that a one-event town is not a target, big enough that a
+   three-digit count still fits. */
+function bubbleSize(n){
+  if (n >= 100) return 62;
+  if (n >= 50)  return 56;
+  if (n >= 20)  return 50;
+  if (n >= 8)   return 44;
+  if (n >= 3)   return 40;
+  return 36;
+}
+
+function paintCommunityBubbles(map){
+  (window._mapMarkers || []).forEach(m => map.removeLayer(m));
+  window._mapMarkers = [];
+
+  let events = 0, places = 0;
+  MAP_BUBBLES.forEach(b => {
+    if (b.centre_lat == null || b.centre_lng == null) return;
+    events += b.n_events || 0;
+    places += b.n_places || 0;
+    const size = bubbleSize(b.n_events || 0);
+    const label = (b.name || b.slug || '').toString().toLowerCase();
+
+    const m = L.marker([b.centre_lat, b.centre_lng], {
+      icon: L.divIcon({
+        className: 'map-bubble-wrap',
+        html: `<div class="map-bubble" style="width:${size}px;height:${size}px;">
+                 <span class="map-bubble__n">${b.n_events}</span>
+               </div>${label ? `<span class="map-bubble__label">${escapeHtml(label)}</span>` : ''}`,
+        iconSize:   [size, size],
+        iconAnchor: [size / 2, size / 2]
+      })
+    }).addTo(map);
+
+    /* Tapping a bubble goes INTO it. The community already knows its
+       own centre and radius, so this needs no extra query — and it
+       lands below the bubble threshold, which turns the bubbles into
+       pins on arrival. */
+    m.on('click', () => {
+      const km = Math.max(2, b.radius_km || 10);
+      programmaticView(mp => mp.fitBounds([
+        [b.centre_lat - km / 111, b.centre_lng - km / (111 * Math.max(Math.cos(b.centre_lat * Math.PI / 180), 0.01))],
+        [b.centre_lat + km / 111, b.centre_lng + km / (111 * Math.max(Math.cos(b.centre_lat * Math.PI / 180), 0.01))]
+      ], { padding: [24, 24] }));
+      scheduleMapLoad(true);
+    });
+    window._mapMarkers.push(m);
+  });
+
+  const count = document.querySelector('.map-footer-sheet__count');
+  if (count){
+    count.innerHTML = `<span class="num">${events}</span> `
+      + (events === 1 ? 'event' : 'events')
+      + ` in <span class="num">${MAP_BUBBLES.length}</span> `
+      + (MAP_BUBBLES.length === 1 ? 'place' : 'places')
+      + ` · zoom in for detail`;
+  }
+}
+
 function paintMap(){
   const map = window._map;
   if (!map) return;
+
+  /* Zoomed out, the map draws communities rather than events — see
+     BUBBLE_ABOVE_KM. Nothing is dropped up here, because nothing is
+     drawn individually. */
+  if (MAP_MODE === 'bubbles' && !meListMode){
+    /* Even with nothing in view. Without the empty case here, paintMap
+       fell through to the pin branch, mappableEvents() found MAP_EVENTS
+       empty and reverted to the FEED's array — so an empty region at
+       world zoom drew your home town's pins in the middle of the
+       ocean. */
+    paintCommunityBubbles(map);
+    return;
+  }
 
   (window._mapMarkers || []).forEach(m => map.removeLayer(m));
   window._mapMarkers = [];
@@ -5045,6 +5245,170 @@ overlay.addEventListener('click', closeCreate);
 const draft = { cover: null, lat: null, lng: null, city: '', timeFinish: '', mapsLink: '' };
 let miniMarker = null;
 
+/* ═══════════════════════════════════════════════════════════════════
+   MAPS INSIDE A SCROLLING PAGE
+
+   Two problems, and they are not the same one.
+
+   1. THE SCROLL TRAP. Both embedded maps were created with
+      `dragging: true`, and the mini map with wheel zoom on as well. A
+      Leaflet map swallows every drag over it, so a vertical swipe that
+      was meant to scroll the form instead PANNED THE MAP — you look
+      away, look back, and the pin picker is showing a different
+      country. That is the "relocating heavily" part, and no amount of
+      easing fixes it, because the gesture never reaches the page.
+
+   2. THE JOLT. Even with scrolling fixed, a map is a busy rectangle of
+      detail moving at exactly the speed of the text beside it, which
+      is what makes it feel like it is lurching past.
+
+   So: a directional lock for (1), and parallax with a fade for (2).
+
+   No backend. Nothing here touches the network or the schema.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* DRIFT AMPLITUDE, as a fraction of the map block's own height — not a
+   speed ratio, which is what a name like "parallax: 0.45" usually
+   implies. The offset is computed from where the block sits in the
+   viewport, so the map drifts within a bounded range and returns to
+   centre as the block passes the middle of the screen. A true speed
+   ratio would accumulate over a long form and slide the map right out
+   of its own frame.
+
+   0.45 of the block height gives roughly ±40px on the pin picker:
+   clearly slower than the text beside it, never far enough to look
+   detached. */
+const MAP_DRIFT = 0.45;
+
+/* How far it fades at the edges of the viewport, and the dead zone in
+   the middle where it does not fade at all.
+
+   The dead zone matters: the first version faded purely on distance
+   from centre, so the pin picker sat at 0.55 opacity while it was
+   perfectly visible and about to be tapped. A control you are using
+   should not be half transparent. */
+const MAP_FADE_DEPTH = 0.35;   // floor is 1 - this = 0.65
+const MAP_FADE_DEAD  = 0.35;   // no fade at all within this of centre
+
+/* ── 1. the scroll trap ───────────────────────────────────────────
+   A DIRECTIONAL LOCK. The first few pixels of a touch decide who owns
+   the gesture for its whole duration:
+
+     mostly vertical   → the page scrolls, the map ignores it
+     mostly horizontal → the map pans, the page holds still
+     neither, a tap    → the map's own click handling, so the pin
+                         picker still sets a pin in one tap
+
+   Deciding once and holding it is what makes this feel solid; deciding
+   per-frame produces a map that fights the thumb.
+
+   The wheel is simpler: it always belongs to the page. Zooming a map
+   somebody scrolled past is never what they asked for. */
+function guardMapScroll(mapEl, map){
+  if (!mapEl || !map || mapEl._scrollGuarded) return;
+  mapEl._scrollGuarded = true;
+
+  /* Off by default; the lock turns it on for the gestures that are
+     really the map's. */
+  if (map.dragging) map.dragging.disable();
+  if (map.scrollWheelZoom) map.scrollWheelZoom.disable();
+  /* Two fingers is unambiguous — nobody pinches by accident while
+     scrolling — so pinch zoom stays available throughout. */
+  if (map.touchZoom) map.touchZoom.enable();
+
+  let x0 = 0, y0 = 0, decided = null;
+
+  mapEl.addEventListener('touchstart', (ev) => {
+    if (ev.touches.length !== 1){ decided = 'map'; return; }
+    x0 = ev.touches[0].clientX; y0 = ev.touches[0].clientY;
+    decided = null;
+    if (map.dragging) map.dragging.disable();
+  }, { passive: true });
+
+  mapEl.addEventListener('touchmove', (ev) => {
+    if (decided || ev.touches.length !== 1) return;
+    const dx = Math.abs(ev.touches[0].clientX - x0);
+    const dy = Math.abs(ev.touches[0].clientY - y0);
+    /* Wait for a real gesture. Under 8px it is still a tap. */
+    if (dx < 8 && dy < 8) return;
+    if (dx > dy){
+      decided = 'map';
+      if (map.dragging) map.dragging.enable();
+    } else {
+      decided = 'page';        // leave dragging off; the page scrolls
+    }
+  }, { passive: true });
+
+  mapEl.addEventListener('touchend', () => {
+    decided = null;
+    if (map.dragging) map.dragging.disable();
+  }, { passive: true });
+
+  /* Desktop: a mouse has no ambiguity, so dragging is fine on
+     press — it is only the wheel that needs taking away. */
+  mapEl.addEventListener('mousedown', () => { if (map.dragging) map.dragging.enable(); });
+  mapEl.addEventListener('mouseleave', () => { if (map.dragging) map.dragging.disable(); });
+  mapEl.addEventListener('wheel', () => { if (map.scrollWheelZoom) map.scrollWheelZoom.disable(); }, { passive: true });
+}
+
+/* ── 2. parallax and fade ─────────────────────────────────────────
+   The map's INNER pane is translated, never the container, so the
+   element keeps its place in the layout and nothing below it moves.
+
+   Driven from rAF rather than straight off the scroll event: a scroll
+   handler that writes style on every event runs far more often than
+   the screen refreshes, and on a long form that is the difference
+   between smooth and gritty. */
+function attachMapParallax(scroller, block, mapEl){
+  if (!scroller || !block || !mapEl || block._parallaxOn) return;
+
+  /* Parallax is a vestibular trigger — content moving at a speed the
+     page did not ask for is exactly what the setting is about. The
+     scroll guard above still applies, because that is not motion, it
+     is about which surface owns a gesture. */
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    mapEl.style.opacity = '1';
+    return;
+  }
+  block._parallaxOn = true;
+
+  const pane = mapEl.querySelector('.leaflet-map-pane') || mapEl;
+  /* Promote once, so the browser composites the translate on the GPU
+     instead of repainting a map full of tiles on every frame. */
+  pane.style.willChange = 'transform';
+  let ticking = false;
+
+  const frame = () => {
+    ticking = false;
+    const r = block.getBoundingClientRect();
+    const h = scroller.clientHeight || window.innerHeight;
+    if (r.bottom < -200 || r.top > h + 200) return;   // far offscreen, skip
+
+    /* How far the block is from the middle of the viewport, as -1..1. */
+    const mid = (r.top + r.height / 2) - h / 2;
+    const off = Math.max(-1, Math.min(1, mid / (h / 2)));
+
+    /* Move against the scroll, within a bounded range. */
+    pane.style.transform = `translate3d(0, ${(-off * r.height * MAP_DRIFT * 0.5).toFixed(1)}px, 0)`;
+
+    /* Fade only OUTSIDE the dead zone, and never to nothing: a map you
+       cannot see is a map you cannot tap, and the pin picker has to
+       stay usable wherever it happens to sit in a long form. */
+    const past = Math.max(0, Math.abs(off) - MAP_FADE_DEAD) / (1 - MAP_FADE_DEAD);
+    mapEl.style.opacity = (1 - past * MAP_FADE_DEPTH).toFixed(3);
+  };
+
+  const onScroll = () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(frame);
+  };
+
+  scroller.addEventListener('scroll', onScroll, { passive: true });
+  block._parallaxOff = () => scroller.removeEventListener('scroll', onScroll);
+  frame();
+}
+
 function initMiniMap() {
   if (window._miniReady) return;
   const home = mapHome();
@@ -5052,7 +5416,11 @@ function initMiniMap() {
     /* Same home as the main map. Opening the pin picker on the wrong
        island means every single event starts with a pan. */
     center: [home.lat, home.lng], zoom: home.zoom,
-    zoomControl: false, attributionControl: false
+    zoomControl: false, attributionControl: false,
+    /* This one had BOTH on, so a swipe down the form panned the picker
+       and the wheel zoomed it. A tap still sets the pin — that is a
+       click, not a drag, and the lock lets clicks through untouched. */
+    scrollWheelZoom: false, dragging: false
   });
   window._miniBase = L.tileLayer(TILE_URL(currentTiles().base), {
     subdomains: 'abcd', maxZoom: 19
@@ -5070,6 +5438,11 @@ function initMiniMap() {
     setEventLocation(e.latlng.lat, e.latlng.lng, false);
   });
   window._miniMap = m;
+  guardMapScroll(document.getElementById('miniMap'), m);
+  attachMapParallax(
+    document.querySelector('.modal-body'),
+    document.querySelector('.mini-map-picker'),
+    document.getElementById('miniMap'));
   window._miniReady = true;
 
   /* Re-measure once the browser has actually laid the container out.
@@ -7287,6 +7660,102 @@ function initThemes(){
 
    meListMode itself is declared above rankedBucket, which reads it. */
 
+/* ═══════════════════════════════════════════════════════════════════
+   SEARCH
+
+   The bar in the header had no id and no listener — markup only. It now
+   asks Postgres, not the loaded array, and that distinction is the
+   whole design: the feed is capped at FEED_MAX_EVENTS and the map at a
+   pin budget, so filtering what is already on screen would search
+   forty events and call it a search engine.
+
+   Matching is trigram, not full text, because a flyer here is as likely
+   to be Portuguese as English and stemming the wrong language is worse
+   than not stemming at all. See part 4m of the schema.
+
+   Results land in the SAME list surface the "me" filters use, so the
+   exit bar, the past-events handling and the map's deference all come
+   for free.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const SEARCH_MIN = 2;
+let _searchTimer = null;
+let _searchSeq = 0;
+
+async function runSearch(q){
+  q = (q || '').trim();
+  const bar = document.getElementById('meListBar');
+  const clear = document.getElementById('searchClear');
+  if (clear) clear.hidden = !q;
+
+  if (q.length < SEARCH_MIN){
+    if (meListMode === 'search') exitMeList();
+    return;
+  }
+  if (!SB_READY()){ toast('search needs a connection'); return; }
+
+  const seq = ++_searchSeq;
+  try {
+    const rows = await sbRpc('search_events', {
+      p_q: q,
+      p_viewer: CURRENT_USER.id || null,
+      p_limit: 40,
+      /* Ranked by, never filtered by. Your own town sorts first and
+         everywhere else stays reachable — the same reasoning that keeps
+         the map's viewport a frame rather than a fence. */
+      p_community: (Store.data.home && Store.data.home.slug) || null
+    });
+    /* A slower earlier query must never overwrite a newer answer — the
+       classic search race, where deleting a letter shows you the
+       results for the longer word. */
+    if (seq !== _searchSeq) return;
+
+    meListMode = 'search';
+    document.querySelector('.tab[data-screen="home"]').click();
+
+    EVENTS.length = 0;
+    (rows || []).forEach(r => {
+      const e = rowToEvent(r);
+      e.crossed = r.crossed || 0;
+      e.isPast  = r.is_past === true || undefined;
+      e.hit     = r.hit;
+      e.bundle  = 'personal';
+      EVENTS.push(e);
+    });
+    renderBundles();
+    if (window._mapReady) paintMap();
+
+    if (bar){
+      bar.hidden = false;
+      document.getElementById('meListBarText').textContent =
+        EVENTS.length
+          ? `${EVENTS.length} match${EVENTS.length === 1 ? '' : 'es'} for "${q}"`
+          : `nothing matches "${q}"`;
+    }
+    setFeedStatus(EVENTS.length ? '' : `nothing matches "${q}" — try a venue or a town`);
+  } catch(err){
+    console.warn('[bich] search failed —', err.message);
+    setFeedStatus('search is unavailable right now', true);
+  }
+}
+
+on('searchInput', 'input', (ev) => {
+  clearTimeout(_searchTimer);
+  const q = ev.target.value;
+  /* 250ms: long enough that typing "ericeira" is one query and not
+     eight, short enough that it still feels like it is keeping up. */
+  _searchTimer = setTimeout(() => runSearch(q), 250);
+});
+on('searchInput', 'keydown', (ev) => {
+  if (ev.key === 'Enter'){ clearTimeout(_searchTimer); runSearch(ev.target.value); }
+  if (ev.key === 'Escape'){ ev.target.value = ''; runSearch(''); ev.target.blur(); }
+});
+on('searchClear', 'click', () => {
+  const el = document.getElementById('searchInput');
+  if (el){ el.value = ''; el.focus(); }
+  runSearch('');
+});
+
 async function openMeList(kind){
   /* Tapping "attended" used to open an empty list every time, because
      Store.data.attended has had nothing writing to it since promotion
@@ -7329,6 +7798,9 @@ async function openMeList(kind){
   }
 
   meListMode = kind;
+  /* A "me" list plots exactly what it holds, so the map leaves bubble
+     mode for as long as one is open. */
+  MAP_MODE = 'pins'; MAP_BUBBLES = [];
   document.querySelector('.tab[data-screen="home"]').click();
   setFeedStatus(kind === 'review'
     ? `marked to cancel · ${wanted.length}`
@@ -7379,10 +7851,22 @@ async function openMeList(kind){
 
 function exitMeList(){
   if (!meListMode) return;
+  const wasSearch = meListMode === 'search';
   meListMode = null;
   document.getElementById('meListBar').hidden = true;
+  /* Leaving the results must empty the box as well. A cleared list
+     under a query somebody can still read is the app telling them two
+     different things at once. */
+  const box = document.getElementById('searchInput');
+  if (box && box.value){ box.value = ''; }
+  const x = document.getElementById('searchClear');
+  if (x) x.hidden = true;
+  if (wasSearch) _searchSeq++;      // abandon anything still in flight
   setFeedStatus('');
   loadFeed();
+  /* The map went to the results while they were open; give it back its
+     own viewport query. */
+  if (window._mapReady) scheduleMapLoad(true);
 }
 
 function paintMeCounts(c){
