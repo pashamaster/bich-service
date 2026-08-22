@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-74" />
+  <meta name="app-version" content="2026-08-21-75" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3133,7 +3133,14 @@ async function saveEdit(){
   if (editDraft.lat != null && editDraft.lng != null){
     patch.venue_lat = editDraft.lat;
     patch.venue_lng = editDraft.lng;
+    /* venue_source describes where the NAME came from. pin_source
+       describes who put the DOT there, and only this one reaches the
+       gazetteer — observe_event_pin maps 'community' and 'venue' to
+       nothing, so without this line a deliberate correction on a
+       fallback pin recorded no observation and was moved back by the
+       next sweep. Sending both because they mean different things. */
     patch.venue_source = 'manual';
+    patch.pin_source   = 'manual';
   }
   if (editDraft.cover !== undefined) patch.cover_url = editDraft.cover;
   if (startsAt && !Number.isNaN(startsAt.getTime())) patch.starts_at = startsAt.toISOString();
