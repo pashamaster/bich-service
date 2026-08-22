@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-71" />
+  <meta name="app-version" content="2026-08-21-72" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -9704,10 +9704,35 @@ async function refreshMagicAccess(){
 
   let on = false;
   try {
-    if (SB_READY() && CURRENT_USER.id && Store.data.secretClaimed){
-      on = Boolean(await sbRpc('my_magic', {
-        p_user: CURRENT_USER.id, p_secret: deviceSecret()
-      }));
+    if (SB_READY()){
+      /* CLAIM THE SECRET, don't just read the flag.
+
+         may_use_magic_as requires a claimed device secret even when the
+         tap is open — "open" means no invite needed, not no account.
+         This used to gate on Store.data.secretClaimed, which is set to
+         false for every brand new account by ensureUser() and is only
+         ever turned on by an ACTION: publishing, attending, or an
+         outbox flush that has something in it.
+
+         Boot calls ensureUser() and then refreshMagicAccess() and
+         nothing in between claims anything — outboxFlush() returns on
+         `if (!items.length)` long before its own claim, and a new
+         device's outbox is empty. So the question was never asked, `on`
+         stayed false, and the button stayed hidden.
+
+         That was a chicken and egg: magic IS how a lot of people
+         publish their first event, and you had to publish first to be
+         offered it. Redeeming a code hit the same wall — "this device
+         has no account yet, publish something first".
+
+         claimDeviceSecret() is idempotent and early-returns once the
+         flag is set, so on every later call this costs nothing. */
+      await claimDeviceSecret();
+      if (CURRENT_USER.id && Store.data.secretClaimed){
+        on = Boolean(await sbRpc('my_magic', {
+          p_user: CURRENT_USER.id, p_secret: deviceSecret()
+        }));
+      }
     }
   } catch(err){
     console.warn('[bich] could not check magic access', err);
