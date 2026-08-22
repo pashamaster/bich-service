@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-73" />
+  <meta name="app-version" content="2026-08-21-74" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3644,7 +3644,7 @@ const OUTBOX_HANDLERS = {
     if (res && res.replayed) console.info('[bich] publish replayed, not duplicated');
     /* The offline case the cron used to be the only answer for: this
        publish happened with no network, so its poke never went out. */
-    pokeVenueJobs('queued publish');
+    pokeVenueJobs('queued publish', res && res.event && res.event.short_id);
     return res;
   },
   'attendance.set': async (payload, opId) => sbRpc('set_attendance', {
@@ -3661,7 +3661,7 @@ const OUTBOX_HANDLERS = {
       p_short_id: payload.short_id, p_user: CURRENT_USER.id,
       p_secret: deviceSecret(), p_patch: payload.patch, p_operation_id: opId
     });
-    pokeVenueJobs('queued edit');     // same reason as event.create above
+    pokeVenueJobs('queued edit', payload.short_id);   // same reason as event.create above
     return res;
   },
   /* Marking an event to cancel. Queued like everything else so a report
@@ -6209,12 +6209,25 @@ function canvasToBlob(canvas, mime, quality){
 
    Limits are small on purpose. This is one person's event, not a
    backfill; the sweep is where bulk belongs. */
-function pokeVenueJobs(why){
+/* shortId names the event this poke is about, when there is one.
+   Without it /venues/review reviews the three NEWEST unchecked venues,
+   which as a rule are not the venue just edited — a venue created six
+   months ago could never be reached by editing its events, however
+   many times you poked. With it, the database looks up that event's
+   venue directly and re-checks it against OpenStreetMap whatever its
+   match_status says, and whatever date the event is on: an edit to
+   something that happened on 4 August is still new information about
+   where that venue is.
+
+   Rate limiting lives in the database, not here — one Overpass call
+   per venue per hour however often this fires. */
+function pokeVenueJobs(why, shortId){
   if (!WORKER_URL) return;
-  for (const path of ['/venues/review?limit=3', '/events/pin?limit=3']){
+  const tag = shortId ? '&event=' + encodeURIComponent(shortId) : '';
+  for (const path of ['/venues/review?limit=3' + tag, '/events/pin?limit=3']){
     fetch(WORKER_URL + path, { method: 'POST' }).catch(() => {});
   }
-  console.info('[bich] venue jobs poked after', why);
+  console.info('[bich] venue jobs poked after', why, shortId || '');
 }
 
 /* opId is passed in rather than made here, so the caller can queue the
@@ -6247,7 +6260,7 @@ async function updateEvent(shortId, patch, opId){
      can move a pin or rename a venue, which is new work for both
      jobs — the same reason a publish pokes them. */
   const done = (r) => {
-    pokeVenueJobs('edit');
+    pokeVenueJobs('edit', shortId);
     return Array.isArray(r.row) ? r.row[0] : r.row;
   };
 
@@ -6891,7 +6904,7 @@ async function saveEvent(spec){
   claimDeviceSecret().then(() => maybeOfferPasskey()).catch(() => {});
   refreshMeCounts();         // one more hosted, and the host is going
 
-  pokeVenueJobs('publish');
+  pokeVenueJobs('publish', row.short_id);
   /* Signal three: publishing somewhere makes it your community, every
      time, not just the first time. Deliberate enough to be silent. */
   if (spec.lat != null && spec.lng != null){
