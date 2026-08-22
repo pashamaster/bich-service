@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-72" />
+  <meta name="app-version" content="2026-08-21-73" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -6108,9 +6108,16 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
     const near = await sbRpc('search_venues', {
       q: name, near_lat: lat, near_lng: lng, max_results: 3
     });
+    /* 0.003 to match the server. ensure_venue() and link_event_venue()
+       case A both dedupe at 0.003 (~330m) and this checked 0.002
+       (~220m), so a venue 250m away was "not the same place" here and
+       "the same place" there. The client would decide to create one,
+       the server would hand back the existing id — harmless — but the
+       reverse ordering across two devices is how the same bar collects
+       rows under one name. Three paths, one radius. */
     const hit = (near || []).find(v =>
       v.name.trim().toLowerCase() === name.trim().toLowerCase() &&
-      Math.abs(v.lat - lat) < 0.002 && Math.abs(v.lng - lng) < 0.002);
+      Math.abs(v.lat - lat) < 0.003 && Math.abs(v.lng - lng) < 0.003);
     if (hit) return hit.id;
   } catch(_){ /* search is a convenience, not a gate */ }
 
@@ -6130,6 +6137,11 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
       p_payload: {
         name: name.slice(0, 200), lat, lng,
         city: city || null,
+        /* Without this the venue is created with a null community_slug
+           and resolve_venue_coords can never match it again — see the
+           note in ensure_venue(). The argument was always passed to
+           this function and simply never forwarded. */
+        community_slug: communitySlug || null,
         address: draft.venueAddress || null,
         /* Provenance. A venue picked off the map is a different record
            from one somebody typed, and the OSM id is what makes
