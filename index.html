@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-75" />
+  <meta name="app-version" content="2026-08-21-78" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1948,6 +1948,9 @@ body.is-admin .detail-owner::before {
 button, .btn, .btn-icon, .tab { min-height: var(--tap); }
 .btn-icon, .tab { min-width: var(--tap); }
 
+.contact-link{color:var(--accent);text-decoration:underline;
+  text-underline-offset:2px;word-break:break-word}
+.contact-link:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 </style>
 </head>
 <body class="grain">
@@ -2244,6 +2247,15 @@ if ('serviceWorker' in navigator) {
       <textarea class="textarea" placeholder="what will you and the people do? anything to know before joining?" id="inputDesc"></textarea>
     </div>
 
+    <!-- Contact. One field: a handle, a number, or both. The database
+         finds them and makes them tappable, and adds the country code
+         to a number that was written locally. -->
+    <div class="form-section">
+      <label class="form-section__label">contact · optional</label>
+      <input class="input" id="inputContact" maxlength="200"
+             placeholder="@handle, phone, or both" />
+    </div>
+
     <!-- Location -->
     <div class="form-section">
       <label class="form-section__label">where</label>
@@ -2514,6 +2526,14 @@ if ('serviceWorker' in navigator) {
         <div><label class="text-label" for="editCap">capacity</label><input class="input" id="editCap" type="number" min="1" inputmode="numeric" /></div>
       </div>
 
+      <!-- Magic fills this from the flyer and got it wrong often enough
+           that the host has to be able to fix it. One field: the handle,
+           the number, or both — the database finds them and makes them
+           tappable. -->
+      <label class="text-label" for="editContact">contact</label>
+      <input class="input" id="editContact" maxlength="200"
+             placeholder="@handle, phone, or both" />
+
       <label class="text-label" for="editDesc">description</label>
       <textarea class="input" id="editDesc" rows="5" maxlength="2000"></textarea>
 
@@ -2778,8 +2798,71 @@ function renderBundles() {
    knows all of them, places the symbol correctly per locale and groups
    digits - which starts mattering the moment a price is IDR 200,000
    rather than EUR 12. */
+/* ONE contact field, rendered with its tappable parts linked in place.
+
+   The text is shown exactly as it was written — a host who typed
+   "912 345 678" sees that, not "+351912345678". The href is the
+   canonical form the database derived, which is where the country
+   code that was never printed gets added.
+
+   Nothing here decides WHAT is a handle or a number; the database
+   already did, and refused anything it could not be sure of. These
+   regexes only locate the span to wrap, and if the database found
+   nothing the text renders plain. */
+function linkifyContact(text, instagram, phone){
+  const out = [];
+  let rest = String(text || '');
+  if (!rest) return out;
+
+  const spans = [];
+  if (instagram){
+    const m = rest.match(/(?:instagram\.com\/|@)[A-Za-z0-9._]{2,30}/);
+    if (m) spans.push({ at: m.index, len: m[0].length, text: m[0],
+                        href: 'https://instagram.com/' + instagram });
+  }
+  if (phone){
+    /* Matched on the text as typed, which may be local; the href is
+       the international form. */
+    const m = rest.match(/\+?[0-9][0-9 ().-]{5,18}[0-9]/);
+    if (m) spans.push({ at: m.index, len: m[0].length, text: m[0],
+                        href: 'https://wa.me/' + phone.replace(/[^0-9]/g, '') });
+  }
+  spans.sort((x, y) => x.at - y.at);
+
+  let cursor = 0;
+  for (const sp of spans){
+    if (sp.at < cursor) continue;            // overlapping match, skip
+    if (sp.at > cursor) out.push(document.createTextNode(rest.slice(cursor, sp.at)));
+    const a = document.createElement('a');
+    a.href = sp.href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.className = 'contact-link';
+    a.textContent = sp.text;
+    out.push(a);
+    cursor = sp.at + sp.len;
+  }
+  if (cursor < rest.length) out.push(document.createTextNode(rest.slice(cursor)));
+  return out;
+}
+
+function paintContacts(e){
+  const row  = document.getElementById('detailContactItem');
+  const wrap = document.getElementById('detailContact');
+  if (!row || !wrap) return;
+  wrap.textContent = '';
+  const nodes = linkifyContact(e.contact, e.instagram, e.phone);
+  nodes.forEach(n => wrap.appendChild(n));
+  row.hidden = nodes.length === 0;
+}
+
 function money(v, cur){
-  if (!v) return 'free';
+  /* THREE STATES, and the middle one used to be invisible.
+       null / undefined   nobody said        -> "check w/ orgs"
+       0                  somebody said free -> "free"
+       > 0                a price
+     `if (!v) return 'free'` collapsed the first two, so every flyer
+     that printed no price advertised a free event. */
+  if (v == null || v === '') return 'check w/ orgs';
+  if (!Number(v)) return 'free';
   const code = (cur || 'EUR').toUpperCase();
   try {
     return new Intl.NumberFormat(undefined, {
@@ -2798,7 +2881,7 @@ async function enrichEvent(e){
   if (!SB_READY() || e._full) return e;
   try {
     const rows = await sbGet(
-      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
+      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,contact_instagram,contact_phone,source,host_handle,going_count&short_id=eq.${encodeURIComponent(e.id)}&limit=1`);
     if (rows && rows[0]) Object.assign(e, rowToEvent(rows[0]), { _full: true, bundle: e.bundle });
   } catch(err){ console.warn('[bich] detail fetch failed', err.message); }
   return e;
@@ -2832,7 +2915,7 @@ function paintDetail(e){
   set('detailGoing', `${e.going} ${e.going === 1 ? 'person' : 'people'}`);
   set('detailCap', e.capacity ? `${e.capacity} places` : '', 'detailCapItem');
   set('detailRepeat', e.recurrence || '', 'detailRepeatItem');
-  set('detailContact', e.contact || '', 'detailContactItem');
+  paintContacts(e);
   set('detailEnds', e.ends_at
       ? new Date(e.ends_at).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })
       : '', 'detailEndsItem');
@@ -2980,7 +3063,8 @@ function openEditSheet(ev){
   set('editTime', `${pad(at2.getHours())}:${pad(at2.getMinutes())}`);
   set('editFinish', ev.ends_at
       ? (d => `${pad(d.getHours())}:${pad(d.getMinutes())}`)(new Date(ev.ends_at)) : '');
-  set('editPrice', ev.price || '');
+  set('editPrice', ev.price == null ? '' : ev.price);
+  set('editContact', ev.contact || '');
   set('editCap', ev.capacity == null ? '' : ev.capacity);
   set('editDesc', ev.desc || '');
   /* The host is now counted as going the moment they publish, so a
@@ -3119,8 +3203,19 @@ async function saveEdit(){
   const patch = {
     title,
     venue_name: val('editVenue') || null,
+    /* `?` semantics: the key is always present, so clearing the box
+       clears the field. contact_instagram and contact_phone are NOT
+       sent — a trigger derives them from this. */
+    contact: val('editContact') || null,
     description: val('editDesc') || null,
-    price_value: Math.max(0, Math.round((Number(val('editPrice')) || 0) * 100)),
+    /* An empty box is "nobody said", not "free". The RPC uses `?`
+       semantics, so sending null here is what clears a wrong price. */
+    price_value: (() => {
+      const raw = (val('editPrice') || '').trim();
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isNaN(n) ? null : Math.max(0, Math.round(n * 100));
+    })(),
     capacity: val('editCap') ? parseInt(val('editCap'), 10) : null,
   };
   /* Only touch the finish time when there is one to set, or clearing
@@ -3503,7 +3598,7 @@ async function draftSave(){
         venueAddress: draft.venueAddress, pinSource: draft.pinSource,
         photoLat: draft.photoLat, photoLng: draft.photoLng,
         community: draft.community, recurrence: draft.recurrence,
-        contact: draft.contact, lineup: draft.lineup, currency: draft.currency,
+        contact: (document.getElementById('inputContact')||{}).value || draft.contact || null, lineup: draft.lineup, currency: draft.currency,
         crop: draft.crop || null
       },
       magicArmed: Boolean(window.MAGIC_ARMED),
@@ -6860,7 +6955,10 @@ async function saveEvent(spec){
       starts_at: startsAt.toISOString(),
       ends_at: endsAt ? endsAt.toISOString() : null,
       recurrence: spec.recurrence || null,
-      price_value: Math.round((Number(spec.price) || 0) * 100),
+      /* `Number(null) || 0` turned every unread price into a free
+         event. Absent stays absent; only a real number is sent. */
+      price_value: (spec.price == null || spec.price === '' || Number.isNaN(Number(spec.price)))
+                   ? null : Math.round(Number(spec.price) * 100),
       price_currency: spec.currency || 'EUR',
       /* ?? only catches null and undefined — an untouched number input
          reads as '', which sailed through and reached Postgres as
@@ -7069,7 +7167,9 @@ function rowToEvent(r){
     lat: r.venue_lat, lng: r.venue_lng,
     when: whenLabel(when),
     starts_at: r.starts_at,
-    price: (r.price_value || 0) / 100,
+    price: r.price_value == null ? null : r.price_value / 100,
+    instagram: r.contact_instagram || '',
+    phone: r.contact_phone || '',
     currency: r.price_currency || 'EUR',
     ends_at: r.ends_at || null,
     capacity: r.capacity ?? null,
@@ -7846,7 +7946,7 @@ async function loadFeed(){
        when somebody opening it wants to see what has been going on. */
     const since = new Date(Date.now() - MAP_PAST_MS).toISOString();
     const rows = await sbGet(
-      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
+      `events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,contact_instagram,contact_phone,source,host_handle,going_count&starts_at=gte.${since}&order=starts_at.asc&limit=60`);
     applyFeedRows(rows);
     setFeedStatus(EVENTS.length ? '' : 'nothing published yet');
     return true;
@@ -8072,7 +8172,7 @@ async function openMeList(kind){
   if (missing.length && SB_READY()){
     try {
       const list = missing.map(encodeURIComponent).join(',');
-      const rows = await sbGet(`events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,source,host_handle,going_count&short_id=in.(${list})`);
+      const rows = await sbGet(`events_public?select=id,short_id,title,description,venue_name,venue_address,venue_lat,venue_lng,city,community_slug,starts_at,ends_at,recurrence,price_value,price_currency,capacity,cover_url,contact,contact_instagram,contact_phone,source,host_handle,going_count&short_id=in.(${list})`);
       (rows || []).forEach(r => have.set(r.short_id, rowToEvent(r)));
     } catch(err){ console.warn('[bich] could not load your list', err.message); }
   }
@@ -9609,6 +9709,7 @@ function setPhotoOrigin(origin, dropPin){
 
 function fillForm(row){
   setVal('inputTitle', row.event_name);
+  setVal('inputContact', row.contact);
   setVal('inputDesc', row.description);
   setVal('inputVenue', row.space_name);
   setVal('inputDate', row.date);
@@ -9619,7 +9720,7 @@ function fillForm(row){
      they were being parsed and then dropped on the floor. */
   draft.recurrence = row.recurrence || '';
   draft.venueAddress = row.venue_address || '';
-  draft.contact = row.contact || '';
+  draft.contact = row.contact || '';   // kept in step with inputContact below
   /* Step 7. The pin must never come from EXIF here — a flyer read off
      a cafe window advertises something across town — so dropPin stays
      false. What the photo's coordinates DO get used for is below. */
@@ -10272,7 +10373,7 @@ on('publishBtn', 'click', async () => {
         date, timeStart: time, timeFinish: draft.timeFinish,
         price: ev.price, currency: draft.currency,
         capacity: document.getElementById('inputCapacity').value,
-        recurrence: draft.recurrence, contact: draft.contact,
+        recurrence: draft.recurrence, contact: (document.getElementById('inputContact')||{}).value || draft.contact || null,
         coverUrl: img ? img.url : null,
         source: draft.cover ? 'photo' : 'manual'
       });
