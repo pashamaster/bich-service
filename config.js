@@ -65,9 +65,80 @@ window.BICH_CONFIG = {
      decides for itself via BICH_INVITE_CODES. */
   invite: '',
 
+  /* THE BASEMAP. On 2026-08-26 CARTO began requiring an API key for
+     basemaps.cartocdn.com and started watermarking tiles that arrive
+     without one — a policy change, not a limit anybody hit.
+
+     provider:
+       'esri'   keyless, and the default. Esri's Canvas basemaps, which
+                have the same light/dark base-plus-labels split the
+                theme system is built on. Nothing to sign up for.
+       'carto'  the original look. Needs cartoApiKey below, free to
+                5 million tiles a month from carto.com/basemaps/apikey.
+       'osm'    emergency only. One style, so the map stops following
+                the theme, and the OSMF asks apps not to lean on it.
+
+     cartoApiKey is PUBLIC, like the Supabase anon key above — it ships
+     in every tile URL a browser requests. Restrict it by domain in the
+     CARTO dashboard; that is what protects it, not secrecy. */
+  map: {
+    provider: 'carto',
+
+    /* Where the map goes when the provider above stops working. Two
+       things move it automatically:
+
+         · a sustained run of tile errors — 401, 403, 429, 5xx, or the
+           CDN being unreachable
+         · the CARTO watermark, which is NOT an error: it arrives as a
+           valid 200 PNG with "API KEY REQUIRED" drawn on it. The app
+           detects it by asking whether the key changes the answer —
+           one tile fetched with the key and one without, once per
+           session. Identical bytes mean the key is being ignored,
+           which covers missing, wrong, expired and over-quota alike.
+
+       The switch lasts the session, so the map cannot flap.
+
+       WHAT THIS CANNOT DO: tell you that you are APPROACHING the
+       limit. Only CARTO knows your monthly total, and the browser
+       never sees it. This catches the moment the key stops working,
+       not the week before. Watch the number in CARTO's dashboard if
+       you want warning. */
+    fallback: 'esri',
+
+    /* LEAVE THIS EMPTY. The key comes from the worker instead:
+
+         npx wrangler secret put CARTO_MAP_KEY
+
+       and the app fetches it from GET /mapkey at startup. Until it
+       arrives the map runs on `fallback`, so nobody ever sees the
+       watermark, and the switch happens as soon as the key lands.
+
+       WHY, AND WHAT IT DOES NOT BUY. The browser puts this key into
+       every tile URL it requests from CARTO, so it is visible in the
+       network tab a second after the map loads, and /mapkey can be
+       curled by anyone. It is not a secret and cannot be made one.
+       What the worker buys is real but narrow: the key is not in this
+       repo or its git history, and rotating it is one wrangler command
+       with no client deploy.
+
+       WHAT ACTUALLY PROTECTS IT is the domain allowlist in the CARTO
+       dashboard: allow bich.app and www.bich.app, and a copied key is
+       useless in anybody else's page. Referer checks only bind
+       browsers, so a determined script could still burn quota — and if
+       that happens the map does not break, because the watermark probe
+       moves everyone to `fallback` and you rotate the secret.
+
+       Setting a key HERE still works and skips the fetch, which is
+       useful for local work. It just puts it back in the repo.
+
+       Note the parameter is `key=`, not `api_key=`. Free to 5 million
+       tiles a month: carto.com/basemaps/apikey */
+    cartoApiKey: ''
+  },
+
   /* Bump on every release. Shown in the me screen so you can tell at
      a glance which build a phone is actually running. */
-  version: '2026-08-21-78'
+  version: '2026-08-21-84'
 };
 
 /* ──────────────────────────────────────────────────────────────────

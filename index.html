@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-78" />
+  <meta name="app-version" content="2026-08-21-84" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1762,7 +1762,7 @@ body.is-admin .detail-owner::before {
      paper   — warm printed sheet. direct midday sun.
 
    The map basemap follows the same switch: dark CARTO tiles under
-   night, light ones under paper. See MAP_TILES.
+   night, light ones under paper. See TILE_PROVIDERS.
 
    Set with  document.documentElement.dataset.theme = 'paper'
    ══════════════════════════════════════════════════════════════════ */
@@ -2949,15 +2949,14 @@ function paintDetail(e){
   setTimeout(() => {
     if (!window._detailMap){
       window._detailMap = L.map('detailMap', {
-        zoomControl: false, attributionControl: false,
+        zoomControl: false, attributionControl: true,
         /* Both off at creation. guardMapScroll() turns dragging back on
            for the gestures that are genuinely the map's — see the
            directional lock above. */
         scrollWheelZoom: false, dragging: false
       });
-      window._detailBase = L.tileLayer(TILE_URL(currentTiles().base), {
-        subdomains: 'abcd', maxZoom: 19
-      }).addTo(window._detailMap);
+      window._detailBase = watchTiles(
+        L.tileLayer(tileUrl('base'), tileOpts()).addTo(window._detailMap));
       addLabels(window._detailMap);      // after the base, so it sits on top
       guardMapScroll(document.getElementById('detailMap'), window._detailMap);
     }
@@ -3111,9 +3110,9 @@ function initEditMap(lat, lng){
   const h = mapHome();
   const centre = (lat != null && lng != null) ? [lat, lng] : [h.lat, h.lng];
   if (!editMap){
-    editMap = L.map('editMap', { zoomControl: false, attributionControl: false })
+    editMap = L.map('editMap', { zoomControl: false, attributionControl: true })
       .setView(centre, lat != null ? 15 : h.zoom);
-    L.tileLayer(TILE_URL(currentTiles().base), { subdomains: 'abcd', maxZoom: 19 }).addTo(editMap);
+    watchTiles(L.tileLayer(tileUrl('base'), tileOpts()).addTo(editMap));
     addLabels(editMap);
     editMap.on('click', e => setEditPin(e.latlng.lat, e.latlng.lng));
   } else {
@@ -3782,6 +3781,11 @@ const OUTBOX_HANDLERS = {
   })
 };
 
+/* One switch for the magic bulk duplicate check. `false` publishes
+   everything the flyer contains and lets a duplicate be a tidiness
+   problem; `true` restores the old drop-and-report behaviour. */
+const DEDUPE_BLOCKS_PUBLISH = false;
+
 let outboxRunning = false;
 
 async function outboxFlush(){
@@ -4438,11 +4442,283 @@ document.querySelectorAll('.tab').forEach(tab => {
    stayed black in paper mode while every panel around it was cream.
    Labels ride in a separate layer so they stay legible over the base;
    setUrl() swaps both in place rather than tearing layers down. */
-const MAP_TILES = {
-  night: { base: 'dark_nolabels',  labels: 'dark_only_labels'  },
-  paper: { base: 'light_nolabels', labels: 'light_only_labels' }
+/* Leaflet advertises itself in every attribution bar by default. The
+   data credits are required; that one is courtesy, and on a 9px strip
+   over a 160px-tall pin picker it crowds out the credits that are not
+   optional. Set once, globally, rather than per map. */
+if (window.L && L.Control && L.Control.Attribution) {
+  L.Control.Attribution.prototype.options.prefix = '';
+}
+
+/* WHY THIS IS A TABLE AND NOT A URL.
+
+   It was one hardcoded CARTO template. On 2026-08-26 CARTO began
+   requiring an API key for basemaps.cartocdn.com and started
+   watermarking unauthenticated tiles with "API KEY REQUIRED" — a
+   policy change, not a limit anybody hit. Every map in the app broke
+   at once, and there was no way to move without editing five call
+   sites.
+
+   Any provider can be dropped in here now, and config.js chooses.
+
+   The theme system needs a provider that serves the BASE and the
+   LABELS as separate layers, in a light and a dark variant. That is a
+   real constraint, not a preference: the base tiles are deliberately
+   quiet and the labels ride above the pins so town names stay legible.
+   Both providers below do it; the OSM fallback cannot, and says so. */
+const TILE_PROVIDERS = {
+
+  /* KEYLESS, and the default. Esri's Canvas basemaps have exactly the
+     base + reference split this design is built on, in light and dark.
+     Note {z}/{y}/{x} — Esri orders row before column — and no retina
+     or subdomain support.
+
+     maxNativeZoom matters: above z16 Esri serves a BLANK tile rather
+     than a 404, so without this the map goes empty instead of
+     upscaling the last real tile. */
+  esri: {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · Esri',
+    hasLabels: true,
+    options: { maxZoom: 19, maxNativeZoom: 16 },
+    url(theme, kind){
+      const shade = theme === 'paper' ? 'Light' : 'Dark';
+      const part  = kind === 'labels' ? 'Reference' : 'Base';
+      return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/'
+           + `World_${shade}_Gray_${part}/MapServer/tile/{z}/{y}/{x}`;
+    }
+  },
+
+  /* The original look. Free to 5M tiles a month WITH a key, which goes
+     in config.js — it is a public credential like the Supabase anon
+     key, restricted by domain at CARTO's end, not a secret. Without a
+     key every tile carries their watermark. */
+  carto: {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
+    hasLabels: true,
+    options: { subdomains: 'abcd', maxZoom: 19 },
+    url(theme, kind){
+      const shade = theme === 'paper' ? 'light' : 'dark';
+      const part  = kind === 'labels' ? 'only_labels' : 'nolabels';
+      const key   = cartoKey();
+      /* `key`, NOT `api_key`. CARTO's own snippet and their FAQ both
+         say key=; api_key= is silently ignored, which means the tile
+         comes back watermarked and looks exactly like having no key at
+         all. Shipped wrong in -81: the failover masked it by moving
+         everyone to Esri, so the map worked and CARTO never did. */
+      return `https://{s}.basemaps.cartocdn.com/${shade}_${part}/{z}/{x}/{y}{r}.png`
+           + (key ? '?key=' + encodeURIComponent(key) : '');
+    }
+  },
+
+  /* Last resort only. One style, no dark variant, no label split — so
+     the map stops following the theme. The OSMF tile policy also asks
+     apps not to use it as a general basemap, so this is what keeps the
+     map alive during an outage, not somewhere to settle. */
+  osm: {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+    hasLabels: false,
+    options: { maxZoom: 19 },
+    url(){ return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'; }
+  }
 };
-const TILE_URL = name => `https://{s}.basemaps.cartocdn.com/${name}/{z}/{x}/{y}{r}.png`;
+
+/* FUNCTIONS, not consts. config.js is read into _CFG about fourteen
+   hundred lines below this, so a top-level const here would evaluate
+   inside that binding's temporal dead zone and throw before the app
+   ever started. `npm run check` caught it: TS2448. */
+function mapCfg(){
+  return (window.BICH_CONFIG && window.BICH_CONFIG.map) || {};
+}
+
+/* The provider in use RIGHT NOW, which is not always the configured
+   one — a failover may have moved us. Held for the session so the map
+   cannot flap back and forth between providers on a flaky connection. */
+let ACTIVE_TILES = null;
+
+/* The key can come from two places: config.js, or the worker. Keeping
+   it in the worker is the point of this — it stays out of the repo and
+   rotates without a client deploy — but it means the key may not exist
+   yet when the first map is built. cartoKey() is therefore a function,
+   never a captured value. */
+let FETCHED_MAP_KEY = null;
+function cartoKey(){
+  if (FETCHED_MAP_KEY === null){
+    try { FETCHED_MAP_KEY = sessionStorage.getItem('bich.mapkey') || ''; }
+    catch(_){ FETCHED_MAP_KEY = ''; }
+  }
+  return FETCHED_MAP_KEY || mapCfg().cartoApiKey || '';
+}
+
+function providerName(){
+  if (ACTIVE_TILES) return ACTIVE_TILES;
+  let stored = null;
+  try { stored = sessionStorage.getItem('bich.tiles'); } catch(_){}
+  let want = mapCfg().provider || 'esri';
+  /* CARTO with no key yet is a watermarked map. Start on the fallback
+     and upgrade when the key lands, rather than showing everybody
+     "API KEY REQUIRED" for the second it takes to fetch. */
+  if (want === 'carto' && !cartoKey()) want = mapCfg().fallback || 'esri';
+  ACTIVE_TILES = (stored && TILE_PROVIDERS[stored]) ? stored
+               : (TILE_PROVIDERS[want] ? want : 'esri');
+  return ACTIVE_TILES;
+}
+function tileProvider(){ return TILE_PROVIDERS[providerName()]; }
+
+function fallbackName(){
+  const f = mapCfg().fallback || 'esri';
+  return (f !== providerName() && TILE_PROVIDERS[f]) ? f : null;
+}
+
+/* Move every live layer to the fallback.
+
+   setUrl() alone is not enough: the providers disagree about
+   maxNativeZoom and subdomains, and Leaflet reads those from
+   layer.options when it builds each tile. Assign the new options
+   first, then setUrl, which redraws. */
+function useTileProvider(name, why){
+  if (!TILE_PROVIDERS[name] || name === providerName()) return false;
+  console.info('[bich] basemap → ' + name + ' — ' + why);
+  ACTIVE_TILES = name;
+
+  const p = tileProvider();
+  const repoint = (layer, kind) => {
+    if (!layer) return;
+    Object.assign(layer.options, p.options);
+    /* A provider with no separate label layer would otherwise get the
+       base tiles drawn twice, once as an overlay. Hide instead. */
+    if (kind === 'labels' && !p.hasLabels){
+      if (layer.setOpacity) layer.setOpacity(0);
+      return;
+    }
+    if (layer.setOpacity) layer.setOpacity(1);
+    layer.setUrl(tileUrl(kind));
+  };
+  [window._mapBase, window._miniBase, window._detailBase]
+    .forEach(l => repoint(l, 'base'));
+  repoint(window._mapLabels, 'labels');
+  (window._labelLayers || []).forEach(l => repoint(l, 'labels'));
+  return true;
+}
+
+/* Downgrade. Sticky for the session, so a provider that has already
+   failed is not tried again on the next screen. */
+function switchTileProvider(why){
+  const to = fallbackName();
+  if (!to) return false;
+  try { sessionStorage.setItem('bich.tiles', to); } catch(_){}
+  return useTileProvider(to, why);
+}
+
+/* Upgrade. Fetches the key the worker holds and moves the map onto
+   CARTO once it has one.
+
+   Skipped entirely when config.js already carries a key, when CARTO is
+   not the configured provider, or when a failover has already happened
+   this session — that last one is what stops a dead key and a fresh
+   fetch from flipping the map back and forth forever. */
+async function loadMapKey(){
+  if (!WORKER_URL) return;
+  if (mapCfg().provider !== 'carto') return;
+  if (mapCfg().cartoApiKey) return;
+  if (cartoKey()) return;                       // already have it this session
+  let failedOver = null;
+  try { failedOver = sessionStorage.getItem('bich.tiles'); } catch(_){}
+  if (failedOver) return;
+
+  try {
+    const r = await fetch(WORKER_URL + '/mapkey');
+    if (!r.ok) return;
+    const body = await r.json();
+    if (!body || !body.carto) return;           // secret not set on the worker
+    FETCHED_MAP_KEY = body.carto;
+    try { sessionStorage.setItem('bich.mapkey', body.carto); } catch(_){}
+    useTileProvider('carto', 'key arrived from the worker');
+    verifyTileKey();                            // and check it actually works
+  } catch(_){
+    /* Worker unreachable. The fallback basemap is already showing, so
+       there is nothing to repair and nothing worth telling anybody. */
+  }
+}
+
+/* Hard failures — 401, 403, 429, 5xx, DNS, an offline CDN. Leaflet
+   raises tileerror for all of them.
+
+   A handful is normal: the edge of a viewport asks for tiles that do
+   not exist at that zoom, and a phone changing network drops a few.
+   So successes pay the counter back down, and only a sustained run
+   moves the whole app. */
+function watchTiles(layer){
+  if (!layer || !layer.on) return layer;
+  let fails = 0;
+  layer.on('tileerror', () => {
+    if (++fails >= 6){ fails = 0; switchTileProvider('repeated tile errors'); }
+  });
+  layer.on('tileload', () => { if (fails) fails--; });
+  return layer;
+}
+
+/* THE WATERMARK CANNOT BE SEEN AS AN ERROR, so it needs its own check.
+
+   When CARTO wants a key it does not return 401. It returns 200 with a
+   perfectly valid PNG that has "API KEY REQUIRED" printed across it —
+   verified: a request with no key and a request with a deliberately
+   invalid key came back byte for byte identical, same status, same
+   length, no header to tell them apart. Leaflet sees a successful
+   image load, so tileerror above will never fire for this.
+
+   Rather than fingerprint the watermark — which they can redraw
+   whenever they like — this asks a question that stays true: DOES THE
+   KEY CHANGE THE ANSWER? Fetch one fixed tile with it and without it.
+   Identical bytes mean the key is being ignored, which covers every
+   reason it might be: missing, wrong, expired, or over the monthly
+   allowance. Different bytes mean it is working.
+
+   Both hosts send Access-Control-Allow-Origin: *, so the bytes are
+   readable. One pair of ~8KB requests, once per session. */
+async function verifyTileKey(){
+  if (providerName() !== 'carto') return;
+  let done = null;
+  try { done = sessionStorage.getItem('bich.tilecheck'); } catch(_){}
+  if (done) return;
+
+  const key = cartoKey();
+  if (!key) return switchTileProvider('no carto api key available');
+
+  const tile = 'https://a.basemaps.cartocdn.com/dark_nolabels/6/30/24.png';
+  try {
+    const [keyed, bare] = await Promise.all([
+      fetch(tile + '?key=' + encodeURIComponent(key)),
+      fetch(tile)
+    ]);
+    if (!keyed.ok) return switchTileProvider('carto returned ' + keyed.status);
+    const [a, b] = await Promise.all([keyed.arrayBuffer(), bare.arrayBuffer()]);
+    try { sessionStorage.setItem('bich.tilecheck', '1'); } catch(_){}
+    if (a.byteLength === b.byteLength){
+      switchTileProvider('carto is ignoring the key — watermarked or over quota');
+    }
+  } catch(_){
+    /* Offline, or the fetch was blocked. Leave the provider alone;
+       tileerror handles real breakage and a wrong guess here would
+       move everybody off a provider that works. */
+  }
+}
+
+/* kind is 'base' or 'labels'. The theme is read here rather than passed
+   in, so every caller stays a one-liner and none of them can pass a
+   stale one. */
+function tileUrl(kind){
+  const theme = document.documentElement.dataset.theme === 'paper' ? 'paper' : 'night';
+  return tileProvider().url(theme, kind);
+}
+/* Attribution rides in the DEFAULTS, not on one call site. Three of
+   the four maps were built with attributionControl:false and a base
+   layer with no attribution string, so the detail map, the edit map
+   and the pin picker credited nobody at all — an ODbL requirement for
+   OpenStreetMap and an explicit condition of CARTO's free tier. */
+function tileOpts(extra){
+  return Object.assign({ attribution: tileProvider().attribution },
+                       tileProvider().options, extra || {});
+}
 
 /* ── addLabels ─────────────────────────────────────────────────────
    The CARTO base tiles are "_nolabels" — deliberately quiet, and with
@@ -4454,26 +4730,21 @@ const TILE_URL = name => `https://{s}.basemaps.cartocdn.com/${name}/{z}/{x}/{y}{
    map means recognising the shape of a bay, which is a lot to ask. */
 function addLabels(map){
   if (!map) return null;
-  const layer = L.tileLayer(TILE_URL(currentTiles().labels), {
-    subdomains: 'abcd', maxZoom: 19, pane: 'shadowPane'
-  }).addTo(map);
+  if (!tileProvider().hasLabels) return null;   // a one-style provider
+  const layer = watchTiles(L.tileLayer(tileUrl('labels'),
+    tileOpts({ pane: 'shadowPane' })).addTo(map));
   (window._labelLayers = window._labelLayers || []).push(layer);
   return layer;
 }
 
-function currentTiles(){
-  return MAP_TILES[document.documentElement.dataset.theme] || MAP_TILES.night;
-}
-
 /* Called by applyTheme. Safe before either map exists. */
 function applyMapTheme(){
-  const t = currentTiles();
   [window._mapBase, window._miniBase, window._detailBase]
-    .forEach(l => l && l.setUrl(TILE_URL(t.base)));
-  if (window._mapLabels) window._mapLabels.setUrl(TILE_URL(t.labels));
+    .forEach(l => l && l.setUrl(tileUrl('base')));
+  if (window._mapLabels) window._mapLabels.setUrl(tileUrl('labels'));
   /* Every label layer, or the small maps keep dark labels on a paper
      background after a theme switch. */
-  (window._labelLayers || []).forEach(l => l && l.setUrl(TILE_URL(t.labels)));
+  (window._labelLayers || []).forEach(l => l && l.setUrl(tileUrl('labels')));
 }
 
 function initMap() {
@@ -4525,21 +4796,19 @@ function initMap() {
   map.on('zoomend', () => scheduleMapLoad(true));   // budget changes with zoom
   scheduleMapLoad(true);                            // and once, on first open
 
-  // NOTE: For production, swap to Protomaps self-hosted or Stadia per spec.
-  // This is dev-only use of OSM public tiles for the prototype.
-  const tiles = currentTiles();
-  window._mapBase = L.tileLayer(TILE_URL(tiles.base), {
-    attribution: '© OSM · © CARTO',
-    subdomains: 'abcd',
-    maxZoom: 19
-  }).addTo(map);
+  window._mapBase = watchTiles(L.tileLayer(tileUrl('base'),
+    tileOpts()).addTo(map));
 
-  // Add labels layer for readability
-  window._mapLabels = L.tileLayer(TILE_URL(tiles.labels), {
-    subdomains: 'abcd',
-    maxZoom: 19,
-    pane: 'shadowPane'
-  }).addTo(map);
+  // Labels ride above the base so town names stay legible over it
+  window._mapLabels = tileProvider().hasLabels
+    ? watchTiles(L.tileLayer(tileUrl('labels'), tileOpts({ pane: 'shadowPane' })).addTo(map))
+    : null;
+
+  /* Neither of these may delay the first paint, and both need a map to
+     act on. loadMapKey() runs the probe itself once a key lands, so
+     verifyTileKey() here only covers a key that came from config.js. */
+  loadMapKey();
+  if (cartoKey()) verifyTileKey();
 
   window._mapReady = true;
   window._map = map;
@@ -5673,15 +5942,13 @@ function initMiniMap() {
     /* Same home as the main map. Opening the pin picker on the wrong
        island means every single event starts with a pan. */
     center: [home.lat, home.lng], zoom: home.zoom,
-    zoomControl: false, attributionControl: false,
+    zoomControl: false, attributionControl: true,
     /* This one had BOTH on, so a swipe down the form panned the picker
        and the wheel zoomed it. A tap still sets the pin — that is a
        click, not a drag, and the lock lets clicks through untouched. */
     scrollWheelZoom: false, dragging: false
   });
-  window._miniBase = L.tileLayer(TILE_URL(currentTiles().base), {
-    subdomains: 'abcd', maxZoom: 19
-  }).addTo(m);
+  window._miniBase = watchTiles(L.tileLayer(tileUrl('base'), tileOpts()).addTo(m));
   addLabels(m);
   m.on('click', (e) => {
     /* A tap is a person saying where it is. pin_source has to record
@@ -6583,7 +6850,18 @@ async function bulkCreate(rows, rq){
     }
     seenHere.add(localKey);
 
-    if (startsAt && SB_READY()){
+    /* OFF. The cross-database check silently DROPPED an event and
+       reported "already listed", which is a publish that did not
+       happen — and it fires on a fuzzy match: same day, within 90
+       minutes, venue name similarity 0.5, title similarity 0.45. A
+       weekly class at one venue matches its own next occurrence on
+       every one of those.
+
+       Blocking was never the agreed behaviour for this. When it comes
+       back it warns and lets the person decide, and the check below
+       for the same row appearing TWICE ON ONE PHOTO stays on either
+       way — that one is unambiguous. */
+    if (DEDUPE_BLOCKS_PUBLISH && startsAt && SB_READY()){
       try {
         const hit = await sbRpc('find_duplicate_event', {
           p_title: r.event_name || '',
@@ -7979,7 +8257,7 @@ function applyTheme(name){
   Store.set({ theme: t });
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = t === 'paper' ? '#f4efe6' : '#0a0908';
-  applyMapTheme();          // it reads the theme itself, via currentTiles()
+  applyMapTheme();          // it reads the theme itself, via tileUrl()
   document.querySelectorAll('.theme-switch button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
 }
