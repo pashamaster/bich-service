@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="86" />
+  <meta name="app-version" content="87" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -1211,14 +1211,25 @@ body.is-admin .detail-owner::before {
   font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.06em; cursor: pointer;
 }
 
-/* Cropper — full screen over everything, and "everything" has to
-   include the create modal (1001) and its overlay (1000). The cropper
-   is opened FROM inside that modal, so at 400 it rendered underneath
-   both. On a phone the modal is a full height sheet, so its lower half
-   sat on top of the action row and swallowed every tap on "use this
-   crop". The button was never the problem; nothing reached it. */
+/* Cropper — full screen over EVERYTHING it can be opened from, and
+   that list has grown twice now.
+
+   First it was 400, under the create modal (1001) and its overlay, so
+   the modal's lower half swallowed every tap on "use this crop". Then
+   1500 — which was above the create modal but BELOW the edit sheet at
+   1600. Cropping an existing event's cover opened the cropper
+   underneath the sheet: invisible, untappable, and apparently doing
+   nothing. Pressing "save changes" closed the sheet and revealed a
+   cropper that had been sitting there since the tap, which read as
+   "it starts cropping when I save".
+
+   1650 clears every sheet it opens from — edit 1600, pin list 1550,
+   bulk scrim 1549, create modal 1001 — and stays under .confirm-sheet
+   and .onboard at 2000, which must be able to appear over it.
+
+   ANYTHING NEW ABOVE 1650 THAT CAN OPEN THE CROPPER BREAKS THIS AGAIN. */
 .cropper {
-  position: fixed; inset: 0; z-index: 1500; background: var(--bg);
+  position: fixed; inset: 0; z-index: 1650; background: var(--bg);
   display: flex; flex-direction: column;
   padding-top: max(env(safe-area-inset-top, 0px), 12px);
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
@@ -3243,12 +3254,26 @@ async function replaceEditCover(file){
 document.addEventListener('click', (e) => {
   if (e.target.closest('#editCoverPick')) document.getElementById('editCoverInput').click();
 
-  if (e.target.closest('#editCoverCrop')){
+  const cropBtn = e.target.closest('#editCoverCrop');
+  if (cropBtn){
+    /* Re-fetching and decoding a published cover takes a moment, and
+       the only feedback was #editNote at the bottom of a scrolling
+       sheet — usually off screen. Say it ON THE BUTTON that was
+       tapped, and disable it so a second tap cannot start a second
+       fetch. */
     const note = document.getElementById('editNote');
-    note.hidden = false; note.textContent = 'loading the cover…';
+    if (cropBtn.disabled) return;
+    const label = cropBtn.textContent;
+    cropBtn.disabled = true;
+    cropBtn.textContent = 'loading…';
+    const restore = () => { cropBtn.disabled = false; cropBtn.textContent = label; };
     editCoverSource()
-      .then(bmp => { note.hidden = true; return cropAndUploadEditCover(bmp); })
-      .catch(err => { note.hidden = false; note.textContent = 'could not crop: ' + err.message; });
+      .then(bmp => { note.hidden = true; restore(); return cropAndUploadEditCover(bmp); })
+      .catch(err => {
+        restore();
+        note.hidden = false;
+        note.textContent = 'could not crop: ' + err.message;
+      });
   }
 
   if (e.target.closest('#editCoverClear')){
