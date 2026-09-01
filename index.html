@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="2026-08-21-84" />
+  <meta name="app-version" content="86" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2549,6 +2549,7 @@ if ('serviceWorker' in navigator) {
         <img id="editCoverImg" alt="" hidden />
         <div class="edit-cover__actions">
           <button type="button" class="btn btn--ghost" id="editCoverPick">replace photo</button>
+          <button type="button" class="btn btn--ghost" id="editCoverCrop" hidden>crop</button>
           <button type="button" class="btn btn--ghost" id="editCoverClear">remove</button>
         </div>
       </div>
@@ -3080,6 +3081,12 @@ function openEditSheet(ev){
   coverImg.hidden = !ev.cover;
   if (ev.cover) coverImg.src = ev.cover;
   document.getElementById('editCoverClear').hidden = !ev.cover;
+  /* Crop is offered for a cover that already exists, not only for one
+     just picked — re-framing a published photo is the whole request.
+     And drop any bitmap left over from the last event opened, or the
+     cropper would re-frame somebody else's photo. */
+  document.getElementById('editCoverCrop').hidden = !ev.cover;
+  releaseEditCoverBitmap();
 
   requestAnimationFrame(() => initEditMap(ev.lat, ev.lng));
 
@@ -3112,7 +3119,10 @@ function initEditMap(lat, lng){
   if (!editMap){
     editMap = L.map('editMap', { zoomControl: false, attributionControl: true })
       .setView(centre, lat != null ? 15 : h.zoom);
-    watchTiles(L.tileLayer(tileUrl('base'), tileOpts()).addTo(editMap));
+    /* Held on window like the other three. Without it neither the
+       provider repoint nor the theme swap could reach this layer, so
+       the edit sheet's map kept whatever tiles it opened with. */
+    window._editBase = watchTiles(L.tileLayer(tileUrl('base'), tileOpts()).addTo(editMap));
     addLabels(editMap);
     editMap.on('click', e => setEditPin(e.latlng.lat, e.latlng.lng));
   } else {
@@ -3132,6 +3142,77 @@ function setEditPin(lat, lng, quiet){
   if (el) el.textContent = quiet ? 'tap the map to move it' : 'pin moved — save to keep it';
 }
 
+/* ── editing the cover of an event that already exists ────────────
+   Both entry points end in the same three steps — decode, crop,
+   upload — so a cover made here is byte-for-byte the kind of thing the
+   create sheet makes. Available to the host and to an admin, because
+   iOwn() answers true for both and that is what opens this sheet.
+
+   RE-CROPPING A PUBLISHED COVER needs the original pixels back. They
+   are fetched through the WORKER's /img/ route rather than
+   img.bich.app: the bucket's custom domain sends no CORS header, so a
+   canvas drawn from it is tainted and toBlob() throws SecurityError.
+   The worker's route already sets Access-Control-Allow-Origin, so it
+   is the one path that can round-trip. */
+function coverThroughWorker(url){
+  if (!url || !WORKER_URL) return null;
+  try {
+    const key = new URL(url, location.href).pathname
+      .replace(/^\/+/, '').replace(/^img\//, '');
+    return key ? WORKER_URL + '/img/' + key : null;
+  } catch(_){ return null; }
+}
+
+/* The decoded source for the cover currently in the sheet. Held while
+   the sheet is open so a second crop does not re-download, and closed
+   on the way out — a 1000px bitmap is a few megabytes of RGBA. */
+let editCoverBitmap = null;
+function releaseEditCoverBitmap(){
+  try { if (editCoverBitmap && editCoverBitmap.close) editCoverBitmap.close(); } catch(_){}
+  editCoverBitmap = null;
+}
+
+async function editCoverSource(){
+  if (editCoverBitmap) return editCoverBitmap;
+  const shown = document.getElementById('editCoverImg');
+  const via = coverThroughWorker(editDraft.cover || (shown && shown.getAttribute('src')));
+  if (!via) throw new Error('there is no cover to crop yet');
+  const r = await fetch(via);
+  if (!r.ok) throw new Error('could not load the current cover (' + r.status + ')');
+  const blob = await r.blob();
+  const { bitmap } = await decodeImage(new File([blob], 'cover', { type: blob.type }));
+  editCoverBitmap = bitmap;
+  return bitmap;
+}
+
+/* crop, encode, upload, show. Shared by both entry points. */
+async function cropAndUploadEditCover(bitmap){
+  const note = document.getElementById('editNote');
+  const crop = await openCropper(bitmap, 'drag the corners to frame the cover');
+  if (crop === undefined) return;                 // backed out; change nothing
+  try {
+    const full = render(bitmap, crop, COVER_MAX_SIDE, 0.82);
+    const ext  = full.mime === 'image/webp' ? 'webp' : 'jpg';
+    const form = new FormData();
+    form.append('full', await canvasToBlob(full.canvas, full.mime, 0.82), 'full.' + ext);
+    const r = await fetch(WORKER_URL + '/upload', {
+      method: 'POST', headers: { 'X-Bich-Invite': readInvite() },
+      body: form, signal: AbortSignal.timeout(30000)
+    });
+    if (!r.ok) throw new Error('upload failed (' + r.status + ')');
+    const out = await r.json();
+    editDraft.cover = out.url;
+    const img = document.getElementById('editCoverImg');
+    img.src = out.url; img.hidden = false;
+    document.getElementById('editCoverClear').hidden = false;
+    document.getElementById('editCoverCrop').hidden = false;
+    note.hidden = true;
+  } catch(err){
+    note.hidden = false;
+    note.textContent = 'could not save the cover: ' + err.message;
+  }
+}
+
 /* Replacing a cover reuses the same encode-and-upload path as creating
    one, so there is a single definition of what a cover is. */
 async function replaceEditCover(file){
@@ -3149,22 +3230,10 @@ async function replaceEditCover(file){
     const problem = rejectUpload(file, await file.arrayBuffer());
     if (problem) throw new Error(problem);
 
-    const bmp = await createImageBitmap(file);
-    const full = render(bmp, null, COVER_MAX_SIDE, 0.82);
-    const ext  = full.mime === 'image/webp' ? 'webp' : 'jpg';
-    const form = new FormData();
-    form.append('full', await canvasToBlob(full.canvas, full.mime, 0.82), 'full.' + ext);
-    const r = await fetch(WORKER_URL + '/upload', {
-      method: 'POST', headers: { 'X-Bich-Invite': readInvite() },
-      body: form, signal: AbortSignal.timeout(30000)
-    });
-    if (!r.ok) throw new Error('upload failed (' + r.status + ')');
-    const out = await r.json();
-    editDraft.cover = out.url;
-    const img = document.getElementById('editCoverImg');
-    img.src = out.url; img.hidden = false;
-    document.getElementById('editCoverClear').hidden = false;
-    note.hidden = true;
+    releaseEditCoverBitmap();
+    const { bitmap } = await decodeImage(file);
+    editCoverBitmap = bitmap;
+    await cropAndUploadEditCover(bitmap);
   } catch(err){
     note.hidden = false;
     note.textContent = 'could not replace the cover: ' + err.message;
@@ -3173,16 +3242,29 @@ async function replaceEditCover(file){
 
 document.addEventListener('click', (e) => {
   if (e.target.closest('#editCoverPick')) document.getElementById('editCoverInput').click();
+
+  if (e.target.closest('#editCoverCrop')){
+    const note = document.getElementById('editNote');
+    note.hidden = false; note.textContent = 'loading the cover…';
+    editCoverSource()
+      .then(bmp => { note.hidden = true; return cropAndUploadEditCover(bmp); })
+      .catch(err => { note.hidden = false; note.textContent = 'could not crop: ' + err.message; });
+  }
+
   if (e.target.closest('#editCoverClear')){
     editDraft.cover = null;                       // null means "remove it"
+    releaseEditCoverBitmap();
     const img = document.getElementById('editCoverImg');
     img.hidden = true; img.removeAttribute('src');
     document.getElementById('editCoverClear').hidden = true;
+    document.getElementById('editCoverCrop').hidden = true;
   }
 });
 document.addEventListener('change', (e) => {
   if (e.target && e.target.id === 'editCoverInput' && e.target.files && e.target.files[0]){
     replaceEditCover(e.target.files[0]);
+    /* Clear it, or picking the SAME file twice fires no change event
+       and the second attempt looks like the button is dead. */
     e.target.value = '';
   }
 });
@@ -4583,7 +4665,13 @@ function useTileProvider(name, why){
   const p = tileProvider();
   const repoint = (layer, kind) => {
     if (!layer) return;
-    Object.assign(layer.options, p.options);
+    /* RESET FIRST. Object.assign only overwrites keys the new provider
+       declares, so Esri → CARTO left maxNativeZoom:16 behind and the
+       map stayed blurry above z16 on a provider that serves real tiles
+       to 19. Leaflet's own defaults, then the provider's. */
+    Object.assign(layer.options,
+      { subdomains: 'abc', maxNativeZoom: undefined, maxZoom: 18 },
+      p.options);
     /* A provider with no separate label layer would otherwise get the
        base tiles drawn twice, once as an overlay. Hide instead. */
     if (kind === 'labels' && !p.hasLabels){
@@ -4593,7 +4681,7 @@ function useTileProvider(name, why){
     if (layer.setOpacity) layer.setOpacity(1);
     layer.setUrl(tileUrl(kind));
   };
-  [window._mapBase, window._miniBase, window._detailBase]
+  [window._mapBase, window._miniBase, window._detailBase, window._editBase]
     .forEach(l => repoint(l, 'base'));
   repoint(window._mapLabels, 'labels');
   (window._labelLayers || []).forEach(l => repoint(l, 'labels'));
@@ -4739,7 +4827,7 @@ function addLabels(map){
 
 /* Called by applyTheme. Safe before either map exists. */
 function applyMapTheme(){
-  [window._mapBase, window._miniBase, window._detailBase]
+  [window._mapBase, window._miniBase, window._detailBase, window._editBase]
     .forEach(l => l && l.setUrl(tileUrl('base')));
   if (window._mapLabels) window._mapLabels.setUrl(tileUrl('labels'));
   /* Every label layer, or the small maps keep dark labels on a paper
@@ -8709,7 +8797,8 @@ function toastAction(msg, label, onAction){
   const btn = document.createElement('button');
   btn.textContent = label;
   btn.style.cssText = 'margin-left:12px;background:none;border:none;padding:4px 2px;' +
-    'color:var(--accent);font:inherit;text-decoration:underline;cursor:pointer;';
+    'color:var(--accent);font:inherit;text-decoration:underline;cursor:pointer;' +
+    'pointer-events:auto;';   // the box is none, so opt this one child back in
   btn.addEventListener('click', () => {
     el.style.opacity = '0';
     try { onAction(); } catch(err){ console.warn('[bich] undo failed', err); }
@@ -8725,13 +8814,20 @@ function toast(msg){
       'bottom:calc(var(--safe-bottom) + 72px);z-index:500;padding:10px 18px;' +
       'background:var(--bg-elevated);border:1px solid var(--border-accent);' +
       'border-radius:2px;color:var(--accent);font-size:.62rem;letter-spacing:.16em;' +
-      'text-transform:uppercase;opacity:0;transition:opacity .25s';
+      'text-transform:uppercase;opacity:0;visibility:hidden;pointer-events:none;' +
+      'transition:opacity .25s, visibility 0s .25s';
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  el.style.visibility = 'visible';
+  el.style.transitionDelay = '0s';
   requestAnimationFrame(() => { el.style.opacity = '1'; });
   clearTimeout(el._t);
-  el._t = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+  el._t = setTimeout(() => {
+    el.style.opacity = '0';
+    el.style.transitionDelay = '0s, .25s';   // visibility follows the fade
+    el.style.visibility = 'hidden';
+  }, 1800);
 }
 
 /* Someone arriving on a shared link has no history with us: no events
@@ -8912,7 +9008,7 @@ function showCancelledEvent(e){
 async function openDeepLink(){
   const params = new URLSearchParams(location.search);
   const short = params.get('e');
-  if (params.get('new') === '1') { const b = document.getElementById('fab'); b && b.click(); }
+  if (params.get('new') === '1') { const b = document.getElementById('fabCreate'); b && b.click(); }
   if (!short) return;
 
   // put the pretty URL back so sharing from here shares the right thing
@@ -11563,6 +11659,13 @@ wireVenueSearch();
 (async () => {
   if (!SB_READY()) { openDeepLink(); return; }   // sample data until configured
   await loadCommunities();
+  /* Unawaited, and this early on purpose. It used to run only inside
+     initMap(), which fires when the MAP TAB is first opened — so
+     opening an event from the feed, or the create sheet's pin picker,
+     built its map before any key existed and came up on the fallback
+     basemap, while the main map once visited was on CARTO. Two
+     providers in one session, which is exactly what you see. */
+  loadMapKey();
   await ensureUser().catch(err => console.warn('[bich] user setup failed', err));
   await loadFeed();
   await migratePendingAttendance();
