@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="87" />
+  <meta name="app-version" content="89" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3086,7 +3086,12 @@ function openEditSheet(ev){
      Pin and cover. Extraction gets both of these wrong most
      often, and an event written by magic is still the host's event. */
 
-  editDraft = { lat: ev.lat ?? null, lng: ev.lng ?? null, cover: undefined };
+  /* lat0/lng0/name0 are the values this sheet OPENED with. Nothing
+     reads them but the poke decision on save: they are how the client
+     tells a pin move from a caption fix. */
+  editDraft = { lat: ev.lat ?? null, lng: ev.lng ?? null, cover: undefined,
+                lat0: ev.lat ?? null, lng0: ev.lng ?? null,
+                name0: (ev.venue || '').trim() };
 
   const coverImg = document.getElementById('editCoverImg');
   coverImg.hidden = !ev.cover;
@@ -3354,8 +3359,21 @@ async function saveEdit(){
   const opId = newOperationId();
   const shortId = editingId;
 
+  /* Only a change of PLACE is worth waking the venue jobs. A new title,
+     a cropped cover or a price correction says nothing about where the
+     event is, and poking anyway meant every edit reached the worker
+     and, through it, Overpass.
+
+     Declared OUT here, not inside the try: the catch below queues the
+     edit and needs the same answer. `npm run check` caught that as
+     TS2304 when it was a const in the try block. */
+  const venueTouched =
+    (patch.venue_name || '').trim() !== (editDraft.name0 || '') ||
+    editDraft.lat !== editDraft.lat0 ||
+    editDraft.lng !== editDraft.lng0;
+
   try {
-    const row = await updateEvent(shortId, patch, opId);
+    const row = await updateEvent(shortId, patch, opId, venueTouched);
     const i = EVENTS.findIndex(e => e.id === shortId);
     if (i > -1 && row) EVENTS[i] = Object.assign(rowToEvent(row), { bundle: EVENTS[i].bundle });
     renderBundles();
@@ -3375,8 +3393,12 @@ async function saveEdit(){
        so queueing it would park a permanent failure in the outbox and
        show the person a warning that never clears. */
     if (isTransient(err)){
+      /* venue_touched rides along, so an edit replayed from the queue
+         makes the same poke decision the direct save would have. It is
+         a client-side hint and never reaches the RPC — the handler
+         reads it off the payload and sends only short_id and patch. */
       const queued = await outboxAdd('event.patch',
-        { short_id: shortId, patch }, opId);
+        { short_id: shortId, patch, venue_touched: venueTouched }, opId);
       if (queued){
         /* Apply it locally so the change does not appear to vanish
            while it waits. The next feed load overwrites this with
@@ -3869,7 +3891,10 @@ const OUTBOX_HANDLERS = {
       p_short_id: payload.short_id, p_user: CURRENT_USER.id,
       p_secret: deviceSecret(), p_patch: payload.patch, p_operation_id: opId
     });
-    pokeVenueJobs('queued edit', payload.short_id);   // same reason as event.create above
+    /* Same rule as the direct path: only a change of place is worth a
+       poke. An older queued item has no flag and pokes, which is the
+       safe direction. */
+    if (payload.venue_touched !== false) pokeVenueJobs('queued edit', payload.short_id);
     return res;
   },
   /* Marking an event to cancel. Queued like everything else so a report
@@ -6715,7 +6740,7 @@ function pokeVenueJobs(why, shortId){
 /* opId is passed in rather than made here, so the caller can queue the
    same operation on failure. Generated when absent so the callers that
    do not care still get replay protection instead of none. */
-async function updateEvent(shortId, patch, opId){
+async function updateEvent(shortId, patch, opId, venueTouched){
   await claimDeviceSecret();
   const operationId = opId || newOperationId();
 
@@ -6738,11 +6763,13 @@ async function updateEvent(shortId, patch, opId){
   };
 
   /* Every success leaves through here, so the venue nudge cannot be
-     forgotten by whichever of the four paths happened to win. An edit
-     can move a pin or rename a venue, which is new work for both
-     jobs — the same reason a publish pokes them. */
+     forgotten by whichever of the four paths happened to win — but it
+     only fires when the PLACE changed. Callers that do not say leave
+     venueTouched undefined and are treated as having changed it,
+     because a caller that has not thought about it is safer poking
+     than silently skipping. */
   const done = (r) => {
-    pokeVenueJobs('edit', shortId);
+    if (venueTouched !== false) pokeVenueJobs('edit', shortId);
     return Array.isArray(r.row) ? r.row[0] : r.row;
   };
 
