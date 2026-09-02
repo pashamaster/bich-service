@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="89" />
+  <meta name="app-version" content="90" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -2409,7 +2409,11 @@ if ('serviceWorker' in navigator) {
       <a class="detail-map__link" id="detailMapLink" target="_blank" rel="noopener">open in maps</a>
     </div>
 
-    <div style="margin-top: 24px;">
+    <!-- id="detailHostBlock" is what openDetail() hides when no handle
+         is known. It was reading an element that did not exist, so the
+         guard `if (hostBlock)` silently did nothing and "hosted by" sat
+         over an empty line on every event with no host. -->
+    <div style="margin-top: 24px;" id="detailHostBlock">
       <div class="text-label" style="margin-bottom: 8px;">hosted by</div>
       <div style="font-family: var(--font-serif); font-style: italic; font-size: 1.1rem; color: var(--accent);" id="detailHost"></div>
     </div>
@@ -9001,7 +9005,11 @@ async function adoptCommunity(lat, lng, signal){
       console.warn('[bich] community: ensure_community returned nothing for', found.name);
       return false;
     }
-    outboxAdd('community.set', { slug, via: signal });
+    /* Was unawaited with no catch — the only outbox call in the file
+       without one. IndexedDB refuses in private mode and over quota,
+       and the rejection had nowhere to go. */
+    outboxAdd('community.set', { slug, via: signal })
+      .catch(err => console.warn('[bich] could not queue the community —', err.message));
   }
 
   const previous = Store.data.home && Store.data.home.slug;
@@ -9539,9 +9547,22 @@ function render(bitmap, crop, maxSide, quality){
   const dh = Math.max(1, Math.round(sh * scale));
   const canvas = drawScaled(bitmap, sx, sy, sw, sh, dw, dh);
   const mime = supportsWebp() ? 'image/webp' : 'image/jpeg';
-  const dataUrl = canvas.toDataURL(mime, quality);
-  return { canvas, dataUrl, base64: dataUrl.split(',')[1], mime, width: dw, height: dh,
-           kb: Math.round(dataUrl.length * 0.75 / 1024) };
+
+  /* LAZY, because most callers never look. toDataURL materialises the
+     whole image as a base64 string — roughly 1.3x the encoded bytes,
+     so a 200KB cover allocates 270KB of string on top of the canvas.
+     Only the magic preview and the Gemini call read these; every cover
+     upload goes through canvasToBlob() and threw the string away
+     unread. Same peak-memory argument as shrinkToCover() above, on the
+     same devices. */
+  let _url = null;
+  const url = () => (_url || (_url = canvas.toDataURL(mime, quality)));
+  return {
+    canvas, mime, width: dw, height: dh,
+    get dataUrl(){ return url(); },
+    get base64(){ return url().split(',')[1]; },
+    get kb(){ return Math.round(url().length * 0.75 / 1024); }
+  };
 }
 
 /* ── crop UI ──────────────────────────────────────────────────────
