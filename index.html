@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="90" />
+  <meta name="app-version" content="91" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -7308,7 +7308,16 @@ async function saveEvent(spec){
   }
   const endsAt = endsAtFor(startsAt, spec.timeFinish);
 
-  const slug = communityForCoords(spec.lat, spec.lng) || resolveCommunity(spec.community);
+  /* Third try, and it is the one that matters for a traveller: the
+     town the flyer NAMES, turned into a real community. Only reached
+     when the event has no coordinates we recognise and no community we
+     already run — otherwise it costs nothing. */
+  let slug = communityForCoords(spec.lat, spec.lng) || resolveCommunity(spec.community);
+  if (!slug){
+    slug = await communityFromPlaceName(spec.community || spec.city,
+                                        spec.lat ?? spec.photoLat,
+                                        spec.lng ?? spec.photoLng);
+  }
   const venueId = spec.venueId
     || await ensureVenue(spec.venueName, spec.lat, spec.lng, spec.city, slug, spec.source === 'photo');
 
@@ -8950,6 +8959,68 @@ async function resolvePlace(lat, lng){
     console.warn('[bich] community: /geocode unreachable —', err.message);
     return null;
   }
+}
+
+/* ── a PLACE NAME the app has never heard of ──────────────────────
+   Magic reads "Tbilisi" off a flyer. resolveCommunity() looks it up in
+   the communities we already run, finds nothing, and returns null —
+   and everything downstream then had no town to work with. The
+   trigger's last resort used to be the publisher's own community, so a
+   traveller's events landed on their home map, in another country.
+
+   The name is evidence and it was being thrown away. /places is
+   already a Nominatim forward search — the same route the venue box
+   uses — so a town name becomes coordinates, and adoptCommunity()
+   takes it from there: reverse geocode, ensure_community, and the
+   community now exists for everybody.
+
+   Memoised for the session. Ten events off one flyer share one town
+   and must not become ten geocodes. Negative results are cached too,
+   or a name Nominatim cannot place is retried on every row. */
+const _placeSlugCache = new Map();
+async function communityFromPlaceName(text, biasLat, biasLng){
+  const q = String(text || '').trim();
+  if (q.length < 2 || !WORKER_URL) return null;
+  const key = q.toLowerCase();
+  if (_placeSlugCache.has(key)) return _placeSlugCache.get(key);
+
+  let slug = null;
+  try {
+    const u = new URL(WORKER_URL + '/places');
+    u.searchParams.set('q', q);
+    if (biasLat != null && biasLng != null){
+      u.searchParams.set('lat', biasLat);
+      u.searchParams.set('lng', biasLng);
+    }
+    const r = await fetch(u, { signal: AbortSignal.timeout(9000) });
+    if (r.ok){
+      const body = await r.json();
+      const hit = (body && body.places || []).find(p =>
+        Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
+      if (hit){
+        /* 'publish' rather than 'photo': the person is publishing here,
+           which is the signal that means "this is where I am now". It
+           rewrites their community, which is the point — somebody who
+           travels and posts should stop being filed under the town
+           they left. */
+        await adoptCommunity(Number(hit.lat), Number(hit.lng), 'publish');
+        /* adoptCommunity clears KNOWN_COMMUNITIES and reloads it in the
+           background, so reading the answer back straight away would
+           find an empty list. Wait for the reload, then ask. And it
+           returns false when the slug was already home, so its return
+           value cannot be used as the answer either — Store.home is
+           the reliable one. */
+        await loadCommunities().catch(() => {});
+        slug = communityForCoords(Number(hit.lat), Number(hit.lng))
+            || (Store.data.home && Store.data.home.slug)
+            || null;
+      }
+    }
+  } catch(err){
+    console.warn('[bich] could not place "' + q + '" —', err.message);
+  }
+  _placeSlugCache.set(key, slug);
+  return slug;
 }
 
 async function adoptCommunity(lat, lng, signal){
