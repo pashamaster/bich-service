@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="91" />
+  <meta name="app-version" content="92" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -7034,8 +7034,10 @@ async function bulkCreate(rows, rq){
         lineup: r.lineup,
         venueName: r.space_name,
         venueAddress: r.venue_address,
-        lat: r.venue_latitude === '' ? null : r.venue_latitude,
-        lng: r.venue_longitude === '' ? null : r.venue_longitude,
+        lat: (r.venue_latitude === '' ? null : r.venue_latitude)
+             ?? (coordsFromMapsUrl(r.maps_url) || {}).lat ?? null,
+        lng: (r.venue_longitude === '' ? null : r.venue_longitude)
+             ?? (coordsFromMapsUrl(r.maps_url) || {}).lng ?? null,
         venueSource: r.venue_latitude !== '' ? 'printed_coordinates'
                    : r.venue_match ? 'matched_venue'
                    : r.space_name ? 'venue_name_only' : 'manual',
@@ -7048,7 +7050,10 @@ async function bulkCreate(rows, rq){
         /* Read off a photo by a model, so needs_review is set and the
            pin is labelled 'extracted' — the two fields that let the app
            offer a check-these pass over exactly these events. */
-        pinSource: r.venue_latitude !== '' ? 'extracted' : null,
+        /* A decoded maps link IS printed coordinates — copied off the
+           image, not recalled — so it earns the same 'extracted'. */
+        pinSource: (r.venue_latitude !== '' || coordsFromMapsUrl(r.maps_url))
+                   ? 'extracted' : null,
         source: 'photo'
       });
       made.push({ short_id: saved.short_id, title: r.event_name, date: r.date });
@@ -7700,6 +7705,45 @@ function reachLadder(c){
   let r = start;
   while (r < ceiling){ r = Math.min(Math.round(r * 2), ceiling); steps.push(r); }
   return steps;
+}
+
+/* ── coordinates out of a printed maps link ───────────────────────
+   A flyer that prints a Google Maps URL has printed its coordinates,
+   just encoded. Decoding that is arithmetic, not inference, so it gets
+   the same standing as a lat/lng printed in the corner — which is why
+   the extraction prompt still refuses to GUESS coordinates while
+   happily copying a link.
+
+   The four shapes that actually carry a position:
+
+     /maps/@38.9634,-9.4172,17z          the viewport centre
+     ...!3d38.9634!4d-9.4172             the place itself, most exact
+     ?q=38.9634,-9.4172  or  ?ll=        an explicit point
+     /maps/place/.../@lat,lng            the @ form again
+
+   A maps.app.goo.gl short link carries nothing until it is followed,
+   which needs a network round trip and a redirect; not done here, and
+   it returns null rather than pretending. */
+function coordsFromMapsUrl(url){
+  const u = String(url || '');
+  if (!u) return null;
+  const pick = (la, ln) => {
+    const lat = Number(la), lng = Number(ln);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    /* Null Island is what a stripped or zeroed field looks like, and it
+       is a real coordinate in the Gulf of Guinea. */
+    if (Math.abs(lat) < 0.0001 && Math.abs(lng) < 0.0001) return null;
+    return { lat, lng };
+  };
+  let m;
+  /* !3d!4d first: it is the PLACE, where @ is only where the map was
+     centred when the link was made. */
+  if ((m = u.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/))) return pick(m[1], m[2]);
+  if ((m = u.match(/[?&](?:q|ll|daddr|center)=(-?\d+(?:\.\d+)?)%2C(-?\d+(?:\.\d+)?)/i))) return pick(m[1], m[2]);
+  if ((m = u.match(/[?&](?:q|ll|daddr|center)=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i))) return pick(m[1], m[2]);
+  if ((m = u.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/)))  return pick(m[1], m[2]);
+  return null;
 }
 
 function resolveCommunity(text){
