@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="92" />
+  <meta name="app-version" content="94" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -3911,9 +3911,14 @@ const OUTBOX_HANDLERS = {
     p_short_id: payload.short_id, p_user: CURRENT_USER.id,
     p_secret: deviceSecret(), p_operation_id: opId
   }),
+  /* p_at is when the signal HAPPENED. The database refuses to let an
+     older signal replace a newer one, which is the only thing that
+     stops a stale offline item overwriting the town somebody has since
+     moved to. Older queued items have no `at` and behave as before. */
   'community.set': async (payload, opId) => sbRpc('set_my_community', {
     p_user: CURRENT_USER.id, p_secret: deviceSecret(),
-    p_slug: payload.slug, p_via: payload.via, p_operation_id: opId
+    p_slug: payload.slug, p_via: payload.via, p_operation_id: opId,
+    p_at: payload.at || null
   })
 };
 
@@ -6735,7 +6740,10 @@ function canvasToBlob(canvas, mime, quality){
 function pokeVenueJobs(why, shortId){
   if (!WORKER_URL) return;
   const tag = shortId ? '&event=' + encodeURIComponent(shortId) : '';
-  for (const path of ['/venues/review?limit=3' + tag, '/events/pin?limit=3']){
+  /* Both jobs targeted now. The pin job used to draw the three most
+     urgent events from the whole backlog, so the event that was just
+     published usually was not one of them. */
+  for (const path of ['/venues/review?limit=3' + tag, '/events/pin?limit=3' + tag]){
     fetch(WORKER_URL + path, { method: 'POST' }).catch(() => {});
   }
   console.info('[bich] venue jobs poked after', why, shortId || '');
@@ -7317,11 +7325,33 @@ async function saveEvent(spec){
      town the flyer NAMES, turned into a real community. Only reached
      when the event has no coordinates we recognise and no community we
      already run — otherwise it costs nothing. */
-  let slug = communityForCoords(spec.lat, spec.lng) || resolveCommunity(spec.community);
-  if (!slug){
-    slug = await communityFromPlaceName(spec.community || spec.city,
-                                        spec.lat ?? spec.photoLat,
-                                        spec.lng ?? spec.photoLng);
+  /* The EVENT's town, most specific evidence first:
+
+       its own coordinates     the point, resolved or created now — so a
+                               pin in a town nobody has used yet does
+                               not publish community-less and stay that
+                               way (the user's signal-2 adopt runs only
+                               AFTER publish, too late for this row)
+       the city it names       "Sintra" before the model's coarse
+                               `community` field, which for a Sintra
+                               village may well say "Lisboa" — a known
+                               community whose radius does not contain
+                               the venue, after which the geocoder's
+                               correct answer is refused as "outside"
+       the region it names     last, because it is the coarsest
+
+     None of this moves the person's own community. */
+  let slug = communityForCoords(spec.lat, spec.lng);
+  if (!slug && spec.lat != null && spec.lng != null){
+    slug = await communityAtPoint(spec.lat, spec.lng);
+  }
+  if (!slug) slug = resolveCommunity(spec.city);
+  if (!slug && spec.city){
+    slug = await communityFromPlaceName(spec.city, spec.photoLat, spec.photoLng);
+  }
+  if (!slug) slug = resolveCommunity(spec.community);
+  if (!slug && spec.community && spec.community !== spec.city){
+    slug = await communityFromPlaceName(spec.community, spec.photoLat, spec.photoLng);
   }
   const venueId = spec.venueId
     || await ensureVenue(spec.venueName, spec.lat, spec.lng, spec.city, slug, spec.source === 'photo');
@@ -7446,12 +7476,17 @@ async function saveEvent(spec){
   refreshMeCounts();         // one more hosted, and the host is going
 
   pokeVenueJobs('publish', row.short_id);
-  /* Signal three: publishing somewhere makes it your community, every
-     time, not just the first time. Deliberate enough to be silent. */
+  /* Signal two: publishing an event WITH VENUE COORDINATES makes that
+     your community, every time. Deliberate enough to be silent.
+
+     ONLY with coordinates. The else-branch that used to follow handed
+     the person the event's community whenever it had one — a slug that
+     came from a flyer's printed town, a typed name, or a guess — which
+     is not one of the three signals at all. Somebody at home in
+     Ericeira listing a Porto festival from a poster was moved to Porto
+     by it. */
   if (spec.lat != null && spec.lng != null){
     adoptCommunity(spec.lat, spec.lng, 'publish').catch(() => {});
-  } else if (slug){
-    adoptCommunityFrom(null, slug);
   }
   return row;
 }
@@ -8988,8 +9023,13 @@ async function resolvePlace(lat, lng){
     console.warn('[bich] community: no worker url configured'); return null;
   }
   try {
+    /* Rounded HERE as well as in the worker, to ~1km: the question is
+       which town, and the exact point — often where a photo was taken —
+       should not travel in a query string that ends up in request logs.
+       The worker rounds again for any client that does not. */
+    const rl = Math.round(lat * 100) / 100, rg = Math.round(lng * 100) / 100;
     const r = await fetch(
-      `${WORKER_URL}/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+      `${WORKER_URL}/geocode?lat=${encodeURIComponent(rl)}&lng=${encodeURIComponent(rg)}`,
       { signal: AbortSignal.timeout(8000) });
     if (!r.ok){ console.warn(`[bich] community: /geocode said ${r.status}`); return null; }
     const p = await r.json();
@@ -9005,22 +9045,52 @@ async function resolvePlace(lat, lng){
   }
 }
 
-/* ── a PLACE NAME the app has never heard of ──────────────────────
-   Magic reads "Tbilisi" off a flyer. resolveCommunity() looks it up in
-   the communities we already run, finds nothing, and returns null —
-   and everything downstream then had no town to work with. The
-   trigger's last resort used to be the publisher's own community, so a
-   traveller's events landed on their home map, in another country.
+/* ── the EVENT's community, without touching the USER's ─────────────
+   Two different questions that used to share one function. "Which town
+   is this event in?" is about the event. "Which town is this person
+   in?" is about the person, and the spec allows exactly three signals
+   to answer it — a shared link, publishing WITH venue coordinates, and
+   choosing a photo with GPS. A town printed on a flyer is none of them.
 
-   The name is evidence and it was being thrown away. /places is
-   already a Nominatim forward search — the same route the venue box
-   uses — so a town name becomes coordinates, and adoptCommunity()
-   takes it from there: reverse geocode, ensure_community, and the
-   community now exists for everybody.
+   So these two resolve and, if need be, CREATE a community for an
+   event, and never call adoptCommunity(). The database's own
+   community_for_point() answers first — smallest containing circle,
+   the same rule everywhere — and only a point nothing covers reaches
+   the geocoder and ensure_community(). */
+async function communityAtPoint(lat, lng){
+  if (lat == null || lng == null || !SB_READY()) return null;
+  try {
+    const known = await sbRpc('community_for_point', { p_lat: lat, p_lng: lng });
+    if (known) return known;
+  } catch(err){
+    console.warn('[bich] community_for_point failed —', err.message);
+  }
+  const found = await resolvePlace(lat, lng);
+  if (!found) return null;
+  try {
+    const slug = await sbRpc('ensure_community', {
+      p_osm_id: found.osm_id, p_name: found.name, p_kind: found.kind,
+      p_country: found.country, p_lat: found.lat, p_lng: found.lng
+    });
+    if (slug){ KNOWN_COMMUNITIES = null; loadCommunities().catch(() => {}); }
+    return slug || null;
+  } catch(err){
+    console.warn('[bich] ensure_community refused —', err.message);
+    return null;
+  }
+}
 
-   Memoised for the session. Ten events off one flyer share one town
-   and must not become ten geocodes. Negative results are cached too,
-   or a name Nominatim cannot place is retried on every row. */
+/* A town NAME, as printed on a flyer. Forward geocode through /places
+   — the route the venue box already uses — then the point above.
+
+   Memoised for the session, negatives included: ten events off one
+   flyer share one town and must not become ten geocodes.
+
+   On failure this returns NULL and nothing else. It used to fall back
+   to the person's own home community, which re-created — on the client,
+   where the trigger's fix could not see it — exactly the bug that put a
+   traveller's Tbilisi flyers on the Ericeira map. Unknown is honest and
+   recoverable; a confident wrong town is neither. */
 const _placeSlugCache = new Map();
 async function communityFromPlaceName(text, biasLat, biasLng){
   const q = String(text || '').trim();
@@ -9033,32 +9103,17 @@ async function communityFromPlaceName(text, biasLat, biasLng){
     const u = new URL(WORKER_URL + '/places');
     u.searchParams.set('q', q);
     if (biasLat != null && biasLng != null){
-      u.searchParams.set('lat', biasLat);
-      u.searchParams.set('lng', biasLng);
+      /* The bias may be the PHOTO's coordinate. ~11km is plenty to say
+         "the Fontanelas near here, not the one in Brazil". */
+      u.searchParams.set('lat', String(Math.round(biasLat * 10) / 10));
+      u.searchParams.set('lng', String(Math.round(biasLng * 10) / 10));
     }
     const r = await fetch(u, { signal: AbortSignal.timeout(9000) });
     if (r.ok){
       const body = await r.json();
       const hit = (body && body.places || []).find(p =>
         Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
-      if (hit){
-        /* 'publish' rather than 'photo': the person is publishing here,
-           which is the signal that means "this is where I am now". It
-           rewrites their community, which is the point — somebody who
-           travels and posts should stop being filed under the town
-           they left. */
-        await adoptCommunity(Number(hit.lat), Number(hit.lng), 'publish');
-        /* adoptCommunity clears KNOWN_COMMUNITIES and reloads it in the
-           background, so reading the answer back straight away would
-           find an empty list. Wait for the reload, then ask. And it
-           returns false when the slug was already home, so its return
-           value cannot be used as the answer either — Store.home is
-           the reliable one. */
-        await loadCommunities().catch(() => {});
-        slug = communityForCoords(Number(hit.lat), Number(hit.lng))
-            || (Store.data.home && Store.data.home.slug)
-            || null;
-      }
+      if (hit) slug = await communityAtPoint(Number(hit.lat), Number(hit.lng));
     }
   } catch(err){
     console.warn('[bich] could not place "' + q + '" —', err.message);
@@ -9123,7 +9178,7 @@ async function adoptCommunity(lat, lng, signal){
     /* Was unawaited with no catch — the only outbox call in the file
        without one. IndexedDB refuses in private mode and over quota,
        and the rejection had nowhere to go. */
-    outboxAdd('community.set', { slug, via: signal })
+    outboxAdd('community.set', { slug, via: signal, at: new Date().toISOString() })
       .catch(err => console.warn('[bich] could not queue the community —', err.message));
   }
 
@@ -10134,7 +10189,7 @@ function inferFinish(row){
 
 /* Rebuild the maps link ourselves and never let a forgotten fallback
    cost us the town. Note EXIF fills city/community, never the pin. */
-function normalizeRows(rows, exif, today){
+function normalizeRows(rows, today){
   const clean = v => (v === null || v === undefined || v === '') ? '' : v;
   return rows.map(r => {
     const lat = r.venue_latitude, lng = r.venue_longitude;
@@ -10158,12 +10213,29 @@ function normalizeRows(rows, exif, today){
       location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none'),
       venue_address: clean(r.venue_address),
       venue_match:   clean(r.venue_match),
-      lineup:        Array.isArray(r.lineup) ? r.lineup : null
+      lineup:        Array.isArray(r.lineup) ? r.lineup : null,
+      /* Carried through, not rebuilt away. maps_url was added to the
+         extraction in 92 and the bulk path decodes it — but this
+         function builds a fresh object per row and silently dropped
+         every field it did not list, so the decoder only ever saw
+         undefined and no printed maps link has ever placed a pin. */
+      maps_url:      clean(r.maps_url),
+      /* PROVENANCE — what was printed versus what the model supplied.
+         The prompt tells it to write a title when none is printed and
+         never to leave a start time empty, which is right for a flyer
+         and dangerous for a photo that is not one. These let the flyer
+         gate below tell the difference. */
+      date_printed:  Boolean(clean(r.date_literal) || clean(r.weekday_literal)),
+      time_stated:   r.time_source === 'stated',
+      name_printed:  r.name_source === 'printed'
     };
   }).filter(r => r.event_name);
 }
 
-async function extractEvent(base64, exif, knownVenues){
+/* `town` is a coarse place name or null. It replaced the photo's EXIF
+   in this request: exact coordinates and capture time used to travel
+   to the worker and on into the Gemini prompt, and both are private. */
+async function extractEvent(base64, town, knownVenues){
   // PRODUCTION: hand off to the Worker (keeps the key server-side)
   if (PHOTO_ENDPOINT){
     const r = await fetch(PHOTO_ENDPOINT, {
@@ -10173,7 +10245,7 @@ async function extractEvent(base64, exif, knownVenues){
          is inside the magic cohort. The secret is what makes the check
          meaningful: user ids are publicly listable, so a uid alone
          could simply be borrowed from an early account. */
-      body: JSON.stringify({ image: base64, mime: 'image/jpeg', exif,
+      body: JSON.stringify({ image: base64, mime: 'image/jpeg', town: town || null,
                              known_venues: knownVenues || [],
                              uid: CURRENT_USER.id || null,
                              secret: Store.data.secretClaimed ? deviceSecret() : null })
@@ -10194,7 +10266,7 @@ async function extractEvent(base64, exif, knownVenues){
     }
     const out = await r.json();
     const rows = Array.isArray(out) ? out : (out.events || []);
-    return { events: normalizeRows(rows, exif, todayISO()), read_quality: out.read_quality || {} };
+    return { events: normalizeRows(rows, todayISO()), read_quality: out.read_quality || {} };
   }
   /* REMOVED — two direct model calls used to live here.
      A dev path holding a Gemini key constant, and below it an
@@ -10581,14 +10653,19 @@ async function readPhoto(crop){
     /* Resolve the area from the photo's own GPS first, then ask the
        database which venues we already know there. The model gets a
        candidate list instead of guessing at a name it half read. */
-    let known = [];
+    let known = [], town = null;
     if (sourceExif && sourceExif.lat != null){
       await loadCommunities();
       const slug = communityForCoords(sourceExif.lat, sourceExif.lng);
       known = await venuesNear(sourceExif.lat, sourceExif.lng, slug);
       if (known.length) console.info(`[bich] ${known.length} known venues sent as candidates`);
+      /* The TOWN, not the point. The model only ever used the photo's
+         GPS to work out which town it was in, and that answer is
+         already here at settlement level. */
+      const c = slug && (KNOWN_COMMUNITIES || []).find(k => k.slug === slug);
+      town = c ? c.name : null;
     }
-    const out = await extractEvent(send.base64, sourceExif, known);
+    const out = await extractEvent(send.base64, town, known);
     coverBusy.classList.remove('show');
 
     const rows = out.events || out;
@@ -10603,7 +10680,24 @@ async function readPhoto(crop){
        Both exits are the same outcome and are handled together: the
        model saying "not an event", and the model saying nothing
        usable at all. */
-    if (rq.is_event === false || !rows || !rows.length){
+    /* ── STEP 5 · is this actually a flyer? ─────────────────────────
+       The model's is_event is one opinion. This is the spec's own test,
+       applied to what was PRINTED rather than what was supplied: a
+       printed date, plus at least one of a stated start time, a venue,
+       or a printed title. Without it a photo of a sunset with magic
+       armed could come back as an invented "sunset gathering" with an
+       inferred 19:00 — and magic publishes straight to the database
+       with nobody reviewing it.
+
+       A row that fails is dropped, not repaired. If none survive, the
+       photo is a photo, and step 6 treats it as core. */
+    const flyerRows = (rows || []).filter(r =>
+      r.date && r.date_printed && (r.time_stated || r.space_name || r.name_printed));
+    if (rows && rows.length && flyerRows.length < rows.length){
+      console.info(`[bich] ${rows.length - flyerRows.length} row(s) dropped — nothing printed to anchor them`);
+    }
+
+    if (rq.is_event === false || !flyerRows.length){
       fallBackToCore(rq.is_event === false
         ? 'no event found in that photo — added as the cover.'
         : 'nothing readable in that photo — added as the cover.');
@@ -10625,7 +10719,7 @@ async function readPhoto(crop){
        in one photo, so it passes through at one event each; a poster
        reading "every sunday" becomes four. Rows that make no such claim
        are returned untouched either way. */
-    const finalRows = expandWeekly(rows, todayISO());
+    const finalRows = expandWeekly(flyerRows, todayISO());   // the gated rows, not the raw ones
 
     await bulkCreate(finalRows, rq);
     return;
