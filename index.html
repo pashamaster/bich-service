@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="94" />
+  <meta name="app-version" content="95" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -6613,7 +6613,10 @@ async function sbInsert(table, row){
    so venue_id stayed null, the bump_venue_use trigger never fired and
    use_count never left zero. */
 async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
-  if (draft.venueId) return draft.venueId;
+  /* No draft.venueId shortcut here. The form path already passes it as
+     spec.venueId; the bulk magic path does not, and reading the draft
+     here linked every event on a flyer to whatever venue had been
+     picked in the form before magic ran. */
   if (!SB_READY() || !name || lat == null || lng == null) return null;
 
   /* Look before writing. venues has unique(source, source_id) and
@@ -8249,8 +8252,11 @@ async function bichCheck(){
       add('r2 writable', health.r2 ? health.r2.writable : null, health.r2 && health.r2.error || '');
       add('gemini key set', health.gemini_key_present, health.gemini_key_present ? '' : 'wrangler secret put GEMINI_API_KEY');
       add('gemini key works', health.gemini ? health.gemini.key_works : null,
-          (health.gemini && (health.gemini.error || health.gemini.hint)) || health.gemini_model);
-      add('model reachable', health.gemini ? health.gemini.model_reachable : null, health.gemini_model);
+          (health.gemini && (health.gemini.error || health.gemini.hint)) || (health.gemini_models || []).join(', '));
+      add('models reachable', health.gemini ? health.gemini.model_reachable : null,
+          health.gemini && health.gemini.models
+            ? Object.entries(health.gemini.models).map(([m, v]) => `${m}: ${v}`).join(' · ')
+            : (health.gemini_models || []).join(', '));
       add('cors origin allowed', health.origin_allowed,
           health.origin_allowed === false
             ? `add ${location.origin} to ALLOWED_ORIGINS in wrangler.toml`
@@ -9398,14 +9404,6 @@ function wireVenueSearch(){
 const API_BASE = WORKER_URL;
 const PHOTO_ENDPOINT  = API_BASE ? API_BASE + '/extract-event' : null;
 
-/* DEV ONLY — direct Gemini from the browser, for one user on localhost.
-   Anything you put here is visible to anyone who opens the page. Google runs
-   leaked-key detection and will block a key it finds in public JS, so this
-   must be '' before this file is ever served from a real domain. */
-/* Must stay empty on bich.app. A key in public JS is a credit card
-   in a shop window, and Google's scanners will disable it. Use it
-   only on localhost. */
-const GEMINI_MODEL   = 'gemini-3.5-flash-lite';
 /* The long side sent to Gemini. This is a TOKEN decision, not a
    quality one: Gemini tiles an image into 768px squares and charges 258
    tokens per tile. A 1000px portrait is 2 tiles (516); 768px is 1 tile
@@ -10148,26 +10146,15 @@ function expandWeekly(rows, today){
 
 /* Finish time, in order of authority:
 
-     1. printed on the flyer      — Gemini returns it, duration_source
-                                    "stated". Nothing beats a fact.
-     2. assumed by Gemini         — duration_source "inferred". It has
-                                    read the whole photo: the wording,
-                                    the artwork, the lineup. It knows
-                                    far more about what kind of thing
-                                    this is than a regex over two
-                                    fields ever will.
-     3. this function             — only when Gemini declined, which it
-                                    is told to do when nothing fits.
+     1. printed on the flyer      — Gemini returns it. Nothing beats
+                                    a fact.
+     2. this function             — everything else. The prompt used
+                                    to carry its own copy of this table
+                                    and the two drifted; since 95 the
+                                    model only reports a printed finish
+                                    and the estimate lives here alone.
 
-   Both of the first two arrive as row.time_finish and are taken
-   verbatim by the first line. This is the backstop, not the primary
-   path, and it exists because rows also reach here from the manual
-   form where there is no model in the loop at all.
-
-   The durations match the prompt exactly. Two lists that are supposed
-   to agree will drift unless somebody makes them agree; these are
-   written in the same order and with the same numbers so a change to
-   one is an obvious prompt to change the other. */
+   Rows from the manual form arrive here too, with no model involved. */
 function inferFinish(row){
   if (row.time_finish) return String(row.time_finish).slice(0,5);
   const t = row.time_start ? String(row.time_start).slice(0,5) : '';
@@ -10265,6 +10252,7 @@ async function extractEvent(base64, town, knownVenues){
       throw err;
     }
     const out = await r.json();
+    if (out.model) console.info(`[bich] read by ${out.model}`);
     const rows = Array.isArray(out) ? out : (out.events || []);
     return { events: normalizeRows(rows, todayISO()), read_quality: out.read_quality || {} };
   }
