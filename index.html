@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="95" />
+  <meta name="app-version" content="97" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -10208,11 +10208,10 @@ function normalizeRows(rows, today){
          undefined and no printed maps link has ever placed a pin. */
       maps_url:      clean(r.maps_url),
       /* PROVENANCE — what was printed versus what the model supplied.
-         The prompt tells it to write a title when none is printed and
-         never to leave a start time empty, which is right for a flyer
-         and dangerous for a photo that is not one. These let the flyer
-         gate below tell the difference. */
-      date_printed:  Boolean(clean(r.date_literal) || clean(r.weekday_literal)),
+         The prompt tells it to guess a missing title, date and start
+         time, which is right for a flyer and dangerous for a photo that
+         is not one. These let the flyer gate below tell the difference. */
+      date_inferred: r.date_source === 'inferred',
       time_stated:   r.time_source === 'stated',
       name_printed:  r.name_source === 'printed'
     };
@@ -10669,20 +10668,22 @@ async function readPhoto(crop){
        model saying "not an event", and the model saying nothing
        usable at all. */
     /* ── STEP 5 · is this actually a flyer? ─────────────────────────
-       The model's is_event is one opinion. This is the spec's own test,
-       applied to what was PRINTED rather than what was supplied: a
-       printed date, plus at least one of a stated start time, a venue,
-       or a printed title. Without it a photo of a sunset with magic
-       armed could come back as an invented "sunset gathering" with an
-       inferred 19:00 — and magic publishes straight to the database
-       with nobody reviewing it.
+       The model decides (is_event) and, since 97, fills in a missing
+       title, date or start time itself rather than refusing the photo —
+       too many real flyers were lost for want of a printed date. Each
+       guess is marked, and this keeps one floor under it: a row must
+       carry at least ONE thing actually read off the photo — a printed
+       date, a stated time, a venue, or a printed title. A row that is
+       guesses all the way down (generated title, inferred date and
+       time, no venue) is the invented "sunset gathering", and magic
+       publishes with nobody reviewing it.
 
        A row that fails is dropped, not repaired. If none survive, the
        photo is a photo, and step 6 treats it as core. */
     const flyerRows = (rows || []).filter(r =>
-      r.date && r.date_printed && (r.time_stated || r.space_name || r.name_printed));
+      r.date && (!r.date_inferred || r.time_stated || r.space_name || r.name_printed));
     if (rows && rows.length && flyerRows.length < rows.length){
-      console.info(`[bich] ${rows.length - flyerRows.length} row(s) dropped — nothing printed to anchor them`);
+      console.info(`[bich] ${rows.length - flyerRows.length} row(s) dropped — nothing on the photo to anchor them`);
     }
 
     if (rq.is_event === false || !flyerRows.length){
