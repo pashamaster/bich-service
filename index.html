@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta name="app-version" content="97" />
+  <meta name="app-version" content="99" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <!-- config first: the app reads its addresses and keys from here.
        Without this the Supabase constants below stay empty, SB_READY()
@@ -909,30 +909,51 @@ body.is-admin .detail-owner::before {
    quiet control; armed is unmistakable, because from that point a
    photo becomes published events with no further confirmation. */
 .magic-btn {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  width: 100%; margin-top: 10px; padding: 12px 14px;
-  min-height: 48px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono); font-size: 0.62rem;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--muted); cursor: pointer; text-align: left;
-  transition: border-color var(--ease), background var(--ease), color var(--ease);
+  /* The big window. Same footprint as a chosen cover, so it reads as
+     THE way to post from a photo; the plain upload sits under it as a
+     single slim row. */
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; width: 100%; aspect-ratio: 16 / 9; margin: 0 0 10px; padding: 20px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--accent-dim), transparent 70%),
+    var(--surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono); color: var(--text);
+  cursor: pointer; text-align: center;
+  transition: border-color var(--ease), background var(--ease), color var(--ease), transform var(--ease);
 }
-.magic-btn__spark { font-size: 0.9rem; line-height: 1; opacity: 0.5; }
-.magic-btn__label { font-weight: 500; }
+.magic-btn:hover { border-color: var(--accent); }
+.magic-btn:active { transform: scale(0.99); }
+.magic-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.magic-btn__spark { font-size: 1.9rem; line-height: 1; color: var(--accent); }
+.magic-btn__label {
+  font-size: 0.85rem; font-weight: 500;
+  letter-spacing: 0.24em; text-transform: uppercase;
+}
 .magic-btn__hint {
-  flex-basis: 100%; text-transform: none; letter-spacing: 0.02em;
-  font-size: 0.58rem; color: var(--subtle);
+  max-width: 32ch; font-size: 0.64rem; line-height: 1.5;
+  letter-spacing: 0.02em; color: var(--muted);
 }
 .magic-btn[aria-pressed="true"] {
   background: var(--accent-dim);
-  border-color: var(--border-accent);
+  border-color: var(--accent);
   color: var(--accent);
 }
-.magic-btn[aria-pressed="true"] .magic-btn__spark { opacity: 1; }
-.magic-btn[aria-pressed="true"] .magic-btn__hint { color: var(--accent); }
+.magic-btn[aria-pressed="true"] .magic-btn__hint,
+.magic-btn[aria-pressed="true"] .magic-btn__label { color: var(--accent); }
+/* Armed is a commitment — the next photo is published — so it must not
+   be mistakable for the resting state. */
+.magic-btn[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+/* Once a photo is chosen the preview is the big thing, and magic
+   shrinks to a slim row above it. */
+.cover-section:has(.cover-picker.has-image) .magic-btn {
+  flex-direction: row; aspect-ratio: auto; min-height: 48px;
+  padding: 10px 14px; gap: 10px; justify-content: flex-start; text-align: left;
+}
+.cover-section:has(.cover-picker.has-image) .magic-btn__spark { font-size: 1rem; }
+.cover-section:has(.cover-picker.has-image) .magic-btn__label { font-size: 0.62rem; letter-spacing: 0.12em; }
+.cover-section:has(.cover-picker.has-image) .magic-btn__hint { font-size: 0.58rem; }
 
 .detail-stats {
   font-family: var(--font-mono); font-size: 0.6rem;
@@ -1141,6 +1162,14 @@ body.is-admin .detail-owner::before {
   overflow: hidden;
 }
 .cover-picker:hover { border-color: var(--border-accent); color: var(--accent); }
+/* Empty, it is a slim button — smaller than the magic window above it.
+   It becomes the 16:9 preview once a photo is chosen. */
+.cover-picker:not(.has-image) {
+  aspect-ratio: auto; min-height: 52px; padding: 10px 14px;
+  flex-direction: row; justify-content: flex-start; gap: 10px;
+}
+.cover-picker:not(.has-image) svg { width: 18px; height: 18px; flex: none; }
+.cover-picker:not(.has-image) .cover-picker__hint { margin-left: auto; }
 .cover-picker svg { width: 22px; height: 22px; }
 .cover-picker__label { font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; }
 .cover-picker__hint { font-size: 0.55rem; letter-spacing: 0.1em; color: var(--subtle); }
@@ -2220,14 +2249,24 @@ if ('serviceWorker' in navigator) {
   <div class="modal-body">
 
     <!-- Cover -->
-    <div class="form-section">
+    <div class="form-section cover-section">
       <label class="form-section__label">cover</label>
-      <div class="cover-picker" id="coverPicker" role="button" tabindex="0" aria-label="add cover image">
+      <!-- MAGIC FIRST, AND BIGGEST. Off by default, and hidden entirely
+           when this account has no magic. Tapping it is the whole consent
+           step: it arms magic and opens the photo picker in one go, and
+           from then on the photo goes to the model and whatever it finds
+           is published. The plain cover upload below is the quiet option. -->
+      <button type="button" class="magic-btn" id="magicBtn" hidden aria-pressed="false">
+        <span class="magic-btn__spark" aria-hidden="true">✦</span>
+        <span class="magic-btn__label">magic</span>
+        <span class="magic-btn__hint">snap a flyer — we read it and post every event on it</span>
+      </button>
+      <div class="cover-picker" id="coverPicker" role="button" tabindex="0" aria-label="add cover photo">
         <svg id="coverIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
         </svg>
-        <span class="cover-picker__label" id="coverLabel">add cover image</span>
-        <span class="cover-picker__hint" id="coverHint">optional · tap to upload — we'll read the details</span>
+        <span class="cover-picker__label" id="coverLabel">add cover photo</span>
+        <span class="cover-picker__hint" id="coverHint">optional</span>
         <img class="cover-picker__img" id="coverImg" alt="" hidden />
         <div class="cover-picker__grad" id="coverGrad" hidden></div>
         <button type="button" class="cover-picker__crop" id="coverCrop" hidden>crop</button>
@@ -2235,14 +2274,6 @@ if ('serviceWorker' in navigator) {
         <div class="cover-picker__busy" id="coverBusy"><div class="cover-picker__spinner"></div><span>reading your photo</span></div>
       </div>
       <input type="file" id="coverInput" accept="image/*" class="visually-hidden" />
-      <!-- Off by default, and hidden entirely on a core build. Pressing
-           it is the whole consent step: from that tap onwards the photo
-           goes to the model and whatever it finds is published. -->
-      <button type="button" class="magic-btn" id="magicBtn" hidden aria-pressed="false">
-        <span class="magic-btn__spark" aria-hidden="true">✦</span>
-        <span class="magic-btn__label">magic</span>
-        <span class="magic-btn__hint">read the photo and post what's on it</span>
-      </button>
       <p class="cover-notice" id="coverNotice"></p>
     </div>
 
@@ -3340,7 +3371,13 @@ async function saveEdit(){
   /* Only send what actually changed. `?` semantics in the RPC mean a
      key that is present is applied even when null, so sending these
      unconditionally would wipe a cover the person never touched. */
-  if (editDraft.lat != null && editDraft.lng != null){
+  /* ONLY WHEN THE PIN MOVED. This sent the coordinates and 'manual'
+     on every save of any event that had a pin, so fixing a typo in the
+     title restamped a town-centre or halfway placeholder as a human
+     pin and fed it to the gazetteer at weight 1.0. The server checks
+     the same thing since 98; this keeps the patch honest too. */
+  if (editDraft.lat != null && editDraft.lng != null &&
+      (editDraft.lat !== editDraft.lat0 || editDraft.lng !== editDraft.lng0)){
     patch.venue_lat = editDraft.lat;
     patch.venue_lng = editDraft.lng;
     /* venue_source describes where the NAME came from. pin_source
@@ -3363,21 +3400,8 @@ async function saveEdit(){
   const opId = newOperationId();
   const shortId = editingId;
 
-  /* Only a change of PLACE is worth waking the venue jobs. A new title,
-     a cropped cover or a price correction says nothing about where the
-     event is, and poking anyway meant every edit reached the worker
-     and, through it, Overpass.
-
-     Declared OUT here, not inside the try: the catch below queues the
-     edit and needs the same answer. `npm run check` caught that as
-     TS2304 when it was a const in the try block. */
-  const venueTouched =
-    (patch.venue_name || '').trim() !== (editDraft.name0 || '') ||
-    editDraft.lat !== editDraft.lat0 ||
-    editDraft.lng !== editDraft.lng0;
-
   try {
-    const row = await updateEvent(shortId, patch, opId, venueTouched);
+    const row = await updateEvent(shortId, patch, opId);
     const i = EVENTS.findIndex(e => e.id === shortId);
     if (i > -1 && row) EVENTS[i] = Object.assign(rowToEvent(row), { bundle: EVENTS[i].bundle });
     renderBundles();
@@ -3397,12 +3421,7 @@ async function saveEdit(){
        so queueing it would park a permanent failure in the outbox and
        show the person a warning that never clears. */
     if (isTransient(err)){
-      /* venue_touched rides along, so an edit replayed from the queue
-         makes the same poke decision the direct save would have. It is
-         a client-side hint and never reaches the RPC — the handler
-         reads it off the payload and sends only short_id and patch. */
-      const queued = await outboxAdd('event.patch',
-        { short_id: shortId, patch, venue_touched: venueTouched }, opId);
+      const queued = await outboxAdd('event.patch', { short_id: shortId, patch }, opId);
       if (queued){
         /* Apply it locally so the change does not appear to vanish
            while it waits. The next feed load overwrites this with
@@ -3795,7 +3814,28 @@ async function outboxTx(mode, fn){
    recognise it, and the server applies an operation it has already
    applied. Letting the caller supply the id is what makes "try now,
    queue if that fails" safe. */
+/* Which queued items a new one replaces. A later tap on "going" makes
+   an earlier queued tap meaningless, and two queued edits of one event
+   are one edit; sending both only gives the older a chance to land
+   last. Patches merge — newer fields win — so nothing either one
+   changed is lost. Items already 'sending' are left alone. */
+const OUTBOX_SUPERSEDES = { 'attendance.set': true, 'event.patch': true };
+
 async function outboxAdd(type, payload, opId){
+  if (OUTBOX_SUPERSEDES[type] && payload && payload.short_id){
+    try {
+      const older = (await outboxAll()).filter(i =>
+        i.operation_type === type && i.status !== 'sending' &&
+        i.payload && i.payload.short_id === payload.short_id);
+      for (const o of older){
+        if (type === 'event.patch'){
+          payload = Object.assign({}, payload,
+            { patch: Object.assign({}, o.payload.patch || {}, payload.patch || {}) });
+        }
+        await outboxTx('readwrite', st => st.delete(o.operation_id));
+      }
+    } catch(_){ /* merging is tidiness; the server's newest-wins rule is the guarantee */ }
+  }
   const item = {
     operation_id: opId || newOperationId(),
     operation_type: type,
@@ -3876,31 +3916,37 @@ const OUTBOX_HANDLERS = {
       p_secret: deviceSecret(), p_operation_id: opId
     }));
     if (res && res.replayed) console.info('[bich] publish replayed, not duplicated');
-    /* The offline case the cron used to be the only answer for: this
-       publish happened with no network, so its poke never went out. */
-    pokeVenueJobs('queued publish', res && res.event && res.event.short_id);
+    /* A cover held for this publish moves to the real short id now and
+       uploads through the ordinary cover queue. */
+    const short = res && (res.short_id || (res.event && res.event.short_id));
+    if (short){
+      const held = (await pendingCovers()).find(c => c.shortId === PENDING_COVER + opId);
+      if (held){
+        await queueCover(short, held.blob, held.filename);
+        await dropCover(held.shortId);
+        syncPendingCovers();
+      }
+    }
     return res;
   },
+  /* p_at is when the person TAPPED. The server keeps the newest tap,
+     so an old "going" retried after a later "not going" changes
+     nothing. Items queued by older builds have no `at`. */
   'attendance.set': async (payload, opId) => sbRpc('set_attendance', {
     p_short_id: payload.short_id, p_user: CURRENT_USER.id,
-    p_secret: deviceSecret(), p_status: payload.status, p_operation_id: opId
+    p_secret: deviceSecret(), p_status: payload.status, p_operation_id: opId,
+    p_at: payload.at || null
   }),
   /* All three carry the operation id now. They were the only mutations
      without replay protection: a patch or cancel that committed and
      then lost its response would be reapplied, and a community update
      re-sent. Harmless for these three in practice, but "harmless in
      practice" is not a property you want to be relying on per-endpoint. */
-  'event.patch': async (payload, opId) => {
-    const res = await sbRpc('update_event_as', {
-      p_short_id: payload.short_id, p_user: CURRENT_USER.id,
-      p_secret: deviceSecret(), p_patch: payload.patch, p_operation_id: opId
-    });
-    /* Same rule as the direct path: only a change of place is worth a
-       poke. An older queued item has no flag and pokes, which is the
-       safe direction. */
-    if (payload.venue_touched !== false) pokeVenueJobs('queued edit', payload.short_id);
-    return res;
-  },
+  /* The SAME path as a direct save — owner, then admin, then a legacy
+     edit token. Replaying through update_event_as alone made an admin's
+     offline correction of somebody else's event, or a token-only host's
+     edit, fail permanently with "not yours" once it was queued. */
+  'event.patch': async (payload, opId) => updateEvent(payload.short_id, payload.patch, opId),
   /* Marking an event to cancel. Queued like everything else so a report
      made on a train is not silently lost. */
   'event.mark_cancel': async (payload, opId) => sbRpc('mark_event_to_cancel', {
@@ -3931,7 +3977,19 @@ let outboxRunning = false;
 
 async function outboxFlush(){
   if (outboxRunning || !navigator.onLine || !SB_READY()) return;
-  const items = (await outboxAll()).filter(outboxDue);
+  /* IN ORDER PER THING. An item still waiting out its backoff holds
+     back every later item about the same event (or the community), so
+     a newer change can never land before an older one about the same
+     thing. Unrelated items still go. */
+  const keyOf = i => i.operation_type === 'community.set' ? 'community'
+                   : (i.payload && i.payload.short_id) || null;
+  const held = new Set(), items = [];
+  for (const i of (await outboxAll()).sort((a, b) => a.created_at.localeCompare(b.created_at))){
+    const k = keyOf(i);
+    if (k && held.has(k)) continue;
+    if (outboxDue(i)) items.push(i);
+    else if (k && i.status !== 'failed') held.add(k);   // a refused item waits for a person, not for this
+  }
   if (!items.length) return;
 
   await ensureUser().catch(() => {});
@@ -3943,7 +4001,7 @@ async function outboxFlush(){
 
   outboxRunning = true;
   try {
-    for (const item of items.sort((a, b) => a.created_at.localeCompare(b.created_at))){
+    for (const item of items){
       const run = OUTBOX_HANDLERS[item.operation_type];
       if (!run){
         /* Retained, not deleted. An operation type written by a newer
@@ -4086,6 +4144,11 @@ async function restoreLocalCovers(){
   }
 }
 
+/* Covers waiting for a publish that is itself still queued are held
+   under this prefix plus the publish's operation id, because there is
+   no short id to key them on yet. */
+const PENDING_COVER = 'pending:';
+
 async function queueCover(shortId, blob, filename){
   try {
     await coverTx('readwrite', store => store.put({
@@ -4135,6 +4198,8 @@ async function syncPendingCovers(){
   }
 
   for (const item of queued){
+    // still waiting for its queued publish to land; the outbox moves it
+    if (String(item.shortId).startsWith(PENDING_COVER)) continue;
     /* Give up eventually. A blob that has failed ten times is failing
        for a reason that retrying will not fix, and keeping it forever
        just fills the person's storage quota. */
@@ -4146,31 +4211,40 @@ async function syncPendingCovers(){
     }
 
     try {
-      const form = new FormData();
-      form.append('full', item.blob, item.filename || 'full.webp');
+      /* UPLOAD ONCE. The url is remembered on the queue item, so a retry
+         after a failed patch reuses the object instead of writing a new
+         one to R2 every attempt and orphaning the last. */
+      let out = item.uploadedUrl ? { url: item.uploadedUrl } : null;
+      if (!out){
+        const form = new FormData();
+        form.append('full', item.blob, item.filename || 'full.webp');
 
-      const r = await fetch(WORKER_URL + '/upload', {
-        method: 'POST',
-        headers: { 'X-Bich-Invite': readInvite() },
-        body: form,
-        signal: AbortSignal.timeout(30000)
-      });
-      if (!r.ok) throw new Error('upload failed (' + r.status + ')');
-      const out = await r.json();
-      if (!out || !out.url) throw new Error('worker replied without a url');
+        const r = await fetch(WORKER_URL + '/upload', {
+          method: 'POST',
+          headers: { 'X-Bich-Invite': readInvite() },
+          body: form,
+          signal: AbortSignal.timeout(30000)
+        });
+        if (!r.ok) throw new Error('upload failed (' + r.status + ')');
+        out = await r.json();
+        if (!out || !out.url) throw new Error('worker replied without a url');
+        item.uploadedUrl = out.url;
+        await coverTx('readwrite', store => store.put(item)).catch(() => {});
+      }
 
       /* This runs from a retry loop, so it is precisely the case an
          operation id is for: the same cover write can be attempted
-         again after a response is lost. Derived from the short id
-         rather than random, so every retry of THIS cover carries the
-         same id even across a reload — a fresh uuid each attempt would
-         make each one a new operation and defeat the point. */
+         again after a response is lost. Derived from the short id and
+         the moment this cover was queued — both fixed for the life of
+         the item — so every retry carries the same id even across a
+         reload. It used to include the upload url, which is new on
+         every upload, so no retry was ever recognised. */
       await sbRpc('update_event_as', {
         p_short_id: item.shortId,
         p_user: CURRENT_USER.id,
         p_secret: deviceSecret(),
         p_patch: { cover_url: out.url },
-        p_operation_id: await stableOpId('cover:' + item.shortId + ':' + out.url)
+        p_operation_id: await stableOpId('cover:' + item.shortId + ':' + item.queuedAt)
       });
 
       await dropCover(item.shortId);
@@ -4336,7 +4410,11 @@ function newOperationId(){
     'op-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-async function writeAttendance(shortId, going){
+/* opId and at are made ONCE per tap by the caller and used for both the
+   direct call and, if that fails, the queued copy — so a request that
+   committed before its response was lost replays instead of applying
+   twice, and the server can order taps by when they happened. */
+async function writeAttendance(shortId, going, opId, at){
   if (!SB_READY() || !shortId) return { state: 'queued', count: null };
   try {
     await ensureUser();
@@ -4355,7 +4433,8 @@ async function writeAttendance(shortId, going){
       p_user: CURRENT_USER.id,
       p_secret: deviceSecret(),
       p_status: going ? 'going' : 'cancelled',
-      p_operation_id: newOperationId()
+      p_operation_id: opId || newOperationId(),
+      p_at: at || null
     });
     const row = Array.isArray(rows) ? rows[0] : rows;
     return { state: 'saved', count: row ? row.going_count : null };
@@ -4401,7 +4480,8 @@ on('attendBtn', 'click', async () => {
     renderBundles();
   }
 
-  const result = await writeAttendance(id, nowGoing);
+  const opId = newOperationId(), at = new Date().toISOString();
+  const result = await writeAttendance(id, nowGoing, opId, at);
 
   /* The server's count replaces the optimistic one. Guessing was how
      the screen and the database drifted apart: two people tapping at
@@ -4429,7 +4509,8 @@ on('attendBtn', 'click', async () => {
     /* The outbox, not localStorage. Same intention, but it now survives
        a restart with a retry schedule attached instead of waiting for
        someone to happen to reopen the app. */
-    await outboxAdd('attendance.set', { short_id: id, status: nowGoing ? 'going' : 'cancelled' });
+    await outboxAdd('attendance.set',
+      { short_id: id, status: nowGoing ? 'going' : 'cancelled', at }, opId);
   }
   btn.dataset.busy = '0';
 });
@@ -4460,7 +4541,8 @@ async function migratePendingAttendance(){
   if (!ids.length) return;
   for (const shortId of ids){
     await outboxAdd('attendance.set', {
-      short_id: shortId, status: pending[shortId].going ? 'going' : 'cancelled'
+      short_id: shortId, status: pending[shortId].going ? 'going' : 'cancelled',
+      at: pending[shortId].at || null
     });
   }
   Store.set({ pendingAttend: {} });
@@ -5093,10 +5175,16 @@ async function loadMapView(force){
 
   const [from, to] = filterRange(mapFilter);
   const seq = ++_mapFetchSeq;
+  /* The query is by START time, and filterRange starts "any" and
+     "week" at now — so a party that began at 22:00 never reached the
+     map while it was on, and the 36 hour tail never did at all. Ask
+     from far enough back to cover both; mappableEvents() then keeps
+     what the chip actually means. */
+  const fetchFrom = new Date(Math.min(from ? new Date(from).getTime() : Infinity,
+                                      Date.now() - MAP_PAST_MS)).toISOString();
 
   if (mode === 'bubbles'){
-    const fromIso = from ? new Date(from).toISOString()
-                         : new Date(Date.now() - MAP_PAST_MS).toISOString();
+    const fromIso = fetchFrom;
     const toIso   = to ? new Date(to).toISOString() : null;
 
     let rows = null;
@@ -5156,8 +5244,7 @@ async function loadMapView(force){
       p_viewer:   CURRENT_USER.id || null,
       p_min_lat:  want.s, p_min_lng: want.w,
       p_max_lat:  want.n, p_max_lng: want.e,
-      p_from:     from ? new Date(from).toISOString()
-                       : new Date(Date.now() - MAP_PAST_MS).toISOString(),
+      p_from:     fetchFrom,
       p_to:       to ? new Date(to).toISOString() : null,
       p_max_pins: pinBudget(map.getZoom())
     });
@@ -5872,7 +5959,7 @@ async function applyDraft(d){
     /* The pin has to wait for the mini map to exist. openCreate builds
        it on a timeout, so this follows it rather than racing it. */
     if (draft.lat != null && draft.lng != null){
-      setTimeout(() => setEventLocation(draft.lat, draft.lng, false), 250);
+      setTimeout(() => setEventLocation(draft.lat, draft.lng, false, null), 250);
     }
     toast('draft restored');
   } catch(err){
@@ -6104,9 +6191,8 @@ function initMiniMap() {
        recalibrated carries pin_source 'venue', which the trigger
        deliberately ignores. Without this line, dragging the pin on such
        an event would change nothing anybody could learn from. */
-    draft.pinSource = 'manual';
     draft.pinFromExif = false;
-    setEventLocation(e.latlng.lat, e.latlng.lng, false);
+    setEventLocation(e.latlng.lat, e.latlng.lng, false, 'manual');
   });
   window._miniMap = m;
   guardMapScroll(document.getElementById('miniMap'), m);
@@ -6129,15 +6215,21 @@ function initMiniMap() {
 }
 
 /* single source of truth for the pin — used by map taps AND photo extraction */
-function setEventLocation(lat, lng, fromPhoto) {
+/* `source` says where THESE coordinates came from — 'manual' for a tap,
+   'venue' for a venue pick, 'exif' for the photo — and is stored with
+   them. Null keeps whatever the draft already holds (a restore).
+
+   It used to be re-derived here from draft.venueSource, which typing a
+   single letter in the venue box sets to 'manual': so "type the venue,
+   then tap the map" — the natural order — published the tap as
+   'venue', the gazetteer learned nothing from it, and recalibration
+   was free to move a pin the person had placed by hand. */
+function setEventLocation(lat, lng, fromPhoto, source) {
   draft.lat = +lat; draft.lng = +lng;
+  if (source) draft.pinSource = source;
   if (!fromPhoto){
     // a deliberate tap outranks a guess from EXIF
     draft.pinFromExif = false;
-    /* A venue pick sets venueSource first and then calls this, so do not
-       overwrite it — otherwise every venue-derived pin records itself as
-       a manual tap. */
-    draft.pinSource = draft.venueSource ? 'venue' : 'manual';
     const lbl = document.getElementById('coordsLabel');
     if (lbl) lbl.classList.remove('is-guess');
   }
@@ -6612,33 +6704,19 @@ async function sbInsert(table, row){
    part 4 opened an insert policy for exactly this and nothing used it,
    so venue_id stayed null, the bump_venue_use trigger never fired and
    use_count never left zero. */
-async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
+async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto, address){
   /* No draft.venueId shortcut here. The form path already passes it as
      spec.venueId; the bulk magic path does not, and reading the draft
      here linked every event on a flyer to whatever venue had been
      picked in the form before magic ran. */
   if (!SB_READY() || !name || lat == null || lng == null) return null;
 
-  /* Look before writing. venues has unique(source, source_id) and
-     source_id is always null here, and Postgres allows any number of
-     null values in a unique constraint - so without this every publish
-     would mint a fresh row for the same place. */
-  try {
-    const near = await sbRpc('search_venues', {
-      q: name, near_lat: lat, near_lng: lng, max_results: 3
-    });
-    /* 0.003 to match the server. ensure_venue() and link_event_venue()
-       case A both dedupe at 0.003 (~330m) and this checked 0.002
-       (~220m), so a venue 250m away was "not the same place" here and
-       "the same place" there. The client would decide to create one,
-       the server would hand back the existing id — harmless — but the
-       reverse ordering across two devices is how the same bar collects
-       rows under one name. Three paths, one radius. */
-    const hit = (near || []).find(v =>
-      v.name.trim().toLowerCase() === name.trim().toLowerCase() &&
-      Math.abs(v.lat - lat) < 0.003 && Math.abs(v.lng - lng) < 0.003);
-    if (hit) return hit.id;
-  } catch(_){ /* search is a convenience, not a gate */ }
+  /* No look-up first since 98. This used to search_venues for an
+     exact lower-case name within 0.003° and return that id itself —
+     a second, stricter copy of the dedupe ensure_venue() already does
+     (same_place_name, same radius), and on a hit it skipped
+     ensure_venue entirely, so the server's repair of a venue filed
+     under no community never ran. One rule, on the server. */
 
   try {
     await claimDeviceSecret();
@@ -6661,7 +6739,10 @@ async function ensureVenue(name, lat, lng, city, communitySlug, fromPhoto){
            note in ensure_venue(). The argument was always passed to
            this function and simply never forwarded. */
         community_slug: communitySlug || null,
-        address: draft.venueAddress || null,
+        /* The row's own address, passed in. Reading draft.venueAddress
+           here gave every venue a magic flyer created the address of
+           whatever was last picked in the form. */
+        address: address || null,
         /* Provenance. A venue picked off the map is a different record
            from one somebody typed, and the OSM id is what makes
            unique(source, source_id) deduplicate — without it Postgres
@@ -6706,56 +6787,18 @@ function canvasToBlob(canvas, mime, quality){
    token and compare. There is no update policy on events any more, so
    this is the only way a row can change - which is what closed the
    hole where anyone could rewrite any upcoming event. */
-/* ── nudge the two venue jobs ──────────────────────────────────────
-   Both correct the same thing from opposite ends: /venues/review takes
-   a venue that HAS coordinates and asks OpenStreetMap what it is
-   really called; /events/pin takes a venue that has only a NAME and
-   asks where it is. A publish or an edit can create work for either,
-   so both are poked and the worker's own queue decides which of them
-   actually has anything to do — an empty queue costs one indexed query
-   and never touches OSM.
-
-   Fire and forget, always after the write is already committed, and
-   completely invisible: no spinner, no toast, no result. If a match is
-   found the venue is corrected in the background; if not, nothing
-   happens and nobody is told anything. The tab closing before these
-   return costs nothing — the daily sweep is the net underneath.
-
-   THIS IS THE "within 10 minutes" PATH, and in practice it is seconds.
-   The cron is only the retry for the pokes that never arrived: an
-   offline publish that syncs later, a tab closed mid-request, and the
-   7 day / 30 day rechecks that neither endpoint can schedule itself.
-
-   Limits are small on purpose. This is one person's event, not a
-   backfill; the sweep is where bulk belongs. */
-/* shortId names the event this poke is about, when there is one.
-   Without it /venues/review reviews the three NEWEST unchecked venues,
-   which as a rule are not the venue just edited — a venue created six
-   months ago could never be reached by editing its events, however
-   many times you poked. With it, the database looks up that event's
-   venue directly and re-checks it against OpenStreetMap whatever its
-   match_status says, and whatever date the event is on: an edit to
-   something that happened on 4 August is still new information about
-   where that venue is.
-
-   Rate limiting lives in the database, not here — one Overpass call
-   per venue per hour however often this fires. */
-function pokeVenueJobs(why, shortId){
-  if (!WORKER_URL) return;
-  const tag = shortId ? '&event=' + encodeURIComponent(shortId) : '';
-  /* Both jobs targeted now. The pin job used to draw the three most
-     urgent events from the whole backlog, so the event that was just
-     published usually was not one of them. */
-  for (const path of ['/venues/review?limit=3' + tag, '/events/pin?limit=3' + tag]){
-    fetch(WORKER_URL + path, { method: 'POST' }).catch(() => {});
-  }
-  console.info('[bich] venue jobs poked after', why, shortId || '');
-}
+/* ── venue jobs: no browser involvement since 98 ──────────────────
+   Publishing or moving a pin used to fire two POSTs at the worker from
+   here, fire and forget. A closed tab, a 50-event flyer (100 POSTs,
+   racing Nominatim for the same name) or a worker deploy mid-flight
+   all fell through to a once-a-day sweep. The database now queues the
+   work itself when a place changes (place_jobs, schema part 4v) and
+   the worker drains it every five minutes. Nothing to call here. */
 
 /* opId is passed in rather than made here, so the caller can queue the
    same operation on failure. Generated when absent so the callers that
    do not care still get replay protection instead of none. */
-async function updateEvent(shortId, patch, opId, venueTouched){
+async function updateEvent(shortId, patch, opId){
   await claimDeviceSecret();
   const operationId = opId || newOperationId();
 
@@ -6768,23 +6811,18 @@ async function updateEvent(shortId, patch, opId, venueTouched){
      reasons, and reporting the last one is what produced "could not
      find public.update_event" when the actual problem was somewhere
      else entirely. */
+  let firstErr = null;
   const attempt = async (label, fn) => {
     try { return { ok: true, row: await fn() }; }
     catch(err){
+      if (!firstErr) firstErr = err;
       tried.push(`${label}: ${err.message}`);
       console.error(`[bich] ${label} refused —`, err.status || '', err.message || err);
       return { ok: false, err };
     }
   };
 
-  /* Every success leaves through here, so the venue nudge cannot be
-     forgotten by whichever of the four paths happened to win — but it
-     only fires when the PLACE changed. Callers that do not say leave
-     venueTouched undefined and are treated as having changed it,
-     because a caller that has not thought about it is safer poking
-     than silently skipping. */
   const done = (r) => {
-    if (venueTouched !== false) pokeVenueJobs('edit', shortId);
     return Array.isArray(r.row) ? r.row[0] : r.row;
   };
 
@@ -6829,6 +6867,12 @@ async function updateEvent(shortId, patch, opId, venueTouched){
     ? tried[0]
     : 'this device cannot edit that event — no account and no saved token');
   e.allAttempts = tried;
+  /* Keep what isTransient() reads. Only the message used to survive,
+     so a 503 or a 429 during an edit was judged permanent and the edit
+     was not queued for retry. */
+  if (firstErr){
+    e.status = firstErr.status; e.code = firstErr.code; e.name = firstErr.name;
+  }
   throw e;
 }
 
@@ -7065,7 +7109,10 @@ async function bulkCreate(rows, rq){
            image, not recalled — so it earns the same 'extracted'. */
         pinSource: (r.venue_latitude !== '' || coordsFromMapsUrl(r.maps_url))
                    ? 'extracted' : null,
-        source: 'photo'
+        source: 'photo',
+        /* origin, not source, is what tells the server this was read off
+           a poster. source 'photo' only means 'has a cover' since 98. */
+        origin: 'magic'
       });
       made.push({ short_id: saved.short_id, title: r.event_name, date: r.date });
     } catch(err){
@@ -7315,7 +7362,7 @@ async function saveEvent(spec){
 
      19:00 is the same catch-all the prompt uses. A date, though, is not
      recoverable: without one there is nothing to place the event on. */
-  const timeStart = normaliseTime(spec.timeStart) || guessStartTime(spec.title, spec.desc);
+  const timeStart = normaliseTime(spec.timeStart) || guessStartTime(spec.title, spec.description);
   const startsAt = spec.date ? new Date(`${spec.date}T${timeStart}`) : new Date(NaN);
   if (Number.isNaN(startsAt.getTime())){
     throw new Error(spec.date
@@ -7357,7 +7404,8 @@ async function saveEvent(spec){
     slug = await communityFromPlaceName(spec.community, spec.photoLat, spec.photoLng);
   }
   const venueId = spec.venueId
-    || await ensureVenue(spec.venueName, spec.lat, spec.lng, spec.city, slug, spec.source === 'photo');
+    || await ensureVenue(spec.venueName, spec.lat, spec.lng, spec.city, slug,
+                         spec.origin === 'magic', spec.venueAddress);
 
   const token = newEditToken();
   const hash  = await sha256Hex(token);
@@ -7438,8 +7486,9 @@ async function saveEvent(spec){
       cover_url: spec.coverUrl || null,
       contact: spec.contact || null,
       source: spec.source || 'manual',
+      origin: spec.origin === 'magic' ? 'magic' : 'core',
       pin_source: (spec.lat == null) ? null : (spec.pinSource || 'manual'),
-      needs_review: spec.source === 'photo' || spec.source === 'magic',
+      needs_review: spec.origin === 'magic',
       edit_token_hash: hash
   };
 
@@ -7463,7 +7512,7 @@ async function saveEvent(spec){
     const queued = await outboxAdd('event.create', payload, operationId);
     if (!queued) throw err;      // no IndexedDB: better to fail loudly
     console.info('[bich] publish queued —', operationId.slice(0, 8));
-    return { queued: true, short_id: null, id: null };
+    return { queued: true, short_id: null, id: null, operation_id: operationId };
   }
 
   if (res && res.replayed) console.info('[bich] publish replayed — no duplicate created');
@@ -7478,7 +7527,6 @@ async function saveEvent(spec){
   claimDeviceSecret().then(() => maybeOfferPasskey()).catch(() => {});
   refreshMeCounts();         // one more hosted, and the host is going
 
-  pokeVenueJobs('publish', row.short_id);
   /* Signal two: publishing an event WITH VENUE COORDINATES makes that
      your community, every time. Deliberate enough to be silent.
 
@@ -7879,7 +7927,7 @@ async function linkKnownVenue(name){
     if (hit && hit.venue_id){
       draft.venueId = hit.venue_id;
       if (draft.lat == null && hit.lat != null){
-        setEventLocation(hit.lat, hit.lng, false);
+        setEventLocation(hit.lat, hit.lng, false, 'venue');
         /* 'venue' both marks it a guess in the UI and stops the
            gazetteer trigger recording it — this pin came FROM a venue
            and feeding it back would freeze that venue's estimate. */
@@ -7940,8 +7988,7 @@ async function resolveVenuePin(name){
       return false;
     }
 
-    setEventLocation(hit.lat, hit.lng, true);
-    draft.pinSource = 'venue';
+    setEventLocation(hit.lat, hit.lng, true, 'venue');
     draft.venueSource = 'venue_name_only';
     if (!draft.venueAddress && hit.address) draft.venueAddress = hit.address;
     const el = document.getElementById('coordsLabel');
@@ -9393,7 +9440,7 @@ function wireVenueSearch(){
        touched this field was rejected by Postgres. */
     draft.venueSource = 'matched_venue';
     const lat = parseFloat(hit.dataset.lat), lng = parseFloat(hit.dataset.lng);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) setEventLocation(lat, lng, false);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) setEventLocation(lat, lng, false, 'venue');
     clear();
   });
 
@@ -9835,192 +9882,10 @@ function openCropper(bitmap, hint){
 
 
 
-/* ── date resolution, in code ─────────────────────────────────────
-   Reading "JULY 16th" off a poster is perception, which small models do
-   well. Working out which year that means, or which Sunday is next, is
-   arithmetic, which they do badly. So the model returns what is printed
-   and we do the maths here: deterministic, free, and testable. */
-const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-
-/* Months in the languages posters here are actually printed in. This
-   was English only, so a festival programme headed AGOSTO resolved to
-   nothing at all — "ago" is not "aug", and every one of its thirty odd
-   events was lost over three letters.
-
-   Keyed on the first three letters after accents are stripped, which is
-   how they abbreviate. Collisions are all harmless: mar, abr, jun, jul,
-   nov are the same month in every language here, and feb/fev and
-   set/sep/sept differ only in spelling. */
-const MONTH_ALIASES = {
-  // portuguese
-  jan:0, fev:1, mar:2, abr:3, mai:4, jun:5,
-  jul:6, ago:7, set:8, out:9, nov:10, dez:11,
-  // spanish
-  ene:0, feb:1, may:4, sep:8, oct:9, dic:11,
-  // english already covered by MONTHS, but harmless to repeat
-  apr:3, aug:7, dec:11
-};
-
-function monthIndexFrom(word){
-  const w = deaccent(word).slice(0,3);
-  const en = MONTHS.indexOf(w);
-  if (en > -1) return en;
-  return (w in MONTH_ALIASES) ? MONTH_ALIASES[w] : -1;
-}
-const DAYS   = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-
-/* Weekdays as they are actually printed around here. DAYS was English
-   only, so a Portuguese poster reading "Sex 21 / Sáb 22 / Dom 23" —
-   which is most posters in Ericeira — matched nothing, and every row
-   failed with "that date and time did not parse".
-
-   Three letter keys, because that is how these are abbreviated in
-   practice. "sex" is Friday in Portuguese and is not a weekday in any
-   of the others, so one shared table is safe. */
-const DAY_ALIASES = {
-  dom:0, seg:1, ter:2, qua:3, qui:4, sex:5, sab:6,       // portuguese
-  lun:1, mie:3, jue:4, vie:5, sáb:6,                      // spanish
-  sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6         // english short
-};
-
-/* "Sáb" -> "sab". Lowercasing leaves accents alone and every one of
-   these words carries one. */
-function deaccent(t){
-  return String(t || '').toLowerCase()
-    .replace(/[áàâãä]/g,'a').replace(/[éèêë]/g,'e').replace(/[íìîï]/g,'i')
-    .replace(/[óòôõö]/g,'o').replace(/[úùûü]/g,'u').replace(/ç/g,'c');
-}
-
-function dayIndexFrom(text){
-  const t = deaccent(text);
-
-  /* Portuguese names its weekdays by number: 2ª feira is Monday and
-     6ª feira is Friday, and posters print them exactly that way. The
-     three letter table below never sees these because the word is
-     "feira" every time — the day is in the digit. */
-  const feira = t.match(/(\d)\s*[aª°º]?\s*[-\s]*feira/);
-  if (feira){
-    const n = Number(feira[1]);          // 2..6 -> monday..friday
-    if (n >= 2 && n <= 6) return n - 1;
-  }
-  const full = DAYS.findIndex(d => new RegExp('\\b' + d.slice(0,3)).test(t));
-  if (full > -1) return full;
-  for (const k of Object.keys(DAY_ALIASES)){
-    if (new RegExp('\\b' + deaccent(k)).test(t)) return DAY_ALIASES[k];
-  }
-  return -1;
-}
-
-function resolveDate(row, today){
-  const now = today ? new Date(today + 'T00:00:00') : new Date();
-  const lit = (row.date_literal || '').toLowerCase().trim();
-  const iso = (d) => d.toLocaleDateString('en-CA');   // local, never UTC-shifted
-
-  /* Relative words. The prompt sends these through verbatim rather than
-     resolving them, for the same reason as every other date: the model
-     does not reliably know what day it is, and this is three lines of
-     arithmetic. "tonight" is today because a flyer saying tonight was
-     photographed today. */
-  if (/\b(today|tonight|hoje|hoy)\b/.test(lit)) return iso(now);
-  /* No trailing \b on this one: JS word boundaries are ASCII-only, so
-     \b after "amanhã" does not match — ã is a non-word character and
-     the boundary is already there. Leading \b is fine and still stops
-     it firing inside a longer word. */
-  if (/\b(tomorrow|amanh[aã]|ma[ñn]ana)/.test(lit)){
-    const t = new Date(now); t.setDate(now.getDate() + 1); return iso(t);
-  }
-
-  if (lit){
-    let d = null, mo = null;
-    // "july 16", "16 july", "16th july"
-    const named = lit.match(/([a-z]+)\.?\s*(\d{1,2})|(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s*)?([a-z]+)/);
-    if (named){
-      const nm = (named[1] || named[4] || '').slice(0,3);
-      const dd = named[2] || named[3];
-      const idx = monthIndexFrom(nm);
-      if (idx > -1 && dd){ mo = idx; d = parseInt(dd,10); }
-    }
-    // "16.08", "16/08", "2026-08-16"
-    if (mo == null){
-      const iso = lit.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
-      if (iso) return `${iso[1]}-${String(+iso[2]).padStart(2,'0')}-${String(+iso[3]).padStart(2,'0')}`;
-      const num = lit.match(/(\d{1,2})[-./](\d{1,2})/);
-      if (num){ d = +num[1]; mo = +num[2] - 1; }
-    }
-    if (mo != null && d){
-      const yr = row.year_literal ? parseInt(row.year_literal,10) : null;
-      if (yr) return `${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      // No year printed: pick the year that puts this date CLOSEST to today,
-      // past or future. A flyer on a wall in July saying "JULY 16" is this
-      // year's, a week ago. Pushing it to next year would be absurd.
-      /* No year printed. Two candidates matter: the nearest occurrence
-         already PAST (P days ago) and the nearest one still AHEAD (F
-         days away). Prefer the past — a flyer usually means the date it
-         prints, and one that has just gone by is a real event that
-         happened — UNLESS the future one is much closer:
-
-             use the future when  F < 2 * P
-
-         Since F + P is about 365, the crossover sits near P = 122. So a
-         date up to roughly four months past still reads as the past,
-         and anything older rolls forward.
-
-         Worked both ways:
-           11 Aug, "July 31"    P=11,  F=354 -> 354 < 22 is false -> past
-           5 Jan, "December 20" P=16,  F=350 -> 350 < 32 is false -> past
-           20 Dec, "January 5"  P=349, F=16  -> 16 < 698 is true  -> future
-         The last is the case the rule exists for. */
-      const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const DAY = 86400000;
-      let past = null, future = null;
-      for (const y of [now.getFullYear()-1, now.getFullYear(), now.getFullYear()+1]){
-        const cand = new Date(y, mo, d);
-        const delta = Math.round((cand - ref) / DAY);
-        if (delta >= 0){ if (!future || delta < future.delta) future = { y, delta }; }
-        else          { if (!past   || -delta < past.delta)   past   = { y, delta: -delta }; }
-      }
-      const pick = !past ? future
-                 : !future ? past
-                 : (future.delta < 2 * past.delta ? future : past);
-      return `${pick.y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    }
-  }
-
-  /* Weekday only: the next upcoming one. Always forward — "Sunday 6pm"
-     conventionally means the Sunday coming, not the one just gone,
-     which is the opposite of the bare-date rule above and deliberately
-     so.
-
-     date_literal is searched too, because "this saturday" and "every
-     sunday" are date_literal text that contains a weekday and no
-     number, and those used to fall through to '' and lose the event. */
-  /* A bare day number with no month: "Sex 21" on a poster whose month
-     lives in the title. Resolve to the next occurrence of that day of
-     the month — this month if it is still ahead, otherwise next. The
-     prompt now asks Gemini to fold the header month into each row, so
-     this is the fallback for when it cannot. */
-  const bare = lit.match(/^(?:[^\d]*?)(\d{1,2})(?:st|nd|rd|th)?[^\d]*$/);
-  if (bare && !row.weekday_literal){
-    const d = Number(bare[1]);
-    if (d >= 1 && d <= 31){
-      const here = new Date(now.getFullYear(), now.getMonth(), d);
-      if (here.getDate() === d && here >= now) return iso(here);
-      const next = new Date(now.getFullYear(), now.getMonth() + 1, d);
-      if (next.getDate() === d) return iso(next);
-    }
-  }
-
-  const wd = (row.weekday_literal || '') + ' ' + lit;
-  const wi = dayIndexFrom(wd);
-  if (wi > -1){
-    // ||7 so "sunday" on a Sunday means next Sunday, not this morning
-    const delta = ((wi - now.getDay()) + 7) % 7 || 7;
-    const t = new Date(now); t.setDate(now.getDate() + delta);
-    return iso(t);
-  }
-  return '';
-}
-
+/* ── date resolution lives in the worker since 98 ─────────────────
+   Months, weekdays, years, repeats and finish times are worked out in
+   worker.js from the person's own timezone, and the rows come back
+   ready to publish. The browser copy used the UTC date as "today". */
 /* If a start time exists with no finish, infer a sensible session length. */
 /* A finish time is a clock reading, not a moment. "23:00 - 00:30" is
    perfectly normal for the events this app is for, and pinning both to
@@ -10081,143 +9946,6 @@ function withLineup(description, lineupText){
   return joined.slice(0, 2000);   // events.description check constraint
 }
 
-/* Repeat a STATED recurrence four weeks ahead.
-
-   The trigger is the flyer saying so — "every sunday", "todos os
-   domingos" — not the shape of the photo. A yoga studio's weekly
-   timetable is NOT this case: it is many different classes that each
-   happen once in the week shown, and multiplying it produces eighty
-   near-identical rows nobody asked for. That distinction was got wrong
-   first time round and is the whole point of keeping the two apart.
-
-   So:
-     "every sunday" on a poster        -> 4 events, one a week
-     a studio's week of 20 classes     -> 20 events, each once
-     a poster listing 3 printed dates  -> 3 events, exactly as printed
-
-   Four occurrences, each its own row, because the standing rule is
-   separate event entities rather than a collapsed recurring class.
-   Every row keeps its recurrence text so the page can still say what
-   it is.
-
-   Capped at BULK_MAX, trimmed to whole cycles so nobody gets three
-   Sundays and half a fourth. */
-const SCHEDULE_WEEKS = 4;
-
-/* Does this row claim to repeat every week? Only an explicit statement
-   counts. Gemini writes recurrence in plain words, and may write it in
-   the flyer's own language, so match on the interval rather than on
-   English: a weekday name plus a word meaning "every", or the word
-   weekly itself. Anything unrecognised repeats nothing, which is the
-   safe direction — a missed repeat is one event where there should be
-   four, an over-eager one is dozens of events nobody wanted. */
-function repeatsWeekly(row){
-  const r = String(row && row.recurrence || '').toLowerCase().trim();
-  if (!r) return false;
-  if (/\b(fortnight|biweekly|monthly|every other|alternate)\b/.test(r)) return false;
-  return /\b(weekly|every|each|todos?|cada|semanal|toda)\b/.test(r);
-}
-
-function expandWeekly(rows, today){
-  const base = today ? new Date(today + 'T00:00:00') : new Date();
-  const repeating = rows.filter(repeatsWeekly);
-  if (!repeating.length) return rows;
-
-  const once = rows.filter(r => !repeatsWeekly(r));
-  const out = once.slice();
-  const room = Math.max(0, BULK_MAX - once.length);
-  /* Whole cycles only. With 3 repeating rows and room for 10, that is
-     3 weeks (9 rows), not 3 weeks plus one stray Sunday. */
-  const weeks = Math.max(1, Math.min(SCHEDULE_WEEKS,
-                                     Math.floor(room / repeating.length)));
-
-  for (let w = 0; w < weeks; w++){
-    for (const r of repeating){
-      if (!r.date) { if (w === 0) out.push(r); continue; }
-      const d = new Date(r.date + 'T00:00:00');
-      if (Number.isNaN(d.getTime())) { if (w === 0) out.push(r); continue; }
-      d.setDate(d.getDate() + w * 7);
-      if (d < base && w === 0) continue;
-      out.push(Object.assign({}, r, { date: d.toLocaleDateString('en-CA') }));
-    }
-  }
-  return out;
-}
-
-/* Finish time, in order of authority:
-
-     1. printed on the flyer      — Gemini returns it. Nothing beats
-                                    a fact.
-     2. this function             — everything else. The prompt used
-                                    to carry its own copy of this table
-                                    and the two drifted; since 95 the
-                                    model only reports a printed finish
-                                    and the estimate lives here alone.
-
-   Rows from the manual form arrive here too, with no model involved. */
-function inferFinish(row){
-  if (row.time_finish) return String(row.time_finish).slice(0,5);
-  const t = row.time_start ? String(row.time_start).slice(0,5) : '';
-  if (!t) return '';
-  const blob = ((row.event_name||'') + ' ' + (row.description||'')).toLowerCase();
-  // a door time says nothing about length, so infer nothing from it
-  if (/\bopens?\b|door/.test(blob)) return '';
-  const mins =
-      /yoga|pilates|fitness|movement|workout|breathwork|meditation/.test(blob) ? 60
-    : /festival|carnival|all night|block party|\bparty\b|\brave\b/.test(blob) ? 240
-    : /concert|\bgig\b|\bdj\b|live set|performance|\bshow\b/.test(blob) ? 180
-    : /dinner|supper|feast|lunch|brunch/.test(blob) ? 150
-    : /class|workshop|talk|course|session/.test(blob) ? 90
-    : 90;
-  const [h,m] = t.split(':').map(Number);
-  const end = new Date(2000,0,1,h,m + mins);
-  return String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
-}
-
-/* Rebuild the maps link ourselves and never let a forgotten fallback
-   cost us the town. Note EXIF fills city/community, never the pin. */
-function normalizeRows(rows, today){
-  const clean = v => (v === null || v === undefined || v === '') ? '' : v;
-  return rows.map(r => {
-    const lat = r.venue_latitude, lng = r.venue_longitude;
-    const has = lat != null && lng != null && !Number.isNaN(+lat) && !Number.isNaN(+lng);
-    return {
-      event_name:  clean(r.event_name),
-      space_name:  clean(r.space_name),
-      venue_latitude:  has ? +(+lat).toFixed(6) : '',
-      venue_longitude: has ? +(+lng).toFixed(6) : '',
-      date:        resolveDate(r, today),
-      time_start:  r.time_start ? String(r.time_start).slice(0,5) : '',
-      time_finish: inferFinish(r),
-      recurrence:  clean(r.recurrence),
-      city:        clean(r.city),
-      community:   clean(r.community),
-      price:       (r.price == null ? '' : r.price),
-      currency:    clean(r.currency) || 'EUR',
-      contact:     clean(r.contact),
-      google_maps_link: has ? `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lng).toFixed(6)}` : '',
-      description: String(clean(r.description)).replace(/[\u2010-\u2015-]/g,' ').replace(/\s+/g,' ').trim(),
-      location_source: clean(r.location_source) || (has ? 'printed_coordinates' : 'none'),
-      venue_address: clean(r.venue_address),
-      venue_match:   clean(r.venue_match),
-      lineup:        Array.isArray(r.lineup) ? r.lineup : null,
-      /* Carried through, not rebuilt away. maps_url was added to the
-         extraction in 92 and the bulk path decodes it — but this
-         function builds a fresh object per row and silently dropped
-         every field it did not list, so the decoder only ever saw
-         undefined and no printed maps link has ever placed a pin. */
-      maps_url:      clean(r.maps_url),
-      /* PROVENANCE — what was printed versus what the model supplied.
-         The prompt tells it to guess a missing title, date and start
-         time, which is right for a flyer and dangerous for a photo that
-         is not one. These let the flyer gate below tell the difference. */
-      date_inferred: r.date_source === 'inferred',
-      time_stated:   r.time_source === 'stated',
-      name_printed:  r.name_source === 'printed'
-    };
-  }).filter(r => r.event_name);
-}
-
 /* `town` is a coarse place name or null. It replaced the photo's EXIF
    in this request: exact coordinates and capture time used to travel
    to the worker and on into the Gemini prompt, and both are private. */
@@ -10231,7 +9959,13 @@ async function extractEvent(base64, town, knownVenues){
          is inside the magic cohort. The secret is what makes the check
          meaningful: user ids are publicly listable, so a uid alone
          could simply be borrowed from an early account. */
-      body: JSON.stringify({ image: base64, mime: 'image/jpeg', town: town || null,
+      /* tz so the worker dates "tonight" by the person's own calendar.
+         No mime: the worker reads the bytes, which are WebP wherever
+         the browser can encode it — the old fixed 'image/jpeg' label
+         was wrong on every Chrome and Android device. */
+      body: JSON.stringify({ image: base64, town: town || null,
+                             tz: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; }
+                                          catch(_){ return null; } })(),
                              known_venues: knownVenues || [],
                              uid: CURRENT_USER.id || null,
                              secret: Store.data.secretClaimed ? deviceSecret() : null })
@@ -10252,8 +9986,9 @@ async function extractEvent(base64, town, knownVenues){
     }
     const out = await r.json();
     if (out.model) console.info(`[bich] read by ${out.model}`);
-    const rows = Array.isArray(out) ? out : (out.events || []);
-    return { events: normalizeRows(rows, todayISO()), read_quality: out.read_quality || {} };
+    if (out.dropped) console.info(`[bich] ${out.dropped} row(s) dropped — nothing on the photo to anchor them`);
+    /* Already dated, gated and expanded by the worker (98). */
+    return { events: Array.isArray(out.events) ? out.events : [], read_quality: out.read_quality || {} };
   }
   /* REMOVED — two direct model calls used to live here.
      A dev path holding a Gemini key constant, and below it an
@@ -10275,7 +10010,6 @@ async function extractEvent(base64, town, knownVenues){
   throw err;
 }
 
-function todayISO(){ return new Date().toISOString().slice(0,10); }
 
 function setVal(id, v){ if (v!=null && String(v).trim()!=='') document.getElementById(id).value = v; }
 
@@ -10318,7 +10052,7 @@ function setPhotoOrigin(origin, dropPin){
      Only ever a DEFAULT: it fills an empty pin and never overwrites
      one somebody placed themselves. */
   if (dropPin && draft.lat == null){
-    setEventLocation(lat, lng, true);     // the one place that moves the pin
+    setEventLocation(lat, lng, true, 'exif');     // the one place that moves the pin
     draft.pinFromExif = true;
     draft.pinSource = 'exif';
     el.textContent = 'from your photo — tap the map to move it';
@@ -10544,8 +10278,8 @@ function setMagic(on){
   if (!magicBtn) return;
   magicBtn.setAttribute('aria-pressed', MAGIC_ARMED ? 'true' : 'false');
   magicBtn.querySelector('.magic-btn__hint').textContent = MAGIC_ARMED
-    ? 'armed — the next photo gets read and posted'
-    : "read the photo and post what's on it";
+    ? 'armed — the next photo gets read and posted. tap again to turn off'
+    : 'snap a flyer — we read it and post every event on it';
 }
 
 if (magicBtn) magicBtn.addEventListener('click', () => {
@@ -10668,23 +10402,10 @@ async function readPhoto(crop){
        model saying "not an event", and the model saying nothing
        usable at all. */
     /* ── STEP 5 · is this actually a flyer? ─────────────────────────
-       The model decides (is_event) and, since 97, fills in a missing
-       title, date or start time itself rather than refusing the photo —
-       too many real flyers were lost for want of a printed date. Each
-       guess is marked, and this keeps one floor under it: a row must
-       carry at least ONE thing actually read off the photo — a printed
-       date, a stated time, a venue, or a printed title. A row that is
-       guesses all the way down (generated title, inferred date and
-       time, no venue) is the invented "sunset gathering", and magic
-       publishes with nobody reviewing it.
-
-       A row that fails is dropped, not repaired. If none survive, the
-       photo is a photo, and step 6 treats it as core. */
-    const flyerRows = (rows || []).filter(r =>
-      r.date && (!r.date_inferred || r.time_stated || r.space_name || r.name_printed));
-    if (rows && rows.length && flyerRows.length < rows.length){
-      console.info(`[bich] ${rows.length - flyerRows.length} row(s) dropped — nothing on the photo to anchor them`);
-    }
+       Decided in the worker since 98: the model's is_event, then the
+       floor that every row must carry at least one thing actually read
+       off the photo. What arrives here is what survived. */
+    const flyerRows = rows || [];
 
     if (rq.is_event === false || !flyerRows.length){
       fallBackToCore(rq.is_event === false
@@ -10703,14 +10424,10 @@ async function readPhoto(crop){
        button mean two different things depending on the photo. */
     coverNotice.className = 'cover-notice show';
 
-    /* Only rows that SAY they repeat get repeated, and the layout has
-       nothing to do with it. A studio timetable is many one-off classes
-       in one photo, so it passes through at one event each; a poster
-       reading "every sunday" becomes four. Rows that make no such claim
-       are returned untouched either way. */
-    const finalRows = expandWeekly(flyerRows, todayISO());   // the gated rows, not the raw ones
-
-    await bulkCreate(finalRows, rq);
+    /* Weekly repeats are already expanded by the worker: four upcoming
+       weeks for a row that SAYS it repeats, nothing for one that does
+       not. */
+    await bulkCreate(flyerRows, rq);
     return;
 
   } catch(err){
@@ -10967,7 +10684,10 @@ on('publishBtn', 'click', async () => {
     address: draft.city || '',
     lat: draft.lat ?? null, lng: draft.lng ?? null,
     when: formatWhen(date, time),
-    price: parseFloat(document.getElementById('inputPrice').value) || 0,
+    /* An empty box is "nobody said" — null, shown as "check w/ orgs".
+           `|| 0` published every unpriced event as free. */
+        price: (v => v === '' ? null : (Number.isFinite(parseFloat(v)) ? parseFloat(v) : null))(
+                 String(document.getElementById('inputPrice').value || '').trim()),
     /* Was `going: 1`, a leftover from before there was a database. It
        made every new event claim an attendee that no attendances row
        backed, so the count dropped to 0 the moment loadFeed() replaced
@@ -11020,7 +10740,8 @@ on('publishBtn', 'click', async () => {
         capacity: document.getElementById('inputCapacity').value,
         recurrence: draft.recurrence, contact: (document.getElementById('inputContact')||{}).value || draft.contact || null,
         coverUrl: img ? img.url : null,
-        source: draft.cover ? 'photo' : 'manual'
+        source: draft.cover ? 'photo' : 'manual',
+        origin: 'core'
       });
       /* Queued rather than published: there is no server row and so no
          short id yet. The local row keeps its temporary id and is
@@ -11052,7 +10773,20 @@ on('publishBtn', 'click', async () => {
          its cover travelled inside the payload as cover_url, or did not
          make it, in which case the person can add one after it lands. */
       if (saved && saved.queued){
-        // nothing further to do until the flush
+        /* The cover travels WITH the queued publish. It used to be
+           dropped here: the upload had failed too, the queue keys covers
+           by short id and there was none yet, and resetting the form
+           threw the bytes away — the event published itself later with
+           no picture and nobody was told. Held under the publish's own
+           operation id; the outbox moves it to the real short id the
+           moment the publish lands (OUTBOX_HANDLERS['event.create']). */
+        const held = !img && draft.cover ? window._lastCoverBlob : null;
+        if (held && saved.operation_id){
+          const kept = await queueCover(PENDING_COVER + saved.operation_id, held.blob, held.filename);
+          coverNotice.textContent = kept
+            ? 'saved — it will publish itself, photo included, once you are back online.'
+            : 'saved — it will publish itself once you are back online, but the photo could not be kept.';
+        }
       } else if (img) ev.cover = img.url;      // one size, so one field
       else if (draft.cover) {
         /* The bucket is unreachable, but the event is live and the
@@ -11806,11 +11540,13 @@ on('markSubmit', 'click', async () => {
 
   btn.disabled = true;
   btn.textContent = 'sending…';
+  /* One id whether it lands now or from the queue later. A retry must
+     share it, or the retry is a second unrecognised operation. Declared
+     outside the try: it used to be made inside, and the catch below
+     queued under a fresh id, which made the promise above untrue. */
+  const opId = newOperationId();
   try {
     await claimDeviceSecret();
-    /* One id whether it lands now or from the queue later. A retry must
-       share it, or the retry is a second unrecognised operation. */
-    const opId = newOperationId();
     await sbRpc('mark_event_to_cancel', {
       p_short_id: shortId, p_user: CURRENT_USER.id,
       p_secret: deviceSecret(), p_reason: reason, p_operation_id: opId
@@ -11831,7 +11567,7 @@ on('markSubmit', 'click', async () => {
        showing a warning that never clears. */
     if (isTransient(e2)){
       const queued = await outboxAdd('event.mark_cancel',
-        { short_id: shortId, reason }, newOperationId());
+        { short_id: shortId, reason }, opId);
       if (queued){
         rememberMark(shortId, reason);
         closeMarkSheet();
